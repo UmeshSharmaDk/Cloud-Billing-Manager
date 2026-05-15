@@ -1,0 +1,516 @@
+Build a modern cloud-based GST Billing & Inventory Management Platform for Indian businesses.
+The platform must support multi-user SaaS architecture with Admin Panel and User Panel.
+
+The application should be production-ready, scalable, secure, mobile responsive, and compliant with Indian GST laws and invoicing standards.
+
+Core Requirements
+1. Technology Stack
+
+Preferred stack:
+
+Frontend: React.js / Next.js
+Backend: Node.js + Express OR NestJS
+Database: PostgreSQL
+Authentication: JWT + Refresh Tokens
+File Storage: AWS S3 / Cloudinary
+OCR/PDF Reading: Tesseract OCR / AWS Textract / Google Vision
+Deployment: Docker + Nginx + AWS/VPS
+UI Framework: TailwindCSS / ShadCN UI
+PDF Generation: PDFKit / Puppeteer
+State Management: Redux Toolkit / Zustand
+2. User Roles
+Super Admin
+
+Main platform owner.
+
+Business User
+
+Customers using the billing software.
+
+3. Authentication & Security
+
+Implement:
+
+Secure Login
+Password Hashing using bcrypt
+JWT Authentication
+Refresh Tokens
+Session timeout
+Role-based access control
+Rate limiting
+Audit logs
+Login activity tracking
+CSRF protection
+XSS protection
+SQL Injection protection
+HTTPS-only deployment
+4. Admin Panel Features
+4A. User Management
+
+Admin should be able to:
+
+Create users
+Update users
+Delete users
+Activate/deactivate users
+Assign subscription plans
+Set:
+Start Date
+End Date
+View plan status
+
+When subscription expires:
+
+User login should be blocked
+Show message:
+
+"Plan Expired. Please contact Admin to renew your subscription."
+
+Additional features:
+
+Reset user password
+Force logout all devices
+View user activity logs
+Search/filter users
+GSTIN-wise business mapping
+4B. Multi-Tenant Data Access
+
+Admin can:
+
+Select any user/business
+View all:
+invoices
+purchases
+inventory
+reports
+customers
+vendors
+stock
+audit logs
+
+Admin should have read-only and edit modes.
+
+4C. Subscription & Billing System
+
+Admin should manage:
+
+Trial plans
+Monthly plans
+Yearly plans
+Renewal reminders
+Auto expiry
+Invoice generation for subscriptions
+
+Optional:
+
+Razorpay integration
+UPI payments
+Auto-renewal
+5. User Panel Features
+5A. User Profile & Business Settings
+
+User can manage:
+
+Business Name
+GSTIN
+PAN Number
+Address
+State Code
+Contact Details
+Logo Upload
+Bank Details
+Invoice Prefix
+Terms & Conditions
+
+Validation:
+
+Indian GSTIN format validation
+PAN validation
+PIN code validation
+6. GST Invoice Module
+Invoice Creation
+
+User should be able to:
+
+Create GST invoices
+Add multiple products/services
+Enter:
+Quantity
+Rate
+Discount
+GST %
+Auto-calculate:
+CGST
+SGST
+IGST
+Total Amount
+Round Off
+Grand Total
+
+Support:
+
+Inclusive GST
+Exclusive GST
+Invoice Types
+
+Support:
+
+Tax Invoice
+Proforma Invoice
+Credit Note
+Debit Note
+Delivery Challan
+Estimate/Quotation
+GST Compliance
+
+System must support:
+
+HSN/SAC codes
+GST rate slabs
+Reverse charge
+Place of supply
+Interstate/Intra-state tax logic
+QR Code generation
+Invoice numbering rules
+GST-compliant invoice PDF
+Invoice PDF
+
+Generate professional GST invoice PDFs with:
+
+Business logo
+QR code
+Signature section
+Terms & conditions
+GST breakup
+E-Way Bill details
+Transport details
+7. E-Way Bill Module
+
+Invoice page should include E-Way Bill support.
+
+Features:
+
+Generate E-Way Bill data
+Transport details:
+Vehicle number
+Transporter name
+Distance
+Transport mode
+Auto-calculate taxable value
+Generate printable E-Way format
+
+Optional Advanced Feature:
+
+NIC E-Way Bill API integration
+8. Purchase Entry Module
+Manual Entry
+
+User can create purchase entries manually.
+
+Fields:
+
+Vendor Details
+GSTIN
+Invoice Number
+Invoice Date
+Items
+GST breakup
+Total Amount
+PDF Upload + OCR
+
+User can upload:
+
+PDF invoices
+Scanned bills
+
+System should:
+
+Extract text using OCR
+Detect:
+Vendor name
+GSTIN
+Invoice number
+Date
+Amount
+GST %
+Line items
+Auto-fill purchase form
+
+Allow manual correction before saving.
+
+Supported formats:
+
+PDF
+JPG
+PNG
+9. Inventory Management System
+
+Inventory features:
+
+Product master
+SKU management
+Barcode support
+Unit management
+Stock in/out
+Low stock alerts
+Batch management
+Expiry date tracking
+Purchase price
+Selling price
+GST mapping
+Stock Automation
+
+Stock should auto-update from:
+
+Sales invoices
+Purchase entries
+Returns
+Credit notes
+Inventory Reports
+
+Generate:
+
+Stock summary
+Stock valuation
+Item-wise profit
+Dead stock report
+Low stock report
+10. Customer & Vendor Management
+
+Manage:
+
+Customers
+Name
+GSTIN
+Address
+Credit limit
+Outstanding balance
+Vendors
+Vendor ledger
+Purchase history
+Payment tracking
+11. Accounting Features (Important Addition)
+
+Add basic accounting features:
+
+Ledger system
+Cashbook
+Expense tracking
+Payment entries
+Receipt entries
+Outstanding reports
+Profit & Loss summary
+Daybook
+
+Optional Advanced:
+
+Double-entry bookkeeping
+12. Reports & Analytics
+
+Generate reports:
+
+GST reports
+GSTR-1
+GSTR-3B summary
+Sales reports
+Purchase reports
+Profit reports
+Inventory reports
+Tax reports
+
+Filters:
+
+Date range
+Customer
+GSTIN
+Product
+Invoice type
+
+Export:
+
+PDF
+Excel
+CSV
+13. Notifications
+
+Implement:
+
+Subscription expiry reminders
+Low stock alerts
+Payment reminders
+Invoice due reminders
+
+Channels:
+
+Email
+SMS
+WhatsApp (optional)
+14. Search & Filtering
+
+Global search for:
+
+Invoice number
+Customer
+GSTIN
+Product
+Purchase bill
+
+Advanced filters everywhere.
+
+15. Dashboard
+Admin Dashboard
+
+Show:
+
+Total users
+Active subscriptions
+Revenue
+Expired accounts
+Recent activity
+User Dashboard
+
+Show:
+
+Sales summary
+Purchases
+GST payable
+Stock alerts
+Monthly revenue
+Top products
+
+Charts and analytics required.
+
+16. Mobile Responsiveness
+
+Application must work perfectly on:
+
+Desktop
+Tablet
+Mobile devices
+
+Responsive UI mandatory.
+
+17. Performance Requirements
+Fast page loading
+Optimized queries
+Pagination
+Lazy loading
+Caching
+Background jobs for OCR/PDF processing
+18. Compliance & Indian Legal Requirements
+
+Must comply with:
+
+Indian GST invoice format
+GSTIN validation rules
+HSN/SAC compliance
+E-Way Bill structure
+Indian tax calculations
+Financial year handling (April–March)
+Indian currency formatting
+19. Data Backup & Recovery
+
+Implement:
+
+Daily backups
+Restore functionality
+Export/import tools
+20. API Architecture
+
+Build REST APIs with:
+
+Swagger documentation
+API versioning
+Proper error handling
+Validation middleware
+21. Future Scalability
+
+Architecture should support future additions:
+
+Multi-branch businesses
+Multi-warehouse
+POS billing
+Thermal printing
+GST API integrations
+Accounting integrations
+Mobile apps
+AI analytics
+22. Suggested Database Modules
+
+Tables/entities:
+
+Users
+Businesses
+SubscriptionPlans
+Invoices
+InvoiceItems
+Purchases
+PurchaseItems
+Inventory
+Customers
+Vendors
+Payments
+Expenses
+StockTransactions
+AuditLogs
+Notifications
+23. UI/UX Requirements
+
+Design should be:
+
+Modern
+Minimal
+Professional
+Fast
+Clean dashboard layout
+Dark mode support
+Accessible UI
+24. Important Advanced Features You Missed (Added)
+
+These are highly recommended:
+
+Automatic invoice numbering
+Backup/restore
+Role permissions
+Audit logs
+Multi-user staff accounts under one business
+WhatsApp invoice sharing
+Email invoice sending
+Barcode support
+Thermal printer support
+Payment status tracking
+Credit/debit notes
+Return management
+TDS/TCS support
+Multi-language support
+Offline draft mode
+Data import from Excel
+Duplicate invoice prevention
+Soft delete with recovery
+25. Deliverables Required
+
+Generate:
+
+Full system architecture
+Database schema
+API documentation
+Admin panel UI
+User panel UI
+OCR pipeline
+GST calculation engine
+Invoice PDF templates
+Deployment guide
+Production-ready source code
+Docker setup
+Security checklist
+Testing suite
+26. Expected Output Quality
+
+Code should be:
+
+Clean
+Modular
+Scalable
+Well-commented
+Enterprise-grade
+Production-ready
