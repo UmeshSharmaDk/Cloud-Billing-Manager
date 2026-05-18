@@ -14,6 +14,7 @@ export default function PurchaseDetailPage() {
   const mutation = useUpdatePurchase();
   const { toast } = useToast();
 
+  // API returns: billNumber (alias), billDate (alias), status, grandTotal, subtotal, totalGst
   const p: any = data || {};
   const items: any[] = p.items || [];
 
@@ -24,7 +25,11 @@ export default function PurchaseDetailPage() {
     });
   };
 
-  if (isLoading) return <div className="space-y-4 animate-pulse">{[...Array(3)].map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl" />)}</div>;
+  if (isLoading) return (
+    <div className="space-y-4 animate-pulse">{[...Array(3)].map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl" />)}</div>
+  );
+
+  const currentStatus = p.status || p.paymentStatus || "unpaid";
 
   return (
     <div className="space-y-4">
@@ -32,13 +37,13 @@ export default function PurchaseDetailPage() {
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation("/purchases")}><ArrowLeft className="w-4 h-4" /></Button>
           <div>
-            <h1 className="text-2xl font-bold">{p.billNumber || `Purchase #${p.id}`}</h1>
+            <h1 className="text-2xl font-bold">{p.billNumber || p.invoiceNumber || `Purchase #${p.id}`}</h1>
             <p className="text-muted-foreground text-sm">Vendor: {p.vendorName}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusBadge(p.paymentStatus)}`}>{p.paymentStatus}</span>
-          <Select value={p.paymentStatus} onValueChange={handleStatus}>
+          <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusBadge(currentStatus)}`}>{currentStatus}</span>
+          <Select value={currentStatus} onValueChange={handleStatus}>
             <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="unpaid">Mark Unpaid</SelectItem>
@@ -61,8 +66,8 @@ export default function PurchaseDetailPage() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Bill Details</p>
                 <div className="space-y-1 text-sm">
-                  <div className="flex gap-2"><span className="text-muted-foreground">Bill Date:</span><span>{formatDate(p.billDate)}</span></div>
-                  <div className="flex gap-2"><span className="text-muted-foreground">Due:</span><span>{formatDate(p.dueDate)}</span></div>
+                  <div className="flex gap-2"><span className="text-muted-foreground">Bill #:</span><span>{p.billNumber || p.invoiceNumber}</span></div>
+                  <div className="flex gap-2"><span className="text-muted-foreground">Date:</span><span>{formatDate(p.billDate || p.invoiceDate)}</span></div>
                 </div>
               </div>
             </CardContent>
@@ -76,6 +81,7 @@ export default function PurchaseDetailPage() {
                   <thead>
                     <tr className="border-b bg-muted/30">
                       <th className="text-left py-2 px-4 font-semibold text-muted-foreground">Description</th>
+                      <th className="text-left py-2 px-4 font-semibold text-muted-foreground">HSN</th>
                       <th className="text-right py-2 px-4 font-semibold text-muted-foreground">Qty</th>
                       <th className="text-right py-2 px-4 font-semibold text-muted-foreground">Rate</th>
                       <th className="text-right py-2 px-4 font-semibold text-muted-foreground">Taxable</th>
@@ -87,10 +93,13 @@ export default function PurchaseDetailPage() {
                     {items.map((item: any, i: number) => (
                       <tr key={i} className="border-b last:border-0">
                         <td className="py-2 px-4 font-medium">{item.description}</td>
+                        <td className="py-2 px-4 font-mono text-xs text-muted-foreground">{item.hsnCode || "-"}</td>
                         <td className="py-2 px-4 text-right">{item.quantity} {item.unit}</td>
                         <td className="py-2 px-4 text-right">{formatCurrency(item.unitPrice)}</td>
                         <td className="py-2 px-4 text-right">{formatCurrency(item.taxableAmount)}</td>
-                        <td className="py-2 px-4 text-right text-blue-600">{formatCurrency(parseFloat(item.cgst || 0) + parseFloat(item.sgst || 0) + parseFloat(item.igst || 0))}</td>
+                        <td className="py-2 px-4 text-right text-blue-600">
+                          {formatCurrency(parseFloat(item.cgst || 0) + parseFloat(item.sgst || 0) + parseFloat(item.igst || 0))}
+                        </td>
                         <td className="py-2 px-4 text-right font-semibold">{formatCurrency(item.totalAmount)}</td>
                       </tr>
                     ))}
@@ -105,10 +114,10 @@ export default function PurchaseDetailPage() {
           <Card className="sticky top-4">
             <CardHeader className="pb-3"><CardTitle className="text-base">Payment Summary</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Taxable</span><span>{formatCurrency(p.taxableAmount)}</span></div>
+              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Taxable</span><span>{formatCurrency(p.subtotal)}</span></div>
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total GST (ITC)</span><span className="text-blue-600 font-medium">{formatCurrency(p.totalGst)}</span></div>
-              <div className="flex justify-between py-2 border-t-2 font-bold text-base"><span>Total</span><span>{formatCurrency(p.totalAmount)}</span></div>
-              {p.paymentStatus !== "paid" && (
+              <div className="flex justify-between py-2 border-t-2 font-bold text-base"><span>Total</span><span>{formatCurrency(p.grandTotal)}</span></div>
+              {currentStatus !== "paid" && (
                 <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} disabled={mutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
                 </Button>

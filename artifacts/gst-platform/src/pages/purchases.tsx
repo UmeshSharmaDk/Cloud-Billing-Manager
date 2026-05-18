@@ -10,10 +10,13 @@ import { Plus, Search, ShoppingCart } from "lucide-react";
 export default function PurchasesPage() {
   const [search, setSearch] = useState("");
   const { data, isLoading } = useListPurchases();
-  const purchases: any[] = (data as any)?.purchases || (Array.isArray(data) ? data : []);
+  // API returns { purchases: [...], total: n }
+  // Each purchase has: billNumber (alias for invoiceNumber), billDate, status, grandTotal, subtotal, totalGst, vendorName, vendorGstin
+  const purchases: any[] = (data as any)?.purchases || [];
 
   const filtered = purchases.filter(p =>
     p.billNumber?.toLowerCase().includes(search.toLowerCase()) ||
+    p.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
     p.vendorName?.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -52,7 +55,6 @@ export default function PurchasesPage() {
                   <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Bill #</th>
                   <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Vendor</th>
                   <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Bill Date</th>
-                  <th className="text-left py-3 px-4 font-semibold text-muted-foreground">Due Date</th>
                   <th className="text-right py-3 px-4 font-semibold text-muted-foreground">Taxable</th>
                   <th className="text-right py-3 px-4 font-semibold text-muted-foreground">GST (ITC)</th>
                   <th className="text-right py-3 px-4 font-semibold text-muted-foreground">Total</th>
@@ -64,20 +66,23 @@ export default function PurchasesPage() {
                   <tr key={p.id} className="border-b last:border-0 hover:bg-accent/40 transition-colors">
                     <td className="py-3 px-4">
                       <Link href={`/purchases/${p.id}`}>
-                        <span className="text-primary font-semibold hover:underline cursor-pointer">{p.billNumber}</span>
+                        <span className="text-primary font-semibold hover:underline cursor-pointer">
+                          {p.billNumber || p.invoiceNumber}
+                        </span>
                       </Link>
                     </td>
                     <td className="py-3 px-4">
                       <div className="font-medium">{p.vendorName}</div>
                       {p.vendorGstin && <div className="text-xs text-muted-foreground">{p.vendorGstin}</div>}
                     </td>
-                    <td className="py-3 px-4 text-muted-foreground">{formatDate(p.billDate)}</td>
-                    <td className="py-3 px-4 text-muted-foreground">{formatDate(p.dueDate)}</td>
-                    <td className="py-3 px-4 text-right">{formatCurrency(p.taxableAmount)}</td>
+                    <td className="py-3 px-4 text-muted-foreground">{formatDate(p.billDate || p.invoiceDate)}</td>
+                    <td className="py-3 px-4 text-right">{formatCurrency(p.subtotal)}</td>
                     <td className="py-3 px-4 text-right text-blue-700 font-medium">{formatCurrency(p.totalGst)}</td>
-                    <td className="py-3 px-4 text-right font-semibold">{formatCurrency(p.totalAmount)}</td>
+                    <td className="py-3 px-4 text-right font-semibold">{formatCurrency(p.grandTotal)}</td>
                     <td className="py-3 px-4 text-center">
-                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${statusBadge(p.paymentStatus)}`}>{p.paymentStatus}</span>
+                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${statusBadge(p.status || p.paymentStatus || "unpaid")}`}>
+                        {p.status || p.paymentStatus || "unpaid"}
+                      </span>
                     </td>
                   </tr>
                 ))}

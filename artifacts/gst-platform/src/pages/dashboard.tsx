@@ -2,49 +2,52 @@ import { useGetDashboardStats, useGetRecentInvoices, useGetMonthlyRevenue, useGe
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
-import { TrendingUp, TrendingDown, FileText, ShoppingCart, Package, AlertTriangle, Plus, ArrowRight } from "lucide-react";
+import { TrendingUp, TrendingDown, FileText, ShoppingCart, Package, AlertTriangle, Plus, ArrowRight, IndianRupee } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 
-function StatCard({ title, value, sub, icon: Icon, trend, color = "blue" }: {
-  title: string; value: string; sub?: string; icon: React.ComponentType<any>; trend?: number; color?: string;
+function StatCard({ title, value, sub, icon: Icon, color = "blue" }: {
+  title: string; value: string; sub?: string; icon: React.ComponentType<any>; color?: string;
 }) {
-  const colors: Record<string, string> = { blue: "bg-blue-100 text-blue-600", green: "bg-emerald-100 text-emerald-600", amber: "bg-amber-100 text-amber-600", violet: "bg-violet-100 text-violet-600" };
+  const colors: Record<string, string> = {
+    blue: "bg-blue-100 text-blue-600",
+    green: "bg-emerald-100 text-emerald-600",
+    amber: "bg-amber-100 text-amber-600",
+    violet: "bg-violet-100 text-violet-600",
+    red: "bg-red-100 text-red-600",
+  };
   return (
     <Card>
       <CardContent className="p-6">
         <div className="flex items-start justify-between">
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <p className="text-2xl font-bold text-foreground mt-1">{value}</p>
+            <p className="text-2xl font-bold text-foreground mt-1 truncate">{value}</p>
             {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
           </div>
-          <div className={`p-3 rounded-xl ${colors[color] || colors.blue}`}>
+          <div className={`p-3 rounded-xl ml-3 shrink-0 ${colors[color] || colors.blue}`}>
             <Icon className="w-5 h-5" />
           </div>
         </div>
-        {trend !== undefined && (
-          <div className="mt-3 flex items-center gap-1 text-xs">
-            {trend >= 0 ? <TrendingUp className="w-3.5 h-3.5 text-emerald-600" /> : <TrendingDown className="w-3.5 h-3.5 text-red-500" />}
-            <span className={trend >= 0 ? "text-emerald-600 font-medium" : "text-red-500 font-medium"}>{Math.abs(trend)}% vs last month</span>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
 }
 
 export default function DashboardPage() {
-  const { data: statsData, isLoading } = useGetDashboardStats();
+  const { data: statsRaw, isLoading } = useGetDashboardStats();
   const { data: recentInvData } = useGetRecentInvoices();
   const { data: revenueData } = useGetMonthlyRevenue();
   const { data: lowStockData } = useGetLowStockAlerts();
   const { data: gstData } = useGetGstSummary();
 
-  const stats: any = statsData || {};
-  const recentInvoices: any[] = (recentInvData as any) || [];
-  const salesTrend: any[] = (revenueData as any) || [];
-  const lowStockProducts: any[] = (lowStockData as any) || [];
+  // API returns: totalSales, totalPurchases, totalOutstanding, invoiceCount, customerCount, vendorCount, productCount, lowStockCount, overdueInvoiceCount, totalGstPayable
+  const stats: any = statsRaw || {};
+  const recentInvoices: any[] = Array.isArray(recentInvData) ? recentInvData : [];
+  // Monthly revenue API returns: [{ month, sales, purchases, gst }]
+  const salesTrend: any[] = Array.isArray(revenueData) ? revenueData : [];
+  const lowStockProducts: any[] = Array.isArray(lowStockData) ? lowStockData : [];
+  // GST summary returns: { outputCgst, outputSgst, outputIgst, inputCgst, inputSgst, inputIgst, netPayable }
   const gstSummary: any = gstData || {};
 
   if (isLoading) return (
@@ -55,34 +58,70 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* Key Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard title="Total Sales (Month)" value={formatCurrency(stats.monthlySales)} sub={`${stats.invoiceCount || 0} invoices`} icon={FileText} trend={12} color="blue" />
-        <StatCard title="Total Purchases" value={formatCurrency(stats.monthlyPurchases)} sub={`${stats.purchaseCount || 0} bills`} icon={ShoppingCart} trend={-5} color="amber" />
-        <StatCard title="Receivables" value={formatCurrency(stats.totalReceivables)} sub="Outstanding from customers" icon={TrendingUp} color="green" />
-        <StatCard title="Products in Stock" value={String(stats.productCount || 0)} sub={`${stats.lowStockCount || 0} low stock alerts`} icon={Package} color="violet" />
+        <StatCard
+          title="Total Sales (Month)"
+          value={formatCurrency(stats.totalSales)}
+          sub={`${stats.invoiceCount || 0} invoices`}
+          icon={FileText}
+          color="blue"
+        />
+        <StatCard
+          title="Total Purchases"
+          value={formatCurrency(stats.totalPurchases)}
+          sub={`${stats.vendorCount || 0} vendors`}
+          icon={ShoppingCart}
+          color="amber"
+        />
+        <StatCard
+          title="Outstanding (Receivables)"
+          value={formatCurrency(stats.totalOutstanding)}
+          sub={`${stats.overdueInvoiceCount || 0} overdue`}
+          icon={TrendingUp}
+          color="red"
+        />
+        <StatCard
+          title="Products in Stock"
+          value={String(stats.productCount || 0)}
+          sub={`${stats.lowStockCount || 0} low stock alerts`}
+          icon={Package}
+          color="violet"
+        />
       </div>
 
+      {/* GST Summary Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <Card className="border-blue-200 bg-blue-50/50">
-          <CardContent className="p-5">
-            <p className="text-sm font-medium text-blue-700">Total CGST Collected</p>
-            <p className="text-2xl font-bold text-blue-900 mt-1">{formatCurrency(gstSummary.totalCgst)}</p>
+          <CardContent className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-blue-700">CGST Collected</p>
+              <p className="text-2xl font-bold text-blue-900 mt-1">{formatCurrency(gstSummary.outputCgst)}</p>
+            </div>
+            <IndianRupee className="w-8 h-8 text-blue-400" />
           </CardContent>
         </Card>
         <Card className="border-indigo-200 bg-indigo-50/50">
-          <CardContent className="p-5">
-            <p className="text-sm font-medium text-indigo-700">Total SGST Collected</p>
-            <p className="text-2xl font-bold text-indigo-900 mt-1">{formatCurrency(gstSummary.totalSgst)}</p>
+          <CardContent className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-indigo-700">SGST Collected</p>
+              <p className="text-2xl font-bold text-indigo-900 mt-1">{formatCurrency(gstSummary.outputSgst)}</p>
+            </div>
+            <IndianRupee className="w-8 h-8 text-indigo-400" />
           </CardContent>
         </Card>
         <Card className="border-violet-200 bg-violet-50/50">
-          <CardContent className="p-5">
-            <p className="text-sm font-medium text-violet-700">Total IGST Collected</p>
-            <p className="text-2xl font-bold text-violet-900 mt-1">{formatCurrency(gstSummary.totalIgst)}</p>
+          <CardContent className="p-5 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-violet-700">IGST Collected</p>
+              <p className="text-2xl font-bold text-violet-900 mt-1">{formatCurrency(gstSummary.outputIgst)}</p>
+            </div>
+            <IndianRupee className="w-8 h-8 text-violet-400" />
           </CardContent>
         </Card>
       </div>
 
+      {/* Charts */}
       {salesTrend.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card>
@@ -91,24 +130,26 @@ export default function DashboardPage() {
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={salesTrend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
                   <Tooltip formatter={(v: any) => formatCurrency(v)} />
-                  <Area type="monotone" dataKey="revenue" stroke="hsl(var(--primary))" fill="hsl(var(--primary)/0.1)" strokeWidth={2} name="Sales" />
+                  {/* API returns "sales" key */}
+                  <Area type="monotone" dataKey="sales" stroke="hsl(var(--primary))" fill="hsl(var(--primary)/0.1)" strokeWidth={2} name="Sales" />
                 </AreaChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Revenue by Month</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-base">Sales vs Purchases</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={salesTrend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
                   <Tooltip formatter={(v: any) => formatCurrency(v)} />
-                  <Bar dataKey="revenue" fill="hsl(var(--primary))" name="Revenue" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="sales" fill="hsl(var(--primary))" name="Sales" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="purchases" fill="hsl(var(--primary)/0.3)" name="Purchases" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -116,6 +157,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Recent Invoices + Low Stock */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
@@ -129,7 +171,9 @@ export default function DashboardPage() {
               <div className="flex flex-col items-center justify-center py-10 text-center px-4">
                 <FileText className="w-8 h-8 text-muted-foreground mb-2" />
                 <p className="text-sm text-muted-foreground">No invoices yet</p>
-                <Link href="/invoices/new"><Button size="sm" className="mt-3 gap-1"><Plus className="w-3.5 h-3.5" /> Create Invoice</Button></Link>
+                <Link href="/invoices/new">
+                  <Button size="sm" className="mt-3 gap-1"><Plus className="w-3.5 h-3.5" /> Create Invoice</Button>
+                </Link>
               </div>
             ) : (
               <div className="divide-y divide-border">
@@ -141,8 +185,8 @@ export default function DashboardPage() {
                         <p className="text-xs text-muted-foreground">{inv.customerName} · {formatDate(inv.invoiceDate)}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm font-semibold">{formatCurrency(inv.totalAmount)}</p>
-                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusBadge(inv.paymentStatus)}`}>{inv.paymentStatus}</span>
+                        <p className="text-sm font-semibold">{formatCurrency(inv.grandTotal)}</p>
+                        <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusBadge(inv.status)}`}>{inv.status}</span>
                       </div>
                     </div>
                   </Link>
@@ -177,7 +221,9 @@ export default function DashboardPage() {
                         <p className="text-xs text-muted-foreground">{p.sku} · Min: {p.lowStockThreshold}</p>
                       </div>
                       <div className="text-right">
-                        <p className={`text-sm font-bold ${p.stockQuantity <= 0 ? "text-red-600" : "text-amber-600"}`}>{p.stockQuantity} {p.unit}</p>
+                        <p className={`text-sm font-bold ${p.stockQuantity <= 0 ? "text-red-600" : "text-amber-600"}`}>
+                          {p.stockQuantity} {p.unit}
+                        </p>
                         <span className="text-xs text-muted-foreground">{p.stockQuantity <= 0 ? "Out of stock" : "Low stock"}</span>
                       </div>
                     </div>

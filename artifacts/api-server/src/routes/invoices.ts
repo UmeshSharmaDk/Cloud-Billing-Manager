@@ -13,10 +13,11 @@ async function getBusinessId(userId: number): Promise<number | null> {
 function calcGst(items: any[], isInterstate: boolean) {
   let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
   const processed = items.map(item => {
-    const qty = parseFloat(item.quantity ?? 1);
-    const rate = parseFloat(item.rate ?? 0);
-    const discount = parseFloat(item.discount ?? 0);
-    const gstRate = parseFloat(item.gstRate ?? 0);
+    const qty = parseFloat(String(item.quantity ?? 1));
+    // Accept both `unitPrice` (frontend) and `rate` (legacy)
+    const rate = parseFloat(String(item.unitPrice ?? item.rate ?? 0));
+    const discount = parseFloat(String(item.discount ?? 0));
+    const gstRate = parseFloat(String(item.gstRate ?? 0));
     const taxableAmount = qty * rate * (1 - discount / 100);
     let itemCgst = 0, itemSgst = 0, itemIgst = 0;
     if (isInterstate) {
@@ -29,13 +30,28 @@ function calcGst(items: any[], isInterstate: boolean) {
     cgst += itemCgst;
     sgst += itemSgst;
     igst += itemIgst;
-    return { ...item, taxableAmount: Math.round(taxableAmount * 100) / 100, cgst: Math.round(itemCgst * 100) / 100, sgst: Math.round(itemSgst * 100) / 100, igst: Math.round(itemIgst * 100) / 100, totalAmount: Math.round((taxableAmount + itemCgst + itemSgst + itemIgst) * 100) / 100 };
+    return {
+      ...item,
+      unitPrice: rate,
+      taxableAmount: Math.round(taxableAmount * 100) / 100,
+      cgst: Math.round(itemCgst * 100) / 100,
+      sgst: Math.round(itemSgst * 100) / 100,
+      igst: Math.round(itemIgst * 100) / 100,
+      totalAmount: Math.round((taxableAmount + itemCgst + itemSgst + itemIgst) * 100) / 100,
+    };
   });
   const totalGst = cgst + sgst + igst;
   const grandTotalRaw = subtotal + totalGst;
   const grandTotal = Math.round(grandTotalRaw);
   const roundOff = Math.round((grandTotal - grandTotalRaw) * 100) / 100;
-  return { subtotal: Math.round(subtotal * 100) / 100, cgst: Math.round(cgst * 100) / 100, sgst: Math.round(sgst * 100) / 100, igst: Math.round(igst * 100) / 100, totalGst: Math.round(totalGst * 100) / 100, grandTotal, roundOff, items: processed };
+  return {
+    subtotal: Math.round(subtotal * 100) / 100,
+    cgst: Math.round(cgst * 100) / 100,
+    sgst: Math.round(sgst * 100) / 100,
+    igst: Math.round(igst * 100) / 100,
+    totalGst: Math.round(totalGst * 100) / 100,
+    grandTotal, roundOff, items: processed,
+  };
 }
 
 function mapInvoice(inv: any) {
@@ -49,6 +65,7 @@ function mapInvoice(inv: any) {
     grandTotal: parseFloat(inv.grandTotal),
     roundOff: parseFloat(inv.roundOff),
     paidAmount: parseFloat(inv.paidAmount),
+    balanceDue: Math.max(0, parseFloat(inv.grandTotal) - parseFloat(inv.paidAmount)),
     items: Array.isArray(inv.items) ? inv.items : [],
   };
 }
@@ -83,22 +100,45 @@ router.get("/", requireAuth, async (req: any, res) => {
 router.post("/", requireAuth, async (req: any, res) => {
   const businessId = await getBusinessId(req.userId);
   if (!businessId) return res.status(400).json({ error: "No business" });
-  const { type, customerId, invoiceDate, dueDate, placeOfSupply, isInterstate = false, notes, items = [] } = req.body;
-  if (!customerId || !invoiceDate) return res.status(400).json({ error: "customerId and invoiceDate required" });
-  const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, parseInt(customerId))).limit(1);
+
+  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [] } = req.body;
+
+  if (!invoiceDate) return res.status(400).json({ error: "invoiceDate required" });
+  if (!customerId && !customCustomerName) return res.status(400).json({ error: "customerId or customerName required" });
+
+  // Resolve customer info — support both registered and walk-in customers
+  let resolvedCustomerId = customerId ? parseInt(customerId) : 0;
+  let resolvedCustomerName = customCustomerName ?? "Walk-in Customer";
+  let resolvedCustomerGstin = customGstin ?? null;
+
+  if (customerId) {
+    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, parseInt(customerId))).limit(1);
+    if (customer) {
+      resolvedCustomerName = customer.name;
+      resolvedCustomerGstin = customer.gstin ?? null;
+    }
+  }
+
+  // Auto-detect interstate based on business state code vs placeOfSupply
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  const bizStateCode = business?.stateCode ?? "";
+  const isInterstate = placeOfSupply ? (placeOfSupply.trim() !== bizStateCode.trim()) : false;
+
   const gstCalc = calcGst(items, isInterstate);
   const invoiceNumber = await generateInvoiceNumber(businessId);
+
   const [invoice] = await db.insert(invoicesTable).values({
     businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
-    customerId: parseInt(customerId), customerName: customer?.name ?? "Unknown",
-    customerGstin: customer?.gstin ?? null, invoiceDate, dueDate, placeOfSupply,
+    customerId: resolvedCustomerId, customerName: resolvedCustomerName,
+    customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
     isInterstate, notes, items: gstCalc.items,
     subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(),
     sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(),
     totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(),
     roundOff: gstCalc.roundOff.toString(), paidAmount: "0",
   }).returning();
-  return res.status(201).json(mapInvoice(invoice));
+
+  return res.status(201).json({ invoice: mapInvoice(invoice) });
 });
 
 router.get("/:id", requireAuth, async (req: any, res) => {
@@ -140,8 +180,10 @@ router.delete("/:id", requireAuth, async (req: any, res) => {
 
 router.patch("/:id/status", requireAuth, async (req: any, res) => {
   const businessId = await getBusinessId(req.userId);
-  const { status, paidAmount } = req.body;
-  const updates: any = { status };
+  const { paymentStatus, status, paidAmount } = req.body;
+  const newStatus = paymentStatus ?? status;
+  const updates: any = {};
+  if (newStatus) updates.status = newStatus;
   if (paidAmount !== undefined) updates.paidAmount = paidAmount.toString();
   const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).returning();
   if (!invoice) return res.status(404).json({ error: "Not found" });

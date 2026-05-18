@@ -1,5 +1,5 @@
 import { useGetAdminStats } from "@workspace/api-client-react";
-import { formatCurrency, statusBadge, formatDate } from "@/lib/utils";
+import { formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Building2, FileText, TrendingUp, Shield } from "lucide-react";
 import { Link } from "wouter";
@@ -10,6 +10,9 @@ const COLORS = ["hsl(217,91%,50%)", "hsl(160,60%,45%)", "hsl(30,80%,55%)", "hsl(
 
 export default function AdminDashboardPage() {
   const { data, isLoading } = useGetAdminStats();
+  // API returns: totalUsers, activeUsers, inactiveUsers, expiredSubscriptions, totalBusinesses,
+  //              totalInvoices, activeSubscriptions, newUsersThisMonth,
+  //              monthlyCount, yearlyCount, trialCount, expiredCount, recentUsers
   const stats: any = data || {};
 
   if (isLoading) return (
@@ -31,7 +34,7 @@ export default function AdminDashboardPage() {
         <div className="p-3 bg-primary/10 rounded-xl"><Shield className="w-6 h-6 text-primary" /></div>
         <div>
           <h1 className="text-2xl font-bold">Admin Dashboard</h1>
-          <p className="text-muted-foreground text-sm">Platform overview and management</p>
+          <p className="text-muted-foreground text-sm">Platform overview and user management</p>
         </div>
       </div>
 
@@ -68,8 +71,8 @@ export default function AdminDashboardPage() {
           <CardContent className="p-5 flex items-center gap-4">
             <div className="p-3 bg-amber-100 rounded-xl"><TrendingUp className="w-5 h-5 text-amber-600" /></div>
             <div>
-              <p className="text-xs text-muted-foreground">Active Subscriptions</p>
-              <p className="text-2xl font-bold">{stats.activeSubscriptions || 0}</p>
+              <p className="text-xs text-muted-foreground">Active Users</p>
+              <p className="text-2xl font-bold">{stats.activeSubscriptions || stats.activeUsers || 0}</p>
             </div>
           </CardContent>
         </Card>
@@ -82,7 +85,8 @@ export default function AdminDashboardPage() {
             <CardContent>
               <ResponsiveContainer width="100%" height={220}>
                 <PieChart>
-                  <Pie data={subPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                  <Pie data={subPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                     {subPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
                   <Tooltip />
@@ -95,7 +99,9 @@ export default function AdminDashboardPage() {
         <Card>
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-base">Recent Registrations</CardTitle>
-            <Link href="/admin/users"><Button variant="ghost" size="sm" className="text-primary text-xs">View all</Button></Link>
+            <Link href="/admin/users">
+              <Button variant="ghost" size="sm" className="text-primary text-xs">View all</Button>
+            </Link>
           </CardHeader>
           <CardContent className="p-0">
             {(stats.recentUsers || []).length === 0 ? (
@@ -103,16 +109,18 @@ export default function AdminDashboardPage() {
             ) : (
               <div className="divide-y divide-border">
                 {(stats.recentUsers || []).map((u: any) => (
-                  <div key={u.id} className="flex items-center justify-between px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium">{u.name}</p>
-                      <p className="text-xs text-muted-foreground">{u.email}</p>
+                  <Link key={u.id} href={`/admin/users/${u.id}`}>
+                    <div className="flex items-center justify-between px-4 py-3 hover:bg-accent/40 cursor-pointer transition-colors">
+                      <div>
+                        <p className="text-sm font-medium">{u.name}</p>
+                        <p className="text-xs text-muted-foreground">{u.email}</p>
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${statusBadge(u.subscriptionStatus)}`}>{u.subscriptionStatus}</span>
+                        <p className="text-xs text-muted-foreground mt-0.5">{formatDate(u.createdAt)}</p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${statusBadge(u.subscriptionStatus)}`}>{u.subscriptionStatus}</span>
-                      <p className="text-xs text-muted-foreground mt-0.5">{formatDate(u.createdAt)}</p>
-                    </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
             )}

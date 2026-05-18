@@ -12,7 +12,8 @@ export default function InvoicesPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const { data, isLoading } = useListInvoices(status !== "all" ? { status } : {});
-  const invoices: any[] = (data as any)?.invoices || (Array.isArray(data) ? data : []);
+  // API returns { invoices: [...], total: n }
+  const invoices: any[] = (data as any)?.invoices || [];
 
   const filtered = invoices.filter(inv =>
     inv.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
@@ -37,9 +38,7 @@ export default function InvoicesPage() {
           <Input className="pl-9" placeholder="Search invoices..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="All Status" />
-          </SelectTrigger>
+          <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
             <SelectItem value="paid">Paid</SelectItem>
@@ -90,11 +89,12 @@ export default function InvoicesPage() {
                     </td>
                     <td className="py-3 px-4 text-muted-foreground">{formatDate(inv.invoiceDate)}</td>
                     <td className="py-3 px-4 text-muted-foreground">{formatDate(inv.dueDate)}</td>
-                    <td className="py-3 px-4 text-right">{formatCurrency(inv.taxableAmount)}</td>
+                    <td className="py-3 px-4 text-right">{formatCurrency(inv.subtotal)}</td>
                     <td className="py-3 px-4 text-right text-muted-foreground">{formatCurrency(inv.totalGst)}</td>
-                    <td className="py-3 px-4 text-right font-semibold">{formatCurrency(inv.totalAmount)}</td>
+                    <td className="py-3 px-4 text-right font-semibold">{formatCurrency(inv.grandTotal)}</td>
                     <td className="py-3 px-4 text-center">
-                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${statusBadge(inv.paymentStatus)}`}>{inv.paymentStatus}</span>
+                      {/* API returns `status`, not `paymentStatus` */}
+                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${statusBadge(inv.status)}`}>{inv.status}</span>
                     </td>
                   </tr>
                 ))}

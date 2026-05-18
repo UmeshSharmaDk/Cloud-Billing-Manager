@@ -28,6 +28,7 @@ import ReportsPage from "@/pages/reports";
 import SettingsPage from "@/pages/settings";
 import AdminDashboardPage from "@/pages/admin-dashboard";
 import AdminUsersPage from "@/pages/admin-users";
+import AdminUserDetailPage from "@/pages/admin-user-detail";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 1000 * 60 } }
@@ -77,6 +78,7 @@ function Router() {
       <Route path="/settings">{() => <ProtectedRoute component={SettingsPage} />}</Route>
       <Route path="/admin">{() => <AdminRoute component={AdminDashboardPage} />}</Route>
       <Route path="/admin/users">{() => <AdminRoute component={AdminUsersPage} />}</Route>
+      <Route path="/admin/users/:id">{() => <AdminRoute component={AdminUserDetailPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

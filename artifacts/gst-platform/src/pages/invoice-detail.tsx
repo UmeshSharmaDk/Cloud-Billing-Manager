@@ -14,17 +14,22 @@ export default function InvoiceDetailPage() {
   const paymentMutation = useUpdateInvoiceStatus();
   const { toast } = useToast();
 
+  // API returns: id, invoiceNumber, status (not paymentStatus), grandTotal (not totalAmount), subtotal (not taxableAmount), balanceDue
   const inv: any = data || {};
   const items: any[] = inv.items || [];
 
-  const handlePaymentStatus = (status: string) => {
-    paymentMutation.mutate({ id: parseInt(params?.id || "0"), data: { paymentStatus: status } as any }, {
-      onSuccess: () => { toast({ title: `Payment status updated to ${status}` }); refetch(); },
+  const handleStatus = (newStatus: string) => {
+    paymentMutation.mutate({ id: parseInt(params?.id || "0"), data: { paymentStatus: newStatus } as any }, {
+      onSuccess: () => { toast({ title: `Status updated to ${newStatus}` }); refetch(); },
       onError: () => toast({ title: "Update failed", variant: "destructive" }),
     });
   };
 
-  if (isLoading) return <div className="space-y-4 animate-pulse">{[...Array(3)].map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl" />)}</div>;
+  if (isLoading) return (
+    <div className="space-y-4 animate-pulse">{[...Array(3)].map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl" />)}</div>
+  );
+
+  const balanceDue = inv.balanceDue ?? Math.max(0, (inv.grandTotal || 0) - (inv.paidAmount || 0));
 
   return (
     <div className="space-y-4">
@@ -37,8 +42,8 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusBadge(inv.paymentStatus)}`}>{inv.paymentStatus}</span>
-          <Select value={inv.paymentStatus} onValueChange={handlePaymentStatus}>
+          <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusBadge(inv.status)}`}>{inv.status}</span>
+          <Select value={inv.status} onValueChange={handleStatus}>
             <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="unpaid">Mark Unpaid</SelectItem>
@@ -46,7 +51,9 @@ export default function InvoiceDetailPage() {
               <SelectItem value="paid">Mark Paid</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" className="gap-1" onClick={() => window.print()}><Printer className="w-4 h-4" /> Print</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => window.print()}>
+            <Printer className="w-4 h-4" /> Print
+          </Button>
         </div>
       </div>
 
@@ -65,6 +72,7 @@ export default function InvoiceDetailPage() {
                   <div className="flex gap-2"><span className="text-muted-foreground">Date:</span><span>{formatDate(inv.invoiceDate)}</span></div>
                   <div className="flex gap-2"><span className="text-muted-foreground">Due:</span><span>{formatDate(inv.dueDate)}</span></div>
                   <div className="flex gap-2"><span className="text-muted-foreground">Supply:</span><span>{inv.placeOfSupply || "-"}</span></div>
+                  <div className="flex gap-2"><span className="text-muted-foreground">Type:</span><span>{inv.isInterstate ? "Inter-state (IGST)" : "Intra-state (CGST+SGST)"}</span></div>
                 </div>
               </div>
             </CardContent>
@@ -96,7 +104,9 @@ export default function InvoiceDetailPage() {
                         <td className="py-2 px-4 text-right">{formatCurrency(item.unitPrice)}</td>
                         <td className="py-2 px-4 text-right">{formatCurrency(item.taxableAmount)}</td>
                         <td className="py-2 px-4 text-right">{item.gstRate}%</td>
-                        <td className="py-2 px-4 text-right text-primary">{formatCurrency(parseFloat(item.cgst || 0) + parseFloat(item.sgst || 0) + parseFloat(item.igst || 0))}</td>
+                        <td className="py-2 px-4 text-right text-primary">
+                          {formatCurrency(parseFloat(item.cgst || 0) + parseFloat(item.sgst || 0) + parseFloat(item.igst || 0))}
+                        </td>
                         <td className="py-2 px-4 text-right font-semibold">{formatCurrency(item.totalAmount)}</td>
                       </tr>
                     ))}
@@ -107,13 +117,14 @@ export default function InvoiceDetailPage() {
           </Card>
 
           <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">GST Summary</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-base">GST Breakup</CardTitle></CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                <div><p className="text-muted-foreground text-xs">Taxable Value</p><p className="font-semibold">{formatCurrency(inv.taxableAmount)}</p></div>
+                <div><p className="text-muted-foreground text-xs">Taxable Value</p><p className="font-semibold">{formatCurrency(inv.subtotal)}</p></div>
                 {parseFloat(inv.cgst) > 0 && <div><p className="text-muted-foreground text-xs">CGST</p><p className="font-semibold">{formatCurrency(inv.cgst)}</p></div>}
                 {parseFloat(inv.sgst) > 0 && <div><p className="text-muted-foreground text-xs">SGST</p><p className="font-semibold">{formatCurrency(inv.sgst)}</p></div>}
                 {parseFloat(inv.igst) > 0 && <div><p className="text-muted-foreground text-xs">IGST</p><p className="font-semibold">{formatCurrency(inv.igst)}</p></div>}
+                {inv.roundOff !== 0 && <div><p className="text-muted-foreground text-xs">Round Off</p><p className="font-semibold">{formatCurrency(inv.roundOff)}</p></div>}
               </div>
             </CardContent>
           </Card>
@@ -123,15 +134,17 @@ export default function InvoiceDetailPage() {
           <Card className="sticky top-4">
             <CardHeader className="pb-3"><CardTitle className="text-base">Payment Summary</CardTitle></CardHeader>
             <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Taxable Amount</span><span>{formatCurrency(inv.taxableAmount)}</span></div>
-              {parseFloat(inv.cgst) > 0 && <div className="flex justify-between py-1"><span className="text-muted-foreground">CGST</span><span>{formatCurrency(inv.cgst)}</span></div>}
-              {parseFloat(inv.sgst) > 0 && <div className="flex justify-between py-1"><span className="text-muted-foreground">SGST</span><span>{formatCurrency(inv.sgst)}</span></div>}
-              {parseFloat(inv.igst) > 0 && <div className="flex justify-between py-1"><span className="text-muted-foreground">IGST</span><span>{formatCurrency(inv.igst)}</span></div>}
-              <div className="flex justify-between py-2 border-t-2 font-bold text-base"><span>Total</span><span className="text-primary">{formatCurrency(inv.totalAmount)}</span></div>
-              {parseFloat(inv.paidAmount) > 0 && <div className="flex justify-between text-emerald-600"><span>Paid</span><span className="font-semibold">{formatCurrency(inv.paidAmount)}</span></div>}
-              {parseFloat(inv.balanceDue) > 0 && <div className="flex justify-between text-red-600"><span className="font-semibold">Balance Due</span><span className="font-bold">{formatCurrency(inv.balanceDue)}</span></div>}
-              {inv.paymentStatus !== "paid" && (
-                <Button className="w-full mt-2 gap-2" onClick={() => handlePaymentStatus("paid")} disabled={paymentMutation.isPending}>
+              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Taxable Amount</span><span>{formatCurrency(inv.subtotal)}</span></div>
+              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total GST</span><span className="text-primary font-medium">{formatCurrency(inv.totalGst)}</span></div>
+              <div className="flex justify-between py-2 border-t-2 font-bold text-base"><span>Grand Total</span><span className="text-primary">{formatCurrency(inv.grandTotal)}</span></div>
+              {parseFloat(inv.paidAmount) > 0 && (
+                <div className="flex justify-between text-emerald-600"><span>Paid</span><span className="font-semibold">{formatCurrency(inv.paidAmount)}</span></div>
+              )}
+              {balanceDue > 0 && (
+                <div className="flex justify-between text-red-600 border-t pt-1"><span className="font-semibold">Balance Due</span><span className="font-bold">{formatCurrency(balanceDue)}</span></div>
+              )}
+              {inv.status !== "paid" && (
+                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} disabled={paymentMutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
                 </Button>
               )}
