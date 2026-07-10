@@ -10,6 +10,8 @@ export const purchasesTable = pgTable("purchases", {
   vendorGstin: text("vendor_gstin"),
   invoiceNumber: text("invoice_number").notNull(),
   invoiceDate: text("invoice_date").notNull(),
+  dueDate: text("due_date"),
+  status: text("status").notNull().default("unpaid"),
   subtotal: numeric("subtotal", { precision: 15, scale: 2 }).notNull().default("0"),
   cgst: numeric("cgst", { precision: 15, scale: 2 }).notNull().default("0"),
   sgst: numeric("sgst", { precision: 15, scale: 2 }).notNull().default("0"),
