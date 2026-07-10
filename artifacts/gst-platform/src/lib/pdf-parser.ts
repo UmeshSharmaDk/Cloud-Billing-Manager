@@ -92,16 +92,29 @@ function detectHeader(text: string): ParsedPdfResult["detected"] {
   return detected;
 }
 
+const CURRENCY_TOKEN_RE = /^(rs\.?|inr|₹|usd|\$)$/i;
+const SKIP_ROW_RE = /^(total|sub\s*total|grand\s*total|taxable|add\b|less\b|discount|gst payable|gst on reverse|invoice value|amount chargeable|amount in words|terms\b|bank\b|certified|e\s*&\s*o\.?e\.?|for\s+[a-z]|authorised|authorized|declaration|thank you|remark|received|balance|previous|current\s*balance|hsn\s*$|common seal|signatory)/i;
+
 /**
- * Structured parser tuned to the standard Indian tax-invoice / proforma table layout:
- * Sr.No | Name of Product / Service | HSN / SAC | Qty [unit] | Rate | Taxable Value | GST % | Amount | Total
- * Handles multi-line product names/descriptions (continuation lines with no leading serial number).
+ * Determines whether a token looks like an HSN/SAC code: a plain 3-8 digit integer.
+ */
+function isHsnToken(tok: string): boolean {
+  return isPlainInt(tok) && tok.length >= 3 && tok.length <= 8;
+}
+
+/**
+ * Structured parser tuned to the standard Indian tax-invoice / proforma table layout, generalized
+ * to tolerate varying column orders/sets seen across real-world invoice templates:
+ * Sr.No | Item/Product/Description | HSN/SAC | Qty [Unit] | Rate | [Taxable Value] | [Discount] | GST% | [GST Amt] | [Total/Amount]
+ * GST% may appear as a plain decimal in a "Tax %"/"GST Rate" column, or embedded with a literal "%" sign anywhere in the row.
+ * Handles multi-line product names/descriptions (continuation lines with no leading serial number),
+ * and item rows without a leading serial number (some templates group items under a shared heading).
  */
 function extractTableItems(lines: string[]): { items: ParsedPdfItem[]; warnings: string[] } {
   const items: ParsedPdfItem[] = [];
   const warnings: string[] = [];
 
-  const headerIdx = lines.findIndex(l => /name of product|particulars|description/i.test(l) && /hsn|sac/i.test(l));
+  const headerIdx = lines.findIndex(l => /name of product|particulars|description|item/i.test(l) && /hsn|sac/i.test(l));
   if (headerIdx === -1) return { items, warnings };
 
   let endIdx = lines.findIndex((l, i) => i > headerIdx && /^total\b/i.test(l.trim()));
@@ -110,50 +123,67 @@ function extractTableItems(lines: string[]): { items: ParsedPdfItem[]; warnings:
   const rows = lines.slice(headerIdx + 1, endIdx);
   let current: ParsedPdfItem | null = null;
 
-  for (const row of rows) {
-    const tokens = row.split(" ").filter(Boolean);
+  for (const rawRow of rows) {
+    const cleanedRow = rawRow.replace(new RegExp(`\\b${CURRENCY_TOKEN_RE.source.replace(/^\^|\$$/g, "")}\\b`, "gi"), " ").replace(/\s+/g, " ").trim();
+    const tokens = cleanedRow.split(" ").filter(Boolean);
     if (tokens.length === 0) continue;
 
-    if (isPlainInt(tokens[0]) && tokens.length > 1) {
-      // Look for the HSN/SAC token: a plain integer of 4-8 digits, appearing after the serial number
-      let hsnIdx = -1;
-      for (let i = 1; i < tokens.length; i++) {
-        if (isPlainInt(tokens[i]) && tokens[i].length >= 4 && tokens[i].length <= 8) { hsnIdx = i; break; }
-      }
-      if (hsnIdx === -1) {
-        // No HSN found on this line — treat as a continuation of the previous item's description
-        if (current && !/^\d/.test(tokens[0])) current.description += " " + row;
-        continue;
-      }
+    // A serial number (1-3 digit plain int) may lead the row; skip it when looking for the HSN token.
+    const hasLeadingSerial = isPlainInt(tokens[0]) && tokens[0].length <= 3;
+    const startIdx = hasLeadingSerial ? 1 : 0;
 
-      const description = tokens.slice(1, hsnIdx).join(" ").trim();
-      const hsnCode = tokens[hsnIdx];
-      const rest = tokens.slice(hsnIdx + 1);
-      let ri = 0;
-      const nextNum = (): number | null => {
-        while (ri < rest.length && !isDecimalToken(rest[ri])) ri++;
-        if (ri >= rest.length) return null;
-        return parseNum(rest[ri++]);
-      };
+    let hsnIdx = -1;
+    for (let i = startIdx; i < tokens.length; i++) {
+      if (isHsnToken(tokens[i])) { hsnIdx = i; break; }
+    }
 
-      const quantity = nextNum();
-      // Optional unit token (alphabetic, e.g. "PCS", "NOS", "KG") right after qty
-      let unit: string | undefined;
-      if (ri < rest.length && /^[A-Za-z]+$/.test(rest[ri])) { unit = rest[ri]; ri++; }
-      const rate = nextNum();
-      nextNum(); // taxableValue — recomputed by app, skip
-      const gstRate = nextNum();
-      // remaining tokens (gst amount, total) are recomputed by app — ignored
-
-      if (description && quantity !== null && quantity > 0 && rate !== null && rate > 0) {
-        current = { description, quantity, unitPrice: rate, hsnCode, gstRate: gstRate ?? undefined, unit };
-        items.push(current);
-      } else {
-        current = null;
+    if (hsnIdx === -1) {
+      // No HSN found on this line — treat as a continuation of the previous item's description,
+      // unless it looks like a totals/summary/footer row.
+      if (current && !SKIP_ROW_RE.test(cleanedRow) && !/^\d/.test(tokens[0])) {
+        current.description += " " + cleanedRow;
       }
-    } else if (current && !/^(total|taxable|add|less|gst payable|certified|for\s)/i.test(row)) {
-      // Continuation line for a multi-line product name/description
-      current.description += " " + row;
+      continue;
+    }
+
+    const description = tokens.slice(startIdx, hsnIdx).join(" ").trim();
+    const hsnCode = tokens[hsnIdx];
+    const rest = tokens.slice(hsnIdx + 1);
+
+    // GST % may be written with an explicit "%" sign anywhere in the row (e.g. "18%", "(5%)").
+    const percentMatch = cleanedRow.match(/\(?(\d{1,2}(?:\.\d+)?)\s*%\)?/);
+
+    let ri = 0;
+    const nextNum = (): number | null => {
+      while (ri < rest.length && (!isDecimalToken(rest[ri]) || rest[ri].includes("%"))) ri++;
+      if (ri >= rest.length) return null;
+      return parseNum(rest[ri++]);
+    };
+
+    const quantity = nextNum();
+    // Optional unit token (alphabetic, e.g. "PCS", "NOS", "KG", "Dozens") right after qty
+    let unit: string | undefined;
+    if (ri < rest.length && /^[A-Za-z]+$/.test(rest[ri])) { unit = rest[ri]; ri++; }
+    const rate = nextNum();
+
+    // Remaining decimal tokens (amount, discount, taxable value, gst amount, total) vary by template.
+    // If no explicit "%" was found, fall back to picking the first small (0, 30] value among the
+    // trailing numbers as the GST rate — GST slabs are always <= 28%, unlike amounts/totals.
+    const trailing: number[] = [];
+    let n: number | null;
+    while ((n = nextNum()) !== null) trailing.push(n);
+
+    let gstRate: number | undefined = percentMatch ? parseFloat(percentMatch[1]) : undefined;
+    if (gstRate === undefined) {
+      const candidate = trailing.find(v => v > 0 && v <= 30);
+      if (candidate !== undefined) gstRate = candidate;
+    }
+
+    if (description && quantity !== null && quantity > 0 && rate !== null && rate > 0) {
+      current = { description, quantity, unitPrice: rate, hsnCode, gstRate, unit };
+      items.push(current);
+    } else {
+      current = null;
     }
   }
 
