@@ -33,10 +33,7 @@ export default function PurchaseNewPage() {
   const mutation = useCreatePurchase();
 
   const setItem = (i: number, update: Partial<LineItem>) => setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...update } : it));
-  const selectProduct = (i: number, productId: string) => {
-    const p = products.find(pr => String(pr.id) === productId);
-    if (p) setItem(i, { productId: p.id, description: p.name, hsnCode: p.hsnCode || "", unit: p.unit || "Nos", unitPrice: parseFloat(p.purchasePrice) || 0, gstRate: parseFloat(p.gstRate) || 18 });
-  };
+  const matchedProduct = (name: string) => products.find(p => p.name.toLowerCase().trim() === name.toLowerCase().trim());
 
   const handlePdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -57,13 +54,13 @@ export default function PurchaseNewPage() {
         return;
       }
       const parsedItems: LineItem[] = result.items.map(it => {
-        const matched = products.find(p => p.name.toLowerCase().trim() === it.description.toLowerCase().trim());
+        const matched = matchedProduct(it.description);
         return {
           productId: matched?.id ?? null,
           description: it.description,
           hsnCode: it.hsnCode || matched?.hsnCode || "",
           quantity: it.quantity,
-          unit: matched?.unit || "Nos",
+          unit: it.unit || matched?.unit || "Nos",
           unitPrice: it.unitPrice,
           gstRate: it.gstRate ?? (matched ? parseFloat(matched.gstRate) : 18),
         };
@@ -174,32 +171,24 @@ export default function PurchaseNewPage() {
             <CardContent className="space-y-3">
               {items.map((item, i) => {
                 const c = calcLine(item);
+                const match = item.description ? matchedProduct(item.description) : undefined;
                 return (
                   <div key={i} className="border border-border rounded-lg p-3 space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <Label className="text-xs">Link to Product (for stock update)</Label>
-                        <Select value={item.productId ? String(item.productId) : ""} onValueChange={(v) => selectProduct(i, v)}>
-                          <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select product (optional)..." /></SelectTrigger>
-                          <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}</SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">Description *</Label>
-                        <Input className="h-8 text-xs" value={item.description} onChange={(e) => setItem(i, { description: e.target.value })} placeholder="Item description" />
-                      </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Name of Product / Service *</Label>
+                      <Input className="h-8 text-xs" value={item.description} onChange={(e) => setItem(i, { description: e.target.value })} placeholder="Item / product name" />
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                       <div className="space-y-1"><Label className="text-xs">Qty</Label><Input className="h-8 text-xs" type="number" min="0.01" step="0.01" value={item.quantity} onChange={(e) => setItem(i, { quantity: parseFloat(e.target.value) || 0 })} /></div>
                       <div className="space-y-1"><Label className="text-xs">Unit</Label><Input className="h-8 text-xs" value={item.unit} onChange={(e) => setItem(i, { unit: e.target.value })} /></div>
-                      <div className="space-y-1"><Label className="text-xs">Price (₹)</Label><Input className="h-8 text-xs" type="number" min="0" step="0.01" value={item.unitPrice} onChange={(e) => setItem(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></div>
+                      <div className="space-y-1"><Label className="text-xs">Rate (₹)</Label><Input className="h-8 text-xs" type="number" min="0" step="0.01" value={item.unitPrice} onChange={(e) => setItem(i, { unitPrice: parseFloat(e.target.value) || 0 })} /></div>
                       <div className="space-y-1"><Label className="text-xs">GST %</Label>
                         <Select value={String(item.gstRate)} onValueChange={(v) => setItem(i, { gstRate: parseFloat(v) })}>
                           <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                           <SelectContent>{[0, 5, 12, 18, 28].map(r => <SelectItem key={r} value={String(r)}>{r}%</SelectItem>)}</SelectContent>
                         </Select>
                       </div>
-                      <div className="space-y-1"><Label className="text-xs">HSN</Label><Input className="h-8 text-xs font-mono" value={item.hsnCode} onChange={(e) => setItem(i, { hsnCode: e.target.value })} placeholder="Optional" /></div>
+                      <div className="space-y-1"><Label className="text-xs">HSN / SAC</Label><Input className="h-8 text-xs font-mono" value={item.hsnCode} onChange={(e) => setItem(i, { hsnCode: e.target.value })} placeholder="Optional" /></div>
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>Taxable: {formatCurrency(c.taxable)} · ITC: {formatCurrency(c.gstAmt)}</span>
@@ -208,7 +197,11 @@ export default function PurchaseNewPage() {
                         {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-red-500 hover:text-red-700"><Trash2 className="w-3.5 h-3.5" /></button>}
                       </div>
                     </div>
-                    {item.productId && <p className="text-xs text-emerald-600">✓ Inventory for this product will be updated on save</p>}
+                    {item.description && (
+                      match
+                        ? <p className="text-xs text-emerald-600">✓ Matches existing product "{match.name}" — its stock, price &amp; GST will be updated on save</p>
+                        : <p className="text-xs text-blue-600">＋ New product — will be added to your catalog on save</p>
+                    )}
                   </div>
                 );
               })}
@@ -224,7 +217,7 @@ export default function PurchaseNewPage() {
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total GST (ITC)</span><span className="font-medium text-blue-600">{formatCurrency(totals.gst)}</span></div>
               <div className="flex justify-between py-2 font-bold text-base border-t-2"><span>Total Amount</span><span>{formatCurrency(totals.total)}</span></div>
               <div className="text-xs text-muted-foreground bg-accent/40 rounded p-2">
-                Products linked above will have their stock levels increased automatically.
+                Items matching an existing product (by name) will have their stock, price &amp; GST updated. New names will be added to your catalog automatically.
               </div>
               <Button type="submit" className="w-full" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : "Record Purchase & Update Stock"}</Button>
             </CardContent>

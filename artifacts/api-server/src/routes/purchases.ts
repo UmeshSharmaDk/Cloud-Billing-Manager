@@ -51,6 +51,49 @@ function calcPurchaseTotals(items: any[], isInterstate = false) {
   };
 }
 
+/**
+ * For each purchase line item, match it to an existing catalog product by name
+ * (case-insensitive, exact match). If found, update that product's stock quantity,
+ * purchase price, GST rate, HSN code and unit to the values from this bill. If no
+ * match is found, create a new catalog product from the item so it enters inventory.
+ * Returns the items array annotated with the resolved productId.
+ */
+async function resolveItemsToProducts(businessId: number, items: any[]) {
+  const catalog = await db.select().from(productsTable).where(eq(productsTable.businessId, businessId));
+  const resolved: any[] = [];
+  for (const item of items) {
+    const name = String(item.description ?? "").trim();
+    const qty = parseFloat(String(item.quantity ?? 0)) || 0;
+    const unitPrice = parseFloat(String(item.unitPrice ?? 0)) || 0;
+    const gstRate = parseFloat(String(item.gstRate ?? 0)) || 0;
+    let product = item.productId
+      ? catalog.find(p => p.id === parseInt(item.productId))
+      : catalog.find(p => p.name.toLowerCase().trim() === name.toLowerCase());
+
+    if (product) {
+      const newQty = parseFloat(product.stockQuantity) + qty;
+      const updates: any = { stockQuantity: newQty.toString() };
+      if (unitPrice > 0) updates.purchasePrice = unitPrice.toString();
+      if (item.gstRate !== undefined) updates.gstRate = gstRate.toString();
+      if (item.hsnCode) updates.hsnCode = item.hsnCode;
+      if (item.unit) updates.unit = item.unit;
+      const [updated] = await db.update(productsTable).set(updates).where(eq(productsTable.id, product.id)).returning();
+      product = updated;
+    } else if (name) {
+      const [created] = await db.insert(productsTable).values({
+        businessId, name, hsnCode: item.hsnCode || null, unit: item.unit || "Nos",
+        purchasePrice: unitPrice.toString(), sellingPrice: unitPrice.toString(),
+        gstRate: gstRate.toString(), stockQuantity: qty.toString(),
+      }).returning();
+      product = created;
+      catalog.push(product);
+    }
+
+    resolved.push({ ...item, productId: product?.id ?? null });
+  }
+  return resolved;
+}
+
 function mapPurchase(p: any) {
   return {
     ...p,
@@ -106,25 +149,18 @@ router.post("/", requireAuth, async (req: any, res) => {
   const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, parseInt(vendorId))).limit(1);
   const calc = calcPurchaseTotals(items);
 
+  // Resolve each line item to a product by name (case-insensitive match) — update existing
+  // product's stock/price/GST if a match is found, or create a new catalog product otherwise.
+  const resolvedItems = await resolveItemsToProducts(businessId, calc.items);
+
   const [purchase] = await db.insert(purchasesTable).values({
     businessId, vendorId: parseInt(vendorId),
     vendorName: vendor?.name ?? "Unknown", vendorGstin: vendor?.gstin ?? null,
     invoiceNumber: invoiceNumber ?? `PUR-${Date.now()}`, invoiceDate, notes,
-    items: calc.items, subtotal: calc.subtotal.toString(), cgst: calc.cgst.toString(),
+    items: resolvedItems, subtotal: calc.subtotal.toString(), cgst: calc.cgst.toString(),
     sgst: calc.sgst.toString(), igst: calc.igst.toString(),
     totalGst: calc.totalGst.toString(), grandTotal: calc.grandTotal.toString(),
   }).returning();
-
-  // Update stock for each item with a linked product
-  for (const item of items) {
-    if (item.productId) {
-      const [product] = await db.select().from(productsTable).where(eq(productsTable.id, parseInt(item.productId))).limit(1);
-      if (product) {
-        const newQty = parseFloat(product.stockQuantity) + parseFloat(String(item.quantity ?? 0));
-        await db.update(productsTable).set({ stockQuantity: newQty.toString() }).where(eq(productsTable.id, product.id));
-      }
-    }
-  }
 
   return res.status(201).json(mapPurchase(purchase));
 });
@@ -149,7 +185,8 @@ router.patch("/:id", requireAuth, async (req: any, res) => {
   if (paymentStatus) updates.status = paymentStatus;
   if (items) {
     const calc = calcPurchaseTotals(items);
-    Object.assign(updates, { items: calc.items, subtotal: calc.subtotal.toString(), cgst: calc.cgst.toString(), sgst: calc.sgst.toString(), igst: calc.igst.toString(), totalGst: calc.totalGst.toString(), grandTotal: calc.grandTotal.toString() });
+    const resolvedItems = await resolveItemsToProducts(businessId!, calc.items);
+    Object.assign(updates, { items: resolvedItems, subtotal: calc.subtotal.toString(), cgst: calc.cgst.toString(), sgst: calc.sgst.toString(), igst: calc.igst.toString(), totalGst: calc.totalGst.toString(), grandTotal: calc.grandTotal.toString() });
   }
   if (vendorId) {
     const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, parseInt(vendorId))).limit(1);
