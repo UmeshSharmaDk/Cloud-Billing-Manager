@@ -1,0 +1,1 @@
+- [PDF bill import parsing](pdf-purchase-import.md) — client-side pdfjs-dist heuristic line-item extraction for GST Pro purchase bills; no server upload needed.

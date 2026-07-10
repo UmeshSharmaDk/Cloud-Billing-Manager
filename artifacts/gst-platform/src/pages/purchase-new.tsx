@@ -2,67 +2,18 @@ import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useListVendors, useListProducts, useCreatePurchase } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
+import { parsePdfPurchaseBill } from "@/lib/pdf-parser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, ArrowLeft, Upload, FileText, AlertCircle } from "lucide-react";
+import { Plus, Trash2, ArrowLeft, Upload, FileText, AlertCircle, Loader2 } from "lucide-react";
 
 interface LineItem { productId: number | null; description: string; hsnCode: string; quantity: number; unit: string; unitPrice: number; gstRate: number; }
 const emptyItem = (): LineItem => ({ productId: null, description: "", hsnCode: "", quantity: 1, unit: "Nos", unitPrice: 0, gstRate: 18 });
 function calcLine(item: LineItem) { const taxable = item.quantity * item.unitPrice; const gstAmt = (taxable * item.gstRate) / 100; return { taxable, gstAmt, total: taxable + gstAmt }; }
-
-// Parse CSV and match products by name/SKU
-function parseCSV(text: string, products: any[]): { items: LineItem[]; warnings: string[] } {
-  const lines = text.trim().split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return { items: [], warnings: ["CSV must have a header row and at least one data row"] };
-
-  const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ""));
-  const colIdx = (names: string[]) => { for (const n of names) { const i = header.indexOf(n); if (i >= 0) return i; } return -1; };
-
-  const descCol = colIdx(["description", "name", "product", "item", "productname", "itemname"]);
-  const qtyCol = colIdx(["qty", "quantity", "units"]);
-  const priceCol = colIdx(["price", "rate", "unitprice", "cost", "purchaseprice", "amount"]);
-  const hsnCol = colIdx(["hsn", "hsncode", "hsnno"]);
-  const gstCol = colIdx(["gst", "gstrate", "gstpercent", "taxrate"]);
-  const unitCol = colIdx(["unit", "uom", "measuringunit"]);
-
-  if (descCol < 0) return { items: [], warnings: ["CSV must have a 'description' or 'name' column"] };
-  if (qtyCol < 0) return { items: [], warnings: ["CSV must have a 'quantity' or 'qty' column"] };
-  if (priceCol < 0) return { items: [], warnings: ["CSV must have a 'price' or 'rate' column"] };
-
-  const items: LineItem[] = [];
-  const warnings: string[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(",").map(c => c.trim().replace(/^"|"$/g, ""));
-    const description = cols[descCol] || "";
-    const quantity = parseFloat(cols[qtyCol] || "0");
-    const unitPrice = parseFloat(cols[priceCol] || "0");
-    if (!description || quantity <= 0 || unitPrice <= 0) { warnings.push(`Row ${i + 1}: Skipped (missing data)`); continue; }
-
-    // Try to match to existing product
-    const matched = products.find(p => p.name.toLowerCase().trim() === description.toLowerCase().trim() || p.sku?.toLowerCase() === description.toLowerCase());
-
-    items.push({
-      productId: matched?.id ?? null,
-      description: matched?.name ?? description,
-      hsnCode: hsnCol >= 0 ? (cols[hsnCol] || matched?.hsnCode || "") : (matched?.hsnCode || ""),
-      quantity,
-      unit: unitCol >= 0 ? (cols[unitCol] || matched?.unit || "Nos") : (matched?.unit || "Nos"),
-      unitPrice,
-      gstRate: gstCol >= 0 ? parseFloat(cols[gstCol] || "18") : (matched ? parseFloat(matched.gstRate || "18") : 18),
-    });
-    if (matched) {
-      // will auto-update inventory when purchase is recorded
-    } else {
-      warnings.push(`Row ${i + 1}: "${description}" not found in products — will be added as new item`);
-    }
-  }
-  return { items, warnings };
-}
 
 export default function PurchaseNewPage() {
   const [, setLocation] = useLocation();
@@ -75,8 +26,9 @@ export default function PurchaseNewPage() {
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({ vendorId: "", billNumber: "", billDate: today, notes: "" });
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
-  const [csvWarnings, setCsvWarnings] = useState<string[]>([]);
-  const [csvFile, setCsvFile] = useState<string | null>(null);
+  const [pdfWarnings, setPdfWarnings] = useState<string[]>([]);
+  const [pdfFile, setPdfFile] = useState<string | null>(null);
+  const [pdfParsing, setPdfParsing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const mutation = useCreatePurchase();
 
@@ -86,25 +38,49 @@ export default function PurchaseNewPage() {
     if (p) setItem(i, { productId: p.id, description: p.name, hsnCode: p.hsnCode || "", unit: p.unit || "Nos", unitPrice: parseFloat(p.purchasePrice) || 0, gstRate: parseFloat(p.gstRate) || 18 });
   };
 
-  const handleCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePdf = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file
     if (!file) return;
-    setCsvFile(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const { items: parsed, warnings } = parseCSV(text, products);
-      if (parsed.length === 0) {
-        toast({ title: "CSV parse failed", description: warnings[0] || "No valid rows found", variant: "destructive" });
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      toast({ title: "Please select a PDF file", variant: "destructive" });
+      return;
+    }
+    setPdfFile(file.name);
+    setPdfParsing(true);
+    setPdfWarnings([]);
+    try {
+      const result = await parsePdfPurchaseBill(file, products);
+      if (result.items.length === 0) {
+        toast({ title: "Could not extract line items", description: result.warnings[0] || "Try a different PDF, or add items manually", variant: "destructive" });
+        setPdfWarnings(result.warnings);
         return;
       }
-      setItems(parsed);
-      setCsvWarnings(warnings);
-      toast({ title: `Imported ${parsed.length} items from CSV`, description: warnings.length ? `${warnings.length} warning(s) — see below` : "All items matched successfully" });
-    };
-    reader.readAsText(file);
-    // Reset input so same file can be re-imported
-    e.target.value = "";
+      const parsedItems: LineItem[] = result.items.map(it => {
+        const matched = products.find(p => p.name.toLowerCase().trim() === it.description.toLowerCase().trim());
+        return {
+          productId: matched?.id ?? null,
+          description: it.description,
+          hsnCode: it.hsnCode || matched?.hsnCode || "",
+          quantity: it.quantity,
+          unit: matched?.unit || "Nos",
+          unitPrice: it.unitPrice,
+          gstRate: it.gstRate ?? (matched ? parseFloat(matched.gstRate) : 18),
+        };
+      });
+      setItems(parsedItems);
+      setPdfWarnings(result.warnings);
+      if (result.detected.billNumber) setForm(f => ({ ...f, billNumber: result.detected.billNumber! }));
+      if (result.detected.billDate) setForm(f => ({ ...f, billDate: result.detected.billDate! }));
+      toast({
+        title: `Extracted ${parsedItems.length} item(s) from PDF`,
+        description: result.warnings.length ? `${result.warnings.length} warning(s) — review below` : "Review the extracted items before saving",
+      });
+    } catch (err) {
+      toast({ title: "Failed to read PDF", description: "The file may be corrupted or password-protected", variant: "destructive" });
+    } finally {
+      setPdfParsing(false);
+    }
   };
 
   const totals = items.reduce((acc, it) => { const c = calcLine(it); return { taxable: acc.taxable + c.taxable, gst: acc.gst + c.gstAmt, total: acc.total + c.total }; }, { taxable: 0, gst: 0, total: 0 });
@@ -137,37 +113,38 @@ export default function PurchaseNewPage() {
           <Button type="button" variant="ghost" size="icon" onClick={() => setLocation("/purchases")}><ArrowLeft className="w-4 h-4" /></Button>
           <div><h1 className="text-2xl font-bold">New Purchase Bill</h1><p className="text-muted-foreground text-sm">Record a purchase to claim input tax credit and update inventory</p></div>
         </div>
-        {/* CSV Import Button */}
+        {/* PDF Import Button */}
         <div className="flex items-center gap-2">
-          <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleCSV} />
-          <Button type="button" variant="outline" className="gap-2" onClick={() => fileRef.current?.click()}>
-            <Upload className="w-4 h-4" /> Import CSV
+          <input ref={fileRef} type="file" accept=".pdf,application/pdf" className="hidden" onChange={handlePdf} />
+          <Button type="button" variant="outline" className="gap-2" onClick={() => fileRef.current?.click()} disabled={pdfParsing}>
+            {pdfParsing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            {pdfParsing ? "Reading PDF..." : "Import from PDF"}
           </Button>
         </div>
       </div>
 
-      {/* CSV info tooltip */}
+      {/* PDF info tooltip */}
       <Card className="bg-blue-50/60 border-blue-200">
         <CardContent className="p-3 flex items-start gap-2">
           <FileText className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
           <div className="text-xs text-blue-700">
-            <span className="font-semibold">Import from CSV:</span> Upload a file with columns <code className="bg-blue-100 px-1 rounded">description, quantity, price</code> (and optionally <code className="bg-blue-100 px-1 rounded">hsn, gst, unit</code>). Matched products will have their inventory updated automatically on save.
+            <span className="font-semibold">Import from PDF:</span> Upload a vendor bill PDF and we'll automatically extract the description, quantity, price, HSN code and GST rate for each line item. Matched products will have their inventory updated automatically on save. Works best with text-based (not scanned/image) PDFs.
           </div>
         </CardContent>
       </Card>
 
-      {csvWarnings.length > 0 && (
+      {pdfWarnings.length > 0 && (
         <Card className="bg-amber-50 border-amber-200">
           <CardContent className="p-3">
-            <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold mb-1"><AlertCircle className="w-4 h-4" /> CSV Import Warnings</div>
+            <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold mb-1"><AlertCircle className="w-4 h-4" /> PDF Import Warnings</div>
             <ul className="text-xs text-amber-600 space-y-0.5 list-disc list-inside">
-              {csvWarnings.map((w, i) => <li key={i}>{w}</li>)}
+              {pdfWarnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
           </CardContent>
         </Card>
       )}
 
-      {csvFile && <p className="text-xs text-muted-foreground">Imported from: <span className="font-mono">{csvFile}</span></p>}
+      {pdfFile && <p className="text-xs text-muted-foreground">Imported from: <span className="font-mono">{pdfFile}</span> — please review extracted items below before saving.</p>}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">
