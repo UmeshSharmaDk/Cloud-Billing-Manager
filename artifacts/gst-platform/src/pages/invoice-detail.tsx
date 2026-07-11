@@ -108,9 +108,15 @@ export default function InvoiceDetailPage() {
 
       {/* Printable invoice — visually matches the standard tax invoice / proforma layout */}
       <div id="invoice-print-area" className="bg-white text-black border border-gray-800 mx-auto max-w-[900px]">
-        <div className="flex justify-between items-start border-b border-gray-800 px-4 py-2">
-          <div className="text-xs font-semibold">GSTIN : {business.gstin || "-"}</div>
-          <div className="text-lg font-bold">{inv.type || "Tax Invoice"}</div>
+        <div className="border-b border-gray-800 px-4 py-3 text-center">
+          <p className="text-base font-bold uppercase tracking-wide">{business.name || "Business Name"}</p>
+          {business.address && <p className="text-xs text-gray-600">{business.address}</p>}
+          {(business.phone || business.email) && <p className="text-xs text-gray-600">{[business.phone, business.email].filter(Boolean).join(" | ")}</p>}
+          <p className="text-xs text-gray-600">GSTIN: {business.gstin || "-"}{business.stateCode ? ` | State: ${business.stateCode}` : ""}</p>
+        </div>
+        <div className="flex justify-between items-center border-b border-gray-800 px-4 py-1.5">
+          <div className="text-sm font-bold border border-gray-800 px-3 py-0.5">{inv.type || "Tax Invoice"}</div>
+          <div className="text-xs text-gray-600">Original for Recipient</div>
         </div>
 
         <div className="grid grid-cols-2 border-b border-gray-800 text-xs">

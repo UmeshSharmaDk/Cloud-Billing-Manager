@@ -24,7 +24,11 @@ router.get("/stats", requireAuth, async (req: any, res) => {
   const totalPurchases = purchases.reduce((s, p) => s + parseFloat(p.grandTotal ?? "0"), 0);
   const totalGstPayable = invoices.reduce((s, i) => s + parseFloat(i.totalGst ?? "0"), 0) - purchases.reduce((s, p) => s + parseFloat(p.totalGst ?? "0"), 0);
   const totalOutstanding = invoices.filter(i => i.status === "unpaid").reduce((s, i) => s + parseFloat(i.grandTotal ?? "0"), 0);
-  const lowStockCount = products.filter(p => p.lowStockThreshold && parseFloat(p.stockQuantity) <= parseFloat(p.lowStockThreshold)).length;
+  const lowStockCount = products.filter(p => {
+    const qty = parseFloat(p.stockQuantity);
+    const threshold = p.lowStockThreshold ? parseFloat(p.lowStockThreshold) : 5;
+    return qty < threshold;
+  }).length;
   const overdueInvoiceCount = invoices.filter(i => i.dueDate && new Date(i.dueDate) < new Date() && i.status !== "paid").length;
 
   return res.json({
@@ -123,7 +127,11 @@ router.get("/low-stock", requireAuth, async (req: any, res) => {
   const businessId = await getBusinessId(req.userId);
   if (!businessId) return res.status(400).json({ error: "No business" });
   const products = await db.select().from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));
-  const lowStock = products.filter(p => p.lowStockThreshold && parseFloat(p.stockQuantity) <= parseFloat(p.lowStockThreshold));
+  const lowStock = products.filter(p => {
+    const qty = parseFloat(p.stockQuantity);
+    const threshold = p.lowStockThreshold ? parseFloat(p.lowStockThreshold) : 5;
+    return qty < threshold;
+  });
   return res.json(lowStock.map(p => ({
     ...p,
     purchasePrice: p.purchasePrice ? parseFloat(p.purchasePrice) : null,

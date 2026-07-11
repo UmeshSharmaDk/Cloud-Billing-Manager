@@ -39,11 +39,48 @@ router.get("/gstr1", requireAuth, async (req: any, res) => {
   const invoices = await db.select().from(invoicesTable)
     .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
   const mapped = invoices.map(mapInvoice);
+
+  const intraState = mapped.filter(i => !i.isInterstate);
+  const interState = mapped.filter(i => i.isInterstate);
+
   const totalTaxableValue = mapped.reduce((s, i) => s + i.subtotal, 0);
   const totalCgst = mapped.reduce((s, i) => s + i.cgst, 0);
   const totalSgst = mapped.reduce((s, i) => s + i.sgst, 0);
   const totalIgst = mapped.reduce((s, i) => s + i.igst, 0);
-  return res.json({ month, year, totalTaxableValue: Math.round(totalTaxableValue * 100) / 100, totalCgst: Math.round(totalCgst * 100) / 100, totalSgst: Math.round(totalSgst * 100) / 100, totalIgst: Math.round(totalIgst * 100) / 100, totalTax: Math.round((totalCgst + totalSgst + totalIgst) * 100) / 100, invoices: mapped });
+  const totalTax = totalCgst + totalSgst + totalIgst;
+  const totalAmount = mapped.reduce((s, i) => s + i.grandTotal, 0);
+
+  const rateMap: Record<number, { taxable: number; gst: number }> = {};
+  for (const inv of mapped) {
+    for (const item of inv.items) {
+      const rate = parseFloat(String(item.gstRate ?? 0));
+      if (!rateMap[rate]) rateMap[rate] = { taxable: 0, gst: 0 };
+      rateMap[rate].taxable += parseFloat(String(item.taxableAmount ?? 0));
+      rateMap[rate].gst += parseFloat(String(item.cgst ?? 0)) + parseFloat(String(item.sgst ?? 0)) + parseFloat(String(item.igst ?? 0));
+    }
+  }
+  const byRate = Object.entries(rateMap)
+    .map(([rate, v]) => ({ rate: parseFloat(rate), taxable: Math.round(v.taxable * 100) / 100, gst: Math.round(v.gst * 100) / 100 }))
+    .sort((a, b) => a.rate - b.rate);
+
+  return res.json({
+    month, year,
+    totalInvoices: mapped.length,
+    totalTaxable: Math.round(totalTaxableValue * 100) / 100,
+    totalGst: Math.round(totalTax * 100) / 100,
+    totalAmount: Math.round(totalAmount * 100) / 100,
+    totalTaxableValue: Math.round(totalTaxableValue * 100) / 100,
+    totalCgst: Math.round(totalCgst * 100) / 100,
+    totalSgst: Math.round(totalSgst * 100) / 100,
+    totalIgst: Math.round(totalIgst * 100) / 100,
+    totalTax: Math.round(totalTax * 100) / 100,
+    intraStateCount: intraState.length,
+    intraStateTaxable: Math.round(intraState.reduce((s, i) => s + i.subtotal, 0) * 100) / 100,
+    interStateCount: interState.length,
+    interStateTaxable: Math.round(interState.reduce((s, i) => s + i.subtotal, 0) * 100) / 100,
+    byRate,
+    invoices: mapped.map(inv => ({ ...inv, taxableAmount: inv.subtotal, totalAmount: inv.grandTotal })),
+  });
 });
 
 router.get("/gstr3b", requireAuth, async (req: any, res) => {
@@ -60,10 +97,41 @@ router.get("/gstr3b", requireAuth, async (req: any, res) => {
     db.select().from(purchasesTable).where(and(eq(purchasesTable.businessId, businessId), gte(purchasesTable.invoiceDate, from), lte(purchasesTable.invoiceDate, to))),
   ]);
   const mappedInv = invoices.map(mapInvoice);
-  const outputTax = mappedInv.reduce((s, i) => s + i.totalGst, 0);
-  const inputTax = purchases.reduce((s, p) => s + parseFloat(p.totalGst ?? "0"), 0);
-  const netTax = outputTax - inputTax;
-  return res.json({ month, year, totalTaxableValue: Math.round(mappedInv.reduce((s, i) => s + i.subtotal, 0) * 100) / 100, totalCgst: Math.round(mappedInv.reduce((s, i) => s + i.cgst, 0) * 100) / 100, totalSgst: Math.round(mappedInv.reduce((s, i) => s + i.sgst, 0) * 100) / 100, totalIgst: Math.round(mappedInv.reduce((s, i) => s + i.igst, 0) * 100) / 100, totalTax: Math.round(netTax * 100) / 100, invoices: mappedInv });
+  const mappedPur = purchases.map(mapPurchase);
+
+  const outwardCgst = mappedInv.reduce((s, i) => s + i.cgst, 0);
+  const outwardSgst = mappedInv.reduce((s, i) => s + i.sgst, 0);
+  const outwardIgst = mappedInv.reduce((s, i) => s + i.igst, 0);
+  const outwardTaxable = mappedInv.reduce((s, i) => s + i.subtotal, 0);
+
+  const inputCgst = mappedPur.reduce((s, p) => s + p.cgst, 0);
+  const inputSgst = mappedPur.reduce((s, p) => s + p.sgst, 0);
+  const inputIgst = mappedPur.reduce((s, p) => s + p.igst, 0);
+
+  const netCgst = Math.max(0, outwardCgst - inputCgst);
+  const netSgst = Math.max(0, outwardSgst - inputSgst);
+  const netIgst = Math.max(0, outwardIgst - inputIgst);
+  const netTax = (outwardCgst + outwardSgst + outwardIgst) - (inputCgst + inputSgst + inputIgst);
+
+  return res.json({
+    month, year,
+    outwardTaxable: Math.round(outwardTaxable * 100) / 100,
+    outwardCgst: Math.round(outwardCgst * 100) / 100,
+    outwardSgst: Math.round(outwardSgst * 100) / 100,
+    outwardIgst: Math.round(outwardIgst * 100) / 100,
+    inputCgst: Math.round(inputCgst * 100) / 100,
+    inputSgst: Math.round(inputSgst * 100) / 100,
+    inputIgst: Math.round(inputIgst * 100) / 100,
+    netCgst: Math.round(netCgst * 100) / 100,
+    netSgst: Math.round(netSgst * 100) / 100,
+    netIgst: Math.round(netIgst * 100) / 100,
+    totalTax: Math.round(netTax * 100) / 100,
+    totalTaxableValue: Math.round(outwardTaxable * 100) / 100,
+    totalCgst: Math.round(outwardCgst * 100) / 100,
+    totalSgst: Math.round(outwardSgst * 100) / 100,
+    totalIgst: Math.round(outwardIgst * 100) / 100,
+    invoices: mappedInv.map(inv => ({ ...inv, taxableAmount: inv.subtotal, totalAmount: inv.grandTotal })),
+  });
 });
 
 router.get("/sales", requireAuth, async (req: any, res) => {
@@ -107,7 +175,10 @@ router.get("/stock", requireAuth, async (req: any, res) => {
     lowStockThreshold: p.lowStockThreshold ? parseFloat(p.lowStockThreshold) : null,
   }));
   const totalStockValue = mapped.reduce((s, p) => s + (p.sellingPrice ?? 0) * p.stockQuantity, 0);
-  const lowStockProducts = mapped.filter(p => p.lowStockThreshold && p.stockQuantity <= p.lowStockThreshold).length;
+  const lowStockProducts = mapped.filter(p => {
+    const threshold = p.lowStockThreshold ?? 5;
+    return p.stockQuantity < threshold;
+  }).length;
   return res.json({ totalProducts: mapped.length, totalStockValue: Math.round(totalStockValue * 100) / 100, lowStockProducts, products: mapped });
 });
 

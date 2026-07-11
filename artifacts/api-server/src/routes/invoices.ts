@@ -138,6 +138,24 @@ router.post("/", requireAuth, async (req: any, res) => {
     roundOff: gstCalc.roundOff.toString(), paidAmount: "0",
   }).returning();
 
+  // Deduct stock for each sold item
+  const allProducts = await db.select().from(productsTable).where(eq(productsTable.businessId, businessId));
+  for (const item of gstCalc.items) {
+    const qty = parseFloat(String(item.quantity ?? 0));
+    if (qty <= 0) continue;
+    let product = null;
+    if (item.productId) {
+      product = allProducts.find(p => p.id === item.productId) ?? null;
+    }
+    if (!product && item.description) {
+      product = allProducts.find(p => p.name.toLowerCase() === String(item.description).toLowerCase()) ?? null;
+    }
+    if (product) {
+      const newQty = Math.max(0, parseFloat(product.stockQuantity) - qty);
+      await db.update(productsTable).set({ stockQuantity: newQty.toString() }).where(eq(productsTable.id, product.id));
+    }
+  }
+
   return res.status(201).json({ invoice: mapInvoice(invoice) });
 });
 

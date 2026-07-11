@@ -179,14 +179,18 @@
 }
 
 @media print {
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
   body * { visibility: hidden; }
   #invoice-print-area, #invoice-print-area * { visibility: visible; }
   #invoice-print-area {
-    position: absolute; inset: 0; width: 100%; margin: 0; padding: 16px;
-    font-size: 12px; color: #000;
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; margin: 0; padding: 0;
+    font-size: 11px; color: #000; background: #fff;
+    border: none !important;
+    max-width: 100% !important;
   }
   .no-print { display: none !important; }
-  @page { margin: 12mm; }
+  @page { margin: 8mm; size: A4 portrait; }
 }
 
 @layer utilities {
