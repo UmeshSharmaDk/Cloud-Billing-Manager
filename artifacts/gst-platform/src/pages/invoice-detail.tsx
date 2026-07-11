@@ -208,7 +208,7 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 text-xs">
+        <div id="invoice-print-footer" className="grid grid-cols-2 text-xs">
           <div className="p-3 border-r border-gray-800 space-y-1">
             <p className="font-semibold">Bank Details</p>
             <div className="flex justify-between"><span className="text-gray-600">Bank Name</span><span>{business.bankName || "-"}</span></div>

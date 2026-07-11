@@ -188,6 +188,12 @@
     font-size: 11px; color: #000; background: #fff;
     max-width: 100% !important;
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+  }
+  #invoice-print-footer {
+    margin-top: auto;
+    border-top: 1px solid #1f2937;
   }
   .no-print { display: none !important; }
   @page { margin: 8mm; size: A4 portrait; }
