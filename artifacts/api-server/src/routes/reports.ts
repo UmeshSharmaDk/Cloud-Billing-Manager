@@ -162,6 +162,55 @@ router.get("/purchases", requireAuth, async (req: any, res) => {
   return res.json({ totalPurchases: Math.round(totalPurchases * 100) / 100, totalGst: Math.round(totalGst * 100) / 100, netPurchases: Math.round((totalPurchases - totalGst) * 100) / 100, purchaseCount: mapped.length, purchases: mapped });
 });
 
+router.get("/hsn", requireAuth, async (req: any, res) => {
+  const businessId = await getBusinessId(req.userId);
+  if (!businessId) return res.status(400).json({ error: "No business" });
+  const now = new Date();
+  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
+  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const from = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  const invoices = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
+
+  const hsnMap: Record<string, { description: string; quantity: number; uqc: string; taxableValue: number; cgst: number; sgst: number; igst: number }> = {};
+
+  for (const inv of invoices) {
+    const items = Array.isArray(inv.items) ? inv.items : [];
+    for (const item of items) {
+      const hsnCode = String(item.hsnCode || "N/A").trim();
+      if (!hsnMap[hsnCode]) {
+        hsnMap[hsnCode] = {
+          description: item.description ?? item.productName ?? "",
+          quantity: 0, uqc: item.unit ?? "Nos",
+          taxableValue: 0, cgst: 0, sgst: 0, igst: 0,
+        };
+      }
+      hsnMap[hsnCode].quantity += parseFloat(String(item.quantity ?? 0));
+      hsnMap[hsnCode].taxableValue += parseFloat(String(item.taxableAmount ?? 0));
+      hsnMap[hsnCode].cgst += parseFloat(String(item.cgst ?? 0));
+      hsnMap[hsnCode].sgst += parseFloat(String(item.sgst ?? 0));
+      hsnMap[hsnCode].igst += parseFloat(String(item.igst ?? 0));
+    }
+  }
+
+  const items = Object.entries(hsnMap).map(([hsnCode, v]) => ({
+    hsnCode,
+    description: v.description,
+    quantity: Math.round(v.quantity * 100) / 100,
+    uqc: v.uqc,
+    taxableValue: Math.round(v.taxableValue * 100) / 100,
+    cgst: Math.round(v.cgst * 100) / 100,
+    sgst: Math.round(v.sgst * 100) / 100,
+    igst: Math.round(v.igst * 100) / 100,
+    totalTax: Math.round((v.cgst + v.sgst + v.igst) * 100) / 100,
+  })).sort((a, b) => a.hsnCode.localeCompare(b.hsnCode));
+
+  return res.json({ month, year, items });
+});
+
 router.get("/stock", requireAuth, async (req: any, res) => {
   const businessId = await getBusinessId(req.userId);
   if (!businessId) return res.status(400).json({ error: "No business" });

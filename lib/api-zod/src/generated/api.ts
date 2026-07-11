@@ -1483,6 +1483,31 @@ export const GetStockReportResponse = zod.object({
 
 
 /**
+ * @summary HSN wise summary report
+ */
+export const GetHsnReportQueryParams = zod.object({
+  "month": zod.coerce.number().optional(),
+  "year": zod.coerce.number().optional()
+})
+
+export const GetHsnReportResponse = zod.object({
+  "month": zod.number(),
+  "year": zod.number(),
+  "items": zod.array(zod.object({
+  "hsnCode": zod.string(),
+  "description": zod.string(),
+  "quantity": zod.number(),
+  "uqc": zod.string(),
+  "taxableValue": zod.number(),
+  "cgst": zod.number(),
+  "sgst": zod.number(),
+  "igst": zod.number(),
+  "totalTax": zod.number()
+}))
+})
+
+
+/**
  * @summary Admin platform stats
  */
 export const GetAdminStatsResponse = zod.object({

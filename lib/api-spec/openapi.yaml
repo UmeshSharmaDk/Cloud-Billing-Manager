@@ -1066,6 +1066,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/StockReport"
 
+  /reports/hsn:
+    get:
+      operationId: getHsnReport
+      tags: [reports]
+      summary: HSN wise summary report
+      parameters:
+        - name: month
+          in: query
+          schema:
+            type: integer
+        - name: year
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: HSN summary data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HsnReport"
+
   # Admin dashboard stats
   /admin/stats:
     get:
@@ -1971,6 +1993,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Invoice"
+
+    HsnItem:
+      type: object
+      required: [hsnCode, description, quantity, uqc, taxableValue, cgst, sgst, igst, totalTax]
+      properties:
+        hsnCode:
+          type: string
+        description:
+          type: string
+        quantity:
+          type: number
+        uqc:
+          type: string
+        taxableValue:
+          type: number
+        cgst:
+          type: number
+        sgst:
+          type: number
+        igst:
+          type: number
+        totalTax:
+          type: number
+
+    HsnReport:
+      type: object
+      required: [month, year, items]
+      properties:
+        month:
+          type: integer
+        year:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/HsnItem"
 
     SalesReport:
       type: object

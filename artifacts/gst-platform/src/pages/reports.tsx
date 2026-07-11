@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useGetGstr1Report, useGetGstr3bReport } from "@workspace/api-client-react";
+import { useGetGstr1Report, useGetGstr3bReport, useGetHsnReport } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,16 +25,19 @@ export default function ReportsPage() {
 
   const { data: gstr1Data, isLoading: g1Loading } = useGetGstr1Report(range);
   const { data: gstr3bData, isLoading: g3bLoading } = useGetGstr3bReport(range);
+  const { data: hsnData, isLoading: hsnLoading } = useGetHsnReport(range);
 
   const gstr1: any = gstr1Data || {};
   const gstr3b: any = gstr3bData || {};
+  const hsn: any = hsnData || {};
+  const hsnItems: any[] = hsn.items || [];
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">GST Reports</h1>
-          <p className="text-muted-foreground text-sm">Generate GSTR-1, GSTR-3B and other compliance reports</p>
+          <p className="text-muted-foreground text-sm">Generate GSTR-1, GSTR-3B, HSN Summary and other compliance reports</p>
         </div>
         <div className="flex items-center gap-2">
           <Label htmlFor="month" className="text-sm font-medium whitespace-nowrap">Select Month:</Label>
@@ -43,11 +46,13 @@ export default function ReportsPage() {
       </div>
 
       <Tabs defaultValue="gstr1">
-        <TabsList className="grid grid-cols-2 w-full max-w-md">
+        <TabsList className="grid grid-cols-3 w-full max-w-lg">
           <TabsTrigger value="gstr1">GSTR-1</TabsTrigger>
           <TabsTrigger value="gstr3b">GSTR-3B</TabsTrigger>
+          <TabsTrigger value="hsn">HSN Summary</TabsTrigger>
         </TabsList>
 
+        {/* ─── GSTR-1 ─── */}
         <TabsContent value="gstr1" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
             <div>
@@ -147,6 +152,7 @@ export default function ReportsPage() {
           )}
         </TabsContent>
 
+        {/* ─── GSTR-3B ─── */}
         <TabsContent value="gstr3b" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
             <div>
@@ -190,6 +196,92 @@ export default function ReportsPage() {
                 </CardContent>
               </Card>
             </div>
+          )}
+        </TabsContent>
+
+        {/* ─── HSN Summary ─── */}
+        <TabsContent value="hsn" className="mt-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">HSN-wise Summary</h2>
+              <p className="text-sm text-muted-foreground">Table 12 — Consolidated HSN summary of outward supplies for {monthLabel}</p>
+            </div>
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => window.print()}>
+              <FileDown className="w-4 h-4" /> Export
+            </Button>
+          </div>
+
+          {hsnLoading ? (
+            <div className="space-y-3 animate-pulse">{[...Array(4)].map((_, i) => <div key={i} className="h-12 bg-muted rounded-xl" />)}</div>
+          ) : hsnItems.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                <p className="text-base font-medium">No invoice data for {monthLabel}</p>
+                <p className="text-sm mt-1">Create invoices for this month to see the HSN summary.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground font-medium">HSN Codes</p><p className="text-2xl font-bold mt-1">{hsnItems.length}</p></CardContent></Card>
+                <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground font-medium">Total Taxable Value</p><p className="text-2xl font-bold mt-1">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.taxableValue, 0))}</p></CardContent></Card>
+                <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground font-medium">Total Tax</p><p className="text-2xl font-bold mt-1 text-primary">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.totalTax, 0))}</p></CardContent></Card>
+                <Card><CardContent className="p-4"><p className="text-xs text-muted-foreground font-medium">Total Invoice Value</p><p className="text-2xl font-bold mt-1">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.taxableValue + r.totalTax, 0))}</p></CardContent></Card>
+              </div>
+
+              {/* HSN Table */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">HSN-wise Breakup</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/30 text-muted-foreground text-xs">
+                          <th className="text-left py-2.5 px-4 font-semibold">HSN / SAC</th>
+                          <th className="text-left py-2.5 px-4 font-semibold">Description</th>
+                          <th className="text-center py-2.5 px-3 font-semibold">UQC</th>
+                          <th className="text-right py-2.5 px-3 font-semibold">Total Qty</th>
+                          <th className="text-right py-2.5 px-4 font-semibold">Taxable Value</th>
+                          <th className="text-right py-2.5 px-3 font-semibold">CGST</th>
+                          <th className="text-right py-2.5 px-3 font-semibold">SGST / UTGST</th>
+                          <th className="text-right py-2.5 px-3 font-semibold">IGST</th>
+                          <th className="text-right py-2.5 px-4 font-semibold">Total Tax</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hsnItems.map((row: any, i: number) => (
+                          <tr key={i} className="border-b last:border-0 hover:bg-accent/40">
+                            <td className="py-2 px-4 font-mono text-xs font-semibold">{row.hsnCode}</td>
+                            <td className="py-2 px-4 text-xs max-w-[200px] truncate" title={row.description}>{row.description || "-"}</td>
+                            <td className="py-2 px-3 text-center text-xs text-muted-foreground">{row.uqc}</td>
+                            <td className="py-2 px-3 text-right">{row.quantity}</td>
+                            <td className="py-2 px-4 text-right font-medium">{formatCurrency(row.taxableValue)}</td>
+                            <td className="py-2 px-3 text-right text-blue-600">{formatCurrency(row.cgst)}</td>
+                            <td className="py-2 px-3 text-right text-blue-600">{formatCurrency(row.sgst)}</td>
+                            <td className="py-2 px-3 text-right text-violet-600">{formatCurrency(row.igst)}</td>
+                            <td className="py-2 px-4 text-right font-semibold text-primary">{formatCurrency(row.totalTax)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 bg-muted/20 font-semibold text-sm">
+                          <td className="py-2 px-4" colSpan={3}>Total</td>
+                          <td className="py-2 px-3 text-right">{hsnItems.reduce((s: number, r: any) => s + r.quantity, 0).toFixed(2)}</td>
+                          <td className="py-2 px-4 text-right">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.taxableValue, 0))}</td>
+                          <td className="py-2 px-3 text-right text-blue-600">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.cgst, 0))}</td>
+                          <td className="py-2 px-3 text-right text-blue-600">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.sgst, 0))}</td>
+                          <td className="py-2 px-3 text-right text-violet-600">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.igst, 0))}</td>
+                          <td className="py-2 px-4 text-right text-primary">{formatCurrency(hsnItems.reduce((s: number, r: any) => s + r.totalTax, 0))}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
           )}
         </TabsContent>
       </Tabs>

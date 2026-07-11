@@ -31,11 +31,13 @@ import type {
   DashboardStats,
   GetGstr1ReportParams,
   GetGstr3bReportParams,
+  GetHsnReportParams,
   GetPurchasesReportParams,
   GetSalesReportParams,
   GstSummary,
   GstrReport,
   HealthStatus,
+  HsnReport,
   Invoice,
   InvoiceInput,
   InvoiceListResponse,
@@ -4082,6 +4084,90 @@ export function useGetStockReport<TData = Awaited<ReturnType<typeof getStockRepo
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetStockReportQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getGetHsnReportUrl = (params?: GetHsnReportParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/reports/hsn?${stringifiedParams}` : `/api/reports/hsn`
+}
+
+/**
+ * @summary HSN wise summary report
+ */
+export const getHsnReport = async (params?: GetHsnReportParams, options?: RequestInit): Promise<HsnReport> => {
+
+  return customFetch<HsnReport>(getGetHsnReportUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetHsnReportQueryKey = (params?: GetHsnReportParams,) => {
+    return [
+    `/api/reports/hsn`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetHsnReportQueryOptions = <TData = Awaited<ReturnType<typeof getHsnReport>>, TError = ErrorType<unknown>>(params?: GetHsnReportParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getHsnReport>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetHsnReportQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getHsnReport>>> = ({ signal }) => getHsnReport(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getHsnReport>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetHsnReportQueryResult = NonNullable<Awaited<ReturnType<typeof getHsnReport>>>
+export type GetHsnReportQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary HSN wise summary report
+ */
+
+export function useGetHsnReport<TData = Awaited<ReturnType<typeof getHsnReport>>, TError = ErrorType<unknown>>(
+ params?: GetHsnReportParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getHsnReport>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetHsnReportQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

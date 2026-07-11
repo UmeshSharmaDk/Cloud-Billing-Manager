@@ -607,6 +607,24 @@ export interface GstrReport {
   invoices: Invoice[];
 }
 
+export interface HsnItem {
+  hsnCode: string;
+  description: string;
+  quantity: number;
+  uqc: string;
+  taxableValue: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  totalTax: number;
+}
+
+export interface HsnReport {
+  month: number;
+  year: number;
+  items: HsnItem[];
+}
+
 export interface SalesReport {
   totalSales: number;
   totalGst: number;
@@ -709,5 +727,10 @@ toDate?: string;
 export type GetPurchasesReportParams = {
 fromDate?: string;
 toDate?: string;
+};
+
+export type GetHsnReportParams = {
+month?: number;
+year?: number;
 };
 
