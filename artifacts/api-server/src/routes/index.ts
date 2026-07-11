@@ -12,6 +12,7 @@ import purchasesRouter from "./purchases";
 import paymentsRouter from "./payments";
 import dashboardRouter from "./dashboard";
 import reportsRouter from "./reports";
+import ewayBillsRouter from "./eway-bills";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use("/purchases", purchasesRouter);
 router.use("/payments", paymentsRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/reports", reportsRouter);
+router.use("/eway-bills", ewayBillsRouter);
 
 export default router;

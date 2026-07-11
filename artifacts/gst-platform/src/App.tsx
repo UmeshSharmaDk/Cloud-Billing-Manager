@@ -25,6 +25,9 @@ import VendorNewPage from "@/pages/vendor-new";
 import VendorDetailPage from "@/pages/vendor-detail";
 import PaymentsPage from "@/pages/payments";
 import ReportsPage from "@/pages/reports";
+import EwayBillsPage from "@/pages/eway-bills";
+import EwayBillNewPage from "@/pages/eway-bill-new";
+import EwayBillDetailPage from "@/pages/eway-bill-detail";
 import SettingsPage from "@/pages/settings";
 import AdminDashboardPage from "@/pages/admin-dashboard";
 import AdminUsersPage from "@/pages/admin-users";
@@ -75,6 +78,9 @@ function Router() {
       <Route path="/vendors/:id">{() => <ProtectedRoute component={VendorDetailPage} />}</Route>
       <Route path="/payments">{() => <ProtectedRoute component={PaymentsPage} />}</Route>
       <Route path="/reports">{() => <ProtectedRoute component={ReportsPage} />}</Route>
+      <Route path="/eway-bills">{() => <ProtectedRoute component={EwayBillsPage} />}</Route>
+      <Route path="/eway-bills/new">{() => <ProtectedRoute component={EwayBillNewPage} />}</Route>
+      <Route path="/eway-bills/:id">{() => <ProtectedRoute component={EwayBillDetailPage} />}</Route>
       <Route path="/settings">{() => <ProtectedRoute component={SettingsPage} />}</Route>
       <Route path="/admin">{() => <AdminRoute component={AdminDashboardPage} />}</Route>
       <Route path="/admin/users">{() => <AdminRoute component={AdminUsersPage} />}</Route>

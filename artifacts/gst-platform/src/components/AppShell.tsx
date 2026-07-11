@@ -14,7 +14,8 @@ import {
   Settings,
   Shield,
   Menu,
-  LogOut
+  LogOut,
+  Truck
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
@@ -35,6 +36,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { name: "Vendors", href: "/vendors", icon: Building2 },
     { name: "Payments", href: "/payments", icon: CreditCard },
     { name: "Reports", href: "/reports", icon: BarChart3 },
+    { name: "E-Way Bills", href: "/eway-bills", icon: Truck },
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 
