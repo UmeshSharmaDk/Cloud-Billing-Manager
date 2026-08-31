@@ -10,14 +10,15 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string, `SESSION_SECRET` — JWT signing secret
+- Required env: `DATABASE_URL` — Postgres connection string, `SESSION_SECRET` — JWT signing secret,
+  minimum 32 chars (`openssl rand -base64 48`). Both fail the boot if unset; there are no defaults.
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
-- Auth: JWT (Bearer token) + bcrypt-style SHA-256 hashing
+- Auth: JWT (Bearer token) + Argon2id password hashing
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Frontend: React + Vite, TanStack Query, Wouter router, shadcn/ui, Tailwind CSS
@@ -37,14 +38,15 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 - Contract-first API: OpenAPI spec → Orval codegen → typed React Query hooks
 - Multi-tenant: each user belongs to a business; all data queries are scoped by `businessId`
 - JWT token stored in `localStorage` as `gst_token`; passed via `Authorization: Bearer` header
-- Password hashing: SHA-256 + "gst_salt_v1" salt (server-side)
+- Password hashing: Argon2id (OWASP baseline: 19 MiB, t=2, p=1), salt generated per password and
+  embedded in the stored hash. Pre-existing SHA-256 hashes are re-hashed transparently on next login
+  — see `artifacts/api-server/src/lib/password.ts`
 - GST calculation: CGST+SGST for intra-state, IGST for inter-state, based on `placeOfSupply` vs business state code
 
 ## Product
 
 - **User Panel**: Dashboard, Sales Invoices (create/view/status), Purchase Bills (ITC tracking), Inventory/Products, Customers, Vendors, Payments, GST Reports (GSTR-1, GSTR-3B), Business Settings
 - **Admin Panel**: Platform dashboard, User management (subscriptions, activation)
-- Demo accounts: `demo@acmeindia.in / Demo@123` (user), `admin@gstplatform.in / Admin@123` (admin)
 
 ## User preferences
 

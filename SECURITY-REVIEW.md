@@ -34,6 +34,46 @@ fortnight of disciplined hardening.
 | Medium | 5 | Information leakage, resource exhaustion, weak policy |
 | Low | 5 | Hardening gaps and hygiene |
 
+
+---
+
+## Status — Phase 1 complete
+
+Phase 1 of the remediation plan is implemented on branch `claude/security-threats-review-gq7rhu`.
+The three critical findings and F-10 are fixed and verified; everything else below still stands.
+
+| ID | Status | Verification |
+| --- | --- | --- |
+| F-01 | **Fixed** | Server refuses to boot without a ≥32-char `SESSION_SECRET`; a token forged with the old hardcoded secret now returns `401`; the string is absent from the built bundle. |
+| F-02 | **Fixed** | Demo credential block removed from the login page and `replit.md`; absent from the production frontend bundle. **Operator action still required — see below.** |
+| F-03 | **Fixed** | Argon2id (19 MiB, t=2, p=1) with a per-password salt; legacy SHA-256 hashes verify once and are re-hashed on the spot. 18/18 behavioural checks pass. |
+| F-10 | **Fixed** | Terminal error handler returns `{error, requestId}` and nothing else; full detail is logged server-side under the same id. Logger now treats an unset `NODE_ENV` as production. |
+| F-04 … F-09, F-11 … F-14, L-01 … L-05 | Open | Phases 2 and 3. |
+
+### Operator actions that code cannot perform
+
+1. **Set `SESSION_SECRET`** in the deployment environment (`openssl rand -base64 48`). The server will
+   not start without it — this is deliberate, but it means the variable must be set *before* the next
+   deploy. Setting a new value also invalidates every token issued under the old secret, which is the
+   point.
+2. **Rotate the two demo passwords** in the database, and treat `admin@gstplatform.in` as compromised
+   on any instance that has been publicly reachable. Removing the credentials from the page does not
+   change the credentials.
+3. **Set `NODE_ENV=production`** in the deployment environment. The code no longer depends on this for
+   safety — the error handler never leaks and the logger now fails safe — but setting it explicitly is
+   still correct, and `.replit` was left untouched rather than guessing at its deployment-env schema.
+
+### Where the implementation deviates from the recommendations below
+
+- **F-03 needs no schema migration.** The report proposed a `passwordAlgo` column. The stored hash is
+  self-describing instead — Argon2id hashes start with `$argon2id$`, legacy ones are bare 64-char hex —
+  so the algorithm is detected from the value and no column, migration or backfill is required.
+- **F-14's timing half came along with F-03.** Rewriting the login path made the constant-time
+  comparison and the unknown-account decoy verification free to include, so both are done. The
+  enumeration half of F-14 (the `/register` response) is untouched and remains Phase 3.
+- **A password length cap (1024 bytes) was added** to the three password entry points. Argon2 has no
+  input limit of its own, so without a cap a multi-megabyte password is a cheap memory/CPU burn.
+
 ---
 
 ## Findings index
@@ -64,6 +104,8 @@ Each of these gives an unauthenticated attacker platform-administrator access on
 of the three does not help.
 
 ## F-01 — The JWT signing secret is committed to the repository
+
+**Status: fixed in Phase 1.** Retained here as the record of what was wrong and why.
 
 **CWE-321 · Hardcoded cryptographic key** · `artifacts/api-server/src/routes/auth.ts:9`
 
@@ -108,6 +150,8 @@ in the codebase, it just was not applied here. Then:
 
 ## F-02 — Working admin credentials are printed on the public login page
 
+**Status: fixed in Phase 1** (code). Password rotation is an operator action and may still be outstanding.
+
 **CWE-798 · Hardcoded credentials** · `artifacts/gst-platform/src/pages/login.tsx:66-78`, `replit.md:52`
 
 ```tsx
@@ -134,6 +178,8 @@ harvested by automated scanners within hours of a deployment going live.
 - Require MFA for any account with `role === "admin"` before general availability.
 
 ## F-03 — Passwords are hashed with a single round of SHA-256 and one global salt
+
+**Status: fixed in Phase 1.** Implemented in `artifacts/api-server/src/lib/password.ts`.
 
 **CWE-916 · Weak password hash** · `routes/auth.ts:11-13`, `routes/users.ts:9-11`
 
@@ -432,6 +478,8 @@ Then move the token out of reach of scripts: issue it as an `HttpOnly; Secure; S
 
 ## F-10 — Unhandled errors return a stack trace to the caller
 
+**Status: fixed in Phase 1.** Handler added in `artifacts/api-server/src/app.ts`.
+
 **CWE-209** · `app.ts`, `.replit [deployment]`
 
 `app.ts` registers logging, CORS, body parsers and the router — then stops. No error-handling
@@ -599,7 +647,7 @@ schema, one shared UI kit. These are the issues that will cost real money or rea
 Ordered by what each phase makes safe, not by effort. The gates are cumulative — nothing in a later
 phase substitutes for an earlier one.
 
-### Phase 1 — before the app is reachable from the internet
+### Phase 1 — before the app is reachable from the internet  ✅ done
 
 - **F-01** — remove the fallback secret, fail closed at boot, generate and rotate `SESSION_SECRET`.
 - **F-02** — delete the admin demo button, rotate both demo passwords, scrub `replit.md`.

@@ -2,13 +2,9 @@ import { Router } from "express";
 import { db, usersTable, businessesTable } from "@workspace/db";
 import { eq, ilike, or, count } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
-import crypto from "crypto";
+import { hashPassword, MAX_PASSWORD_BYTES } from "../lib/password";
 
 const router = Router();
-
-function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password + "gst_salt_v1").digest("hex");
-}
 
 function mapUser(user: any) {
   return {
@@ -39,8 +35,11 @@ router.get("/", requireAuth, requireAdmin, async (req, res) => {
 router.post("/", requireAuth, requireAdmin, async (req, res) => {
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
+  if (Buffer.byteLength(String(password), "utf8") > MAX_PASSWORD_BYTES) {
+    return res.status(400).json({ error: `Password must be at most ${MAX_PASSWORD_BYTES} bytes` });
+  }
   const [user] = await db.insert(usersTable).values({
-    name, email: email.toLowerCase(), passwordHash: hashPassword(password), role,
+    name, email: String(email).toLowerCase(), passwordHash: await hashPassword(String(password)), role,
     isActive: true, subscriptionStatus, subscriptionEnd,
   }).returning();
   return res.status(201).json(mapUser(user));
@@ -103,7 +102,10 @@ router.patch("/:id/toggle-status", requireAuth, requireAdmin, async (req, res) =
 router.post("/:id/reset-password", requireAuth, requireAdmin, async (req, res) => {
   const { newPassword } = req.body;
   if (!newPassword) return res.status(400).json({ error: "newPassword required" });
-  await db.update(usersTable).set({ passwordHash: hashPassword(newPassword) }).where(eq(usersTable.id, parseInt(req.params.id)));
+  if (Buffer.byteLength(String(newPassword), "utf8") > MAX_PASSWORD_BYTES) {
+    return res.status(400).json({ error: `Password must be at most ${MAX_PASSWORD_BYTES} bytes` });
+  }
+  await db.update(usersTable).set({ passwordHash: await hashPassword(String(newPassword)) }).where(eq(usersTable.id, parseInt(req.params.id)));
   return res.json({ success: true });
 });
 

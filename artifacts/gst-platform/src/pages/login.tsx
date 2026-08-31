@@ -63,21 +63,7 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            <div className="mt-6 pt-6 border-t border-border">
-              <p className="text-xs text-muted-foreground font-medium mb-3">Demo Credentials (click to fill):</p>
-              <div className="grid grid-cols-2 gap-2">
-                <button type="button" onClick={() => { setEmail("demo@acmeindia.in"); setPassword("Demo@123"); }} className="text-left text-xs p-2 rounded border border-border hover:bg-accent transition-colors">
-                  <div className="font-medium text-foreground">Business User</div>
-                  <div className="text-muted-foreground">demo@acmeindia.in</div>
-                </button>
-                <button type="button" onClick={() => { setEmail("admin@gstplatform.in"); setPassword("Admin@123"); }} className="text-left text-xs p-2 rounded border border-border hover:bg-accent transition-colors">
-                  <div className="font-medium text-foreground">Admin Panel</div>
-                  <div className="text-muted-foreground">admin@gstplatform.in</div>
-                </button>
-              </div>
-            </div>
-
-            <p className="text-center text-sm text-muted-foreground mt-4">
+            <p className="text-center text-sm text-muted-foreground mt-6">
               New business?{" "}
               <button onClick={() => setLocation("/register")} className="text-primary hover:underline font-medium">Register here</button>
             </p>
