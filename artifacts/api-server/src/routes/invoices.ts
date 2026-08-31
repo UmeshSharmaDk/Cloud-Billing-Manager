@@ -1,14 +1,11 @@
 import { Router } from "express";
-import { db, invoicesTable, usersTable, businessesTable, customersTable, productsTable } from "@workspace/db";
+import { db, invoicesTable, businessesTable, customersTable, productsTable } from "@workspace/db";
 import { eq, ilike, and, count, gte, lte, desc } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 
 const router = Router();
-
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
 
 function calcGst(items: any[], isInterstate: boolean) {
   let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
@@ -79,27 +76,25 @@ async function generateInvoiceNumber(businessId: number): Promise<string> {
   return `${prefix}-${fy}-${num}`;
 }
 
-router.get("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { search, type, status, customerId, fromDate, toDate, page = "1", limit = "20" } = req.query as any;
+router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), async (req: any, res) => {
+  const businessId = req.businessId;
+  const { search, type, status, customerId, fromDate, toDate, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(invoicesTable.businessId, businessId)];
   if (search) conditions.push(ilike(invoicesTable.invoiceNumber, `%${search}%`));
   if (type) conditions.push(eq(invoicesTable.type, type));
   if (status) conditions.push(eq(invoicesTable.status, status));
-  if (customerId) conditions.push(eq(invoicesTable.customerId, parseInt(customerId)));
+  if (customerId) conditions.push(eq(invoicesTable.customerId, customerId));
   if (fromDate) conditions.push(gte(invoicesTable.invoiceDate, fromDate));
   if (toDate) conditions.push(lte(invoicesTable.invoiceDate, toDate));
   const invoices = await db.select().from(invoicesTable).where(and(...conditions))
-    .limit(parseInt(limit)).offset((parseInt(page) - 1) * parseInt(limit))
+    .limit(limit).offset((page - 1) * limit)
     .orderBy(desc(invoicesTable.createdAt));
-  const [{ count: total }] = await db.select({ count: count() }).from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
+  const [{ count: total }] = await db.select({ count: count() }).from(invoicesTable).where(and(...conditions));
   return res.json({ invoices: invoices.map(mapInvoice), total: Number(total) });
 });
 
-router.post("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), async (req: any, res) => {
+  const businessId = req.businessId;
 
   const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [] } = req.body;
 
@@ -112,11 +107,18 @@ router.post("/", requireAuth, async (req: any, res) => {
   let resolvedCustomerGstin = customGstin ?? null;
 
   if (customerId) {
-    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, parseInt(customerId))).limit(1);
-    if (customer) {
-      resolvedCustomerName = customer.name;
-      resolvedCustomerGstin = customer.gstin ?? null;
-    }
+    // Scoped to the caller's business. Without the businessId condition this
+    // lookup resolved ANY customer on the platform and copied their name and
+    // GSTIN onto the invoice, making invoice creation a read primitive over
+    // every tenant's counterparties.
+    const [customer] = await db.select().from(customersTable)
+      .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
+      .limit(1);
+    // Fail loudly rather than silently falling back: the silent fallback is
+    // what let the probe go unnoticed.
+    if (!customer) return res.status(400).json({ error: "Unknown customer" });
+    resolvedCustomerName = customer.name;
+    resolvedCustomerGstin = customer.gstin ?? null;
   }
 
   // Auto-detect interstate based on business state code vs placeOfSupply
@@ -159,15 +161,15 @@ router.post("/", requireAuth, async (req: any, res) => {
   return res.status(201).json({ invoice: mapInvoice(invoice) });
 });
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).limit(1);
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+  const businessId = req.businessId;
+  const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).limit(1);
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });
 
-router.patch("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), async (req: any, res) => {
+  const businessId = req.businessId;
   const { type, customerId, invoiceDate, dueDate, placeOfSupply, isInterstate, notes, items } = req.body;
   const updates: any = {};
   if (type) updates.type = type;
@@ -178,32 +180,35 @@ router.patch("/:id", requireAuth, async (req: any, res) => {
     const gstCalc = calcGst(items, isInterstate ?? false);
     Object.assign(updates, { items: gstCalc.items, subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(), sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(), totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(), roundOff: gstCalc.roundOff.toString(), isInterstate: isInterstate ?? false });
     if (customerId) {
-      const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, parseInt(customerId))).limit(1);
-      updates.customerId = parseInt(customerId);
-      updates.customerName = customer?.name ?? "Unknown";
-      updates.customerGstin = customer?.gstin ?? null;
+      const [customer] = await db.select().from(customersTable)
+        .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
+        .limit(1);
+      if (!customer) return res.status(400).json({ error: "Unknown customer" });
+      updates.customerId = customer.id;
+      updates.customerName = customer.name;
+      updates.customerGstin = customer.gstin ?? null;
     }
     if (invoiceDate) updates.invoiceDate = invoiceDate;
   }
-  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).returning();
+  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).returning();
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });
 
-router.delete("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  await db.delete(invoicesTable).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!)));
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+  const businessId = req.businessId;
+  await db.delete(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)));
   return res.json({ success: true });
 });
 
-router.patch("/:id/status", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: any, res) => {
+  const businessId = req.businessId;
   const { paymentStatus, status, paidAmount } = req.body;
   const newStatus = paymentStatus ?? status;
   const updates: any = {};
   if (newStatus) updates.status = newStatus;
   if (paidAmount !== undefined) updates.paidAmount = paidAmount.toString();
-  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).returning();
+  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).returning();
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });

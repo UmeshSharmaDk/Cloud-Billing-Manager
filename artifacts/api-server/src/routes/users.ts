@@ -1,8 +1,13 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable } from "@workspace/db";
-import { eq, ilike, or, count } from "drizzle-orm";
+import { eq, ilike, or, and, count } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
 import { hashPassword, MAX_PASSWORD_BYTES } from "../lib/password";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import {
+  ListUsersQuery, CreateUserBody, UpdateUserBody,
+  ToggleStatusBody, ResetPasswordBody, IdParam,
+} from "../schemas";
 
 const router = Router();
 
@@ -15,24 +20,23 @@ function mapUser(user: any) {
   };
 }
 
-router.get("/", requireAuth, requireAdmin, async (req, res) => {
-  const { search, status, page = "1", limit = "20" } = req.query as any;
-  let query = db.select().from(usersTable).$dynamic();
+router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async (req: any, res) => {
+  const { search, status, page, limit } = req.validatedQuery;
   const conditions: any[] = [];
   if (search) conditions.push(or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)));
   if (status === "active") conditions.push(eq(usersTable.isActive, true));
   if (status === "inactive") conditions.push(eq(usersTable.isActive, false));
-  if (conditions.length > 0) {
-    const { and } = await import("drizzle-orm");
-    query = query.where(and(...conditions));
-  }
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  const users = await query.limit(parseInt(limit)).offset(offset);
-  const [{ count: total }] = await db.select({ count: count() }).from(usersTable);
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const users = await db.select().from(usersTable).where(where)
+    .limit(limit).offset((page - 1) * limit);
+  // Count the filtered set, not the whole table: the previous total ignored
+  // `search` and `status`, so a filtered page reported the wrong page count.
+  const [{ count: total }] = await db.select({ count: count() }).from(usersTable).where(where);
   return res.json({ users: users.map(mapUser), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireAdmin, async (req, res) => {
+router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async (req, res) => {
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
   if (Buffer.byteLength(String(password), "utf8") > MAX_PASSWORD_BYTES) {
@@ -65,16 +69,16 @@ router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res) => {
   });
 });
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  if (req.userRole !== "admin" && req.userId !== parseInt(req.params.id)) {
+router.get("/:id", requireAuth, validateParams(IdParam), async (req: any, res) => {
+  if (req.userRole !== "admin" && req.userId !== req.validatedParams.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, parseInt(req.params.id))).limit(1);
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.validatedParams.id)).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
   return res.json(mapUser(user));
 });
 
-router.patch("/:id", requireAuth, requireAdmin, async (req, res) => {
+router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody), async (req: any, res) => {
   const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
   const updates: any = {};
   if (name) updates.name = name;
@@ -82,30 +86,30 @@ router.patch("/:id", requireAuth, requireAdmin, async (req, res) => {
   if (role) updates.role = role;
   if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
   if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd;
-  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, parseInt(req.params.id))).returning();
+  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, req.validatedParams.id)).returning();
   if (!user) return res.status(404).json({ error: "User not found" });
   return res.json(mapUser(user));
 });
 
-router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
-  await db.delete(usersTable).where(eq(usersTable.id, parseInt(req.params.id)));
+router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: any, res) => {
+  await db.delete(usersTable).where(eq(usersTable.id, req.validatedParams.id));
   return res.json({ success: true });
 });
 
-router.patch("/:id/toggle-status", requireAuth, requireAdmin, async (req, res) => {
+router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdParam), validateBody(ToggleStatusBody), async (req: any, res) => {
   const { isActive } = req.body;
-  const [user] = await db.update(usersTable).set({ isActive }).where(eq(usersTable.id, parseInt(req.params.id))).returning();
+  const [user] = await db.update(usersTable).set({ isActive }).where(eq(usersTable.id, req.validatedParams.id)).returning();
   if (!user) return res.status(404).json({ error: "User not found" });
   return res.json(mapUser(user));
 });
 
-router.post("/:id/reset-password", requireAuth, requireAdmin, async (req, res) => {
+router.post("/:id/reset-password", requireAuth, requireAdmin, validateParams(IdParam), validateBody(ResetPasswordBody), async (req: any, res) => {
   const { newPassword } = req.body;
   if (!newPassword) return res.status(400).json({ error: "newPassword required" });
   if (Buffer.byteLength(String(newPassword), "utf8") > MAX_PASSWORD_BYTES) {
     return res.status(400).json({ error: `Password must be at most ${MAX_PASSWORD_BYTES} bytes` });
   }
-  await db.update(usersTable).set({ passwordHash: await hashPassword(String(newPassword)) }).where(eq(usersTable.id, parseInt(req.params.id)));
+  await db.update(usersTable).set({ passwordHash: await hashPassword(String(newPassword)) }).where(eq(usersTable.id, req.validatedParams.id));
   return res.json({ success: true });
 });
 

@@ -1,13 +1,29 @@
 import { Router } from "express";
-import { db, invoicesTable, purchasesTable, productsTable, usersTable } from "@workspace/db";
+import { db, invoicesTable, purchasesTable, productsTable } from "@workspace/db";
 import { eq, and, gte, lte } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
+import { validateQuery } from "../middleware/validate";
+import { MonthYearQuery, DateRangeQuery } from "../schemas";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
+/**
+ * Resolve a report window. The span itself is capped by `DateRangeQuery`; this
+ * supplies the other half — an absent range used to mean "every invoice this
+ * business has ever raised", read into memory and serialised in one response.
+ * An unspecified range now means the current month.
+ */
+function reportRange(q: { fromDate?: string; toDate?: string }): { from: string; to: string } {
+  if (q.fromDate && q.toDate) return { from: q.fromDate, to: q.toDate };
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    from: q.fromDate ?? `${y}-${pad(m)}-01`,
+    to: q.toDate ?? `${y}-${pad(m)}-${pad(lastDay)}`,
+  };
 }
 
 function mapInvoice(inv: any) {
@@ -27,12 +43,11 @@ function mapPurchase(p: any) {
   };
 }
 
-router.get("/gstr1", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: any, res) => {
+  const businessId = req.businessId;
   const now = new Date();
-  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
-  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const month = req.validatedQuery.month ?? now.getMonth() + 1;
+  const year = req.validatedQuery.year ?? now.getFullYear();
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
@@ -83,12 +98,11 @@ router.get("/gstr1", requireAuth, async (req: any, res) => {
   });
 });
 
-router.get("/gstr3b", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: any, res) => {
+  const businessId = req.businessId;
   const now = new Date();
-  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
-  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const month = req.validatedQuery.month ?? now.getMonth() + 1;
+  const year = req.validatedQuery.year ?? now.getFullYear();
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
@@ -134,13 +148,14 @@ router.get("/gstr3b", requireAuth, async (req: any, res) => {
   });
 });
 
-router.get("/sales", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { fromDate, toDate } = req.query as any;
-  const conditions: any[] = [eq(invoicesTable.businessId, businessId)];
-  if (fromDate) conditions.push(gte(invoicesTable.invoiceDate, fromDate));
-  if (toDate) conditions.push(lte(invoicesTable.invoiceDate, toDate));
+router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: any, res) => {
+  const businessId = req.businessId;
+  const { from, to } = reportRange(req.validatedQuery);
+  const conditions: any[] = [
+    eq(invoicesTable.businessId, businessId),
+    gte(invoicesTable.invoiceDate, from),
+    lte(invoicesTable.invoiceDate, to),
+  ];
   const invoices = await db.select().from(invoicesTable).where(and(...conditions));
   const mapped = invoices.map(mapInvoice);
   const totalSales = mapped.reduce((s, i) => s + i.grandTotal, 0);
@@ -148,13 +163,14 @@ router.get("/sales", requireAuth, async (req: any, res) => {
   return res.json({ totalSales: Math.round(totalSales * 100) / 100, totalGst: Math.round(totalGst * 100) / 100, netSales: Math.round((totalSales - totalGst) * 100) / 100, invoiceCount: mapped.length, invoices: mapped });
 });
 
-router.get("/purchases", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { fromDate, toDate } = req.query as any;
-  const conditions: any[] = [eq(purchasesTable.businessId, businessId)];
-  if (fromDate) conditions.push(gte(purchasesTable.invoiceDate, fromDate));
-  if (toDate) conditions.push(lte(purchasesTable.invoiceDate, toDate));
+router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: any, res) => {
+  const businessId = req.businessId;
+  const { from, to } = reportRange(req.validatedQuery);
+  const conditions: any[] = [
+    eq(purchasesTable.businessId, businessId),
+    gte(purchasesTable.invoiceDate, from),
+    lte(purchasesTable.invoiceDate, to),
+  ];
   const purchases = await db.select().from(purchasesTable).where(and(...conditions));
   const mapped = purchases.map(mapPurchase);
   const totalPurchases = mapped.reduce((s, p) => s + p.grandTotal, 0);
@@ -162,12 +178,11 @@ router.get("/purchases", requireAuth, async (req: any, res) => {
   return res.json({ totalPurchases: Math.round(totalPurchases * 100) / 100, totalGst: Math.round(totalGst * 100) / 100, netPurchases: Math.round((totalPurchases - totalGst) * 100) / 100, purchaseCount: mapped.length, purchases: mapped });
 });
 
-router.get("/hsn", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: any, res) => {
+  const businessId = req.businessId;
   const now = new Date();
-  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
-  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const month = req.validatedQuery.month ?? now.getMonth() + 1;
+  const year = req.validatedQuery.year ?? now.getFullYear();
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
@@ -211,9 +226,8 @@ router.get("/hsn", requireAuth, async (req: any, res) => {
   return res.json({ month, year, items });
 });
 
-router.get("/stock", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/stock", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
   const products = await db.select().from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));
   const mapped = products.map(p => ({
     ...p,

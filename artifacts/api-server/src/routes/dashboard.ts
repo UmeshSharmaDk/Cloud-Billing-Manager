@@ -1,18 +1,12 @@
 import { Router } from "express";
-import { db, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable, usersTable } from "@workspace/db";
+import { db, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
 import { eq, and, gte, lte, sql, desc, lte as lteOp } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
-
-router.get("/stats", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/stats", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
 
   const invoices = await db.select().from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
   const purchases = await db.select().from(purchasesTable).where(eq(purchasesTable.businessId, businessId));
@@ -45,9 +39,8 @@ router.get("/stats", requireAuth, async (req: any, res) => {
   });
 });
 
-router.get("/recent-invoices", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/recent-invoices", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
   const invoices = await db.select().from(invoicesTable)
     .where(eq(invoicesTable.businessId, businessId))
     .orderBy(desc(invoicesTable.createdAt)).limit(5);
@@ -60,9 +53,8 @@ router.get("/recent-invoices", requireAuth, async (req: any, res) => {
   })));
 });
 
-router.get("/monthly-revenue", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
 
   const months: { month: string; sales: number; purchases: number; gst: number }[] = [];
   const now = new Date();
@@ -83,9 +75,8 @@ router.get("/monthly-revenue", requireAuth, async (req: any, res) => {
   return res.json(months);
 });
 
-router.get("/top-products", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/top-products", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
   const invoices = await db.select().from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
   const productMap: Record<string, { productId: number; productName: string; totalQuantity: number; totalRevenue: number }> = {};
   for (const inv of invoices) {
@@ -101,9 +92,8 @@ router.get("/top-products", requireAuth, async (req: any, res) => {
   return res.json(sorted);
 });
 
-router.get("/gst-summary", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/gst-summary", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
   const now = new Date();
   const from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
   const invoices = await db.select().from(invoicesTable).where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from)));
@@ -123,9 +113,8 @@ router.get("/gst-summary", requireAuth, async (req: any, res) => {
   });
 });
 
-router.get("/low-stock", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/low-stock", requireAuth, requireBusiness, async (req: any, res) => {
+  const businessId = req.businessId;
   const products = await db.select().from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));
   const lowStock = products.filter(p => {
     const qty = parseFloat(p.stockQuantity);

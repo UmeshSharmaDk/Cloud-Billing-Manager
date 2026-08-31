@@ -1,14 +1,11 @@
 import { Router } from "express";
-import { db, purchasesTable, usersTable, vendorsTable, productsTable } from "@workspace/db";
+import { db, purchasesTable, vendorsTable, productsTable } from "@workspace/db";
 import { eq, ilike, and, count, gte, lte, desc } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { ListPurchasesQuery, CreatePurchaseBody, UpdatePurchaseBody, IdParam } from "../schemas";
 
 const router = Router();
-
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
 
 function calcPurchaseTotals(items: any[], isInterstate = false) {
   let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
@@ -112,25 +109,23 @@ function mapPurchase(p: any) {
   };
 }
 
-router.get("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { search, vendorId, fromDate, toDate, page = "1", limit = "20" } = req.query as any;
+router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery), async (req: any, res) => {
+  const businessId = req.businessId;
+  const { search, vendorId, fromDate, toDate, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(purchasesTable.businessId, businessId)];
   if (search) conditions.push(ilike(purchasesTable.invoiceNumber, `%${search}%`));
-  if (vendorId) conditions.push(eq(purchasesTable.vendorId, parseInt(vendorId)));
+  if (vendorId) conditions.push(eq(purchasesTable.vendorId, vendorId));
   if (fromDate) conditions.push(gte(purchasesTable.invoiceDate, fromDate));
   if (toDate) conditions.push(lte(purchasesTable.invoiceDate, toDate));
   const purchases = await db.select().from(purchasesTable).where(and(...conditions))
-    .limit(parseInt(limit)).offset((parseInt(page) - 1) * parseInt(limit))
+    .limit(limit).offset((page - 1) * limit)
     .orderBy(desc(purchasesTable.createdAt));
-  const [{ count: total }] = await db.select({ count: count() }).from(purchasesTable).where(eq(purchasesTable.businessId, businessId));
+  const [{ count: total }] = await db.select({ count: count() }).from(purchasesTable).where(and(...conditions));
   return res.json({ purchases: purchases.map(mapPurchase), total: Number(total) });
 });
 
-router.post("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody), async (req: any, res) => {
+  const businessId = req.businessId;
 
   // Accept both billNumber/billDate (frontend convention) and invoiceNumber/invoiceDate
   const {
@@ -146,7 +141,13 @@ router.post("/", requireAuth, async (req: any, res) => {
   if (!vendorId) return res.status(400).json({ error: "vendorId required" });
   if (!invoiceDate) return res.status(400).json({ error: "billDate required" });
 
-  const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, parseInt(vendorId))).limit(1);
+  // Scoped to the caller's business — see the note in invoices.ts; the same
+  // unscoped lookup here leaked every tenant's vendor names and GSTINs.
+  const [vendor] = await db.select().from(vendorsTable)
+    .where(and(eq(vendorsTable.id, vendorId), eq(vendorsTable.businessId, businessId)))
+    .limit(1);
+  if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
+
   const calc = calcPurchaseTotals(items);
 
   // Resolve each line item to a product by name (case-insensitive match) — update existing
@@ -155,7 +156,7 @@ router.post("/", requireAuth, async (req: any, res) => {
 
   const [purchase] = await db.insert(purchasesTable).values({
     businessId, vendorId: parseInt(vendorId),
-    vendorName: vendor?.name ?? "Unknown", vendorGstin: vendor?.gstin ?? null,
+    vendorName: vendor.name, vendorGstin: vendor.gstin ?? null,
     invoiceNumber: invoiceNumber ?? `PUR-${Date.now()}`, invoiceDate, notes,
     items: resolvedItems, subtotal: calc.subtotal.toString(), cgst: calc.cgst.toString(),
     sgst: calc.sgst.toString(), igst: calc.igst.toString(),
@@ -165,15 +166,15 @@ router.post("/", requireAuth, async (req: any, res) => {
   return res.status(201).json(mapPurchase(purchase));
 });
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  const [purchase] = await db.select().from(purchasesTable).where(and(eq(purchasesTable.id, parseInt(req.params.id)), eq(purchasesTable.businessId, businessId!))).limit(1);
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+  const businessId = req.businessId;
+  const [purchase] = await db.select().from(purchasesTable).where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId))).limit(1);
   if (!purchase) return res.status(404).json({ error: "Not found" });
   return res.json(mapPurchase(purchase));
 });
 
-router.patch("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), async (req: any, res) => {
+  const businessId = req.businessId;
   const { vendorId, billNumber, billDate, invoiceNumber: rawNum, invoiceDate: rawDate, dueDate, notes, items, paymentStatus } = req.body;
   const updates: any = {};
   const invoiceNumber = billNumber ?? rawNum;
@@ -185,23 +186,26 @@ router.patch("/:id", requireAuth, async (req: any, res) => {
   if (paymentStatus) updates.status = paymentStatus;
   if (items) {
     const calc = calcPurchaseTotals(items);
-    const resolvedItems = await resolveItemsToProducts(businessId!, calc.items);
+    const resolvedItems = await resolveItemsToProducts(businessId, calc.items);
     Object.assign(updates, { items: resolvedItems, subtotal: calc.subtotal.toString(), cgst: calc.cgst.toString(), sgst: calc.sgst.toString(), igst: calc.igst.toString(), totalGst: calc.totalGst.toString(), grandTotal: calc.grandTotal.toString() });
   }
   if (vendorId) {
-    const [vendor] = await db.select().from(vendorsTable).where(eq(vendorsTable.id, parseInt(vendorId))).limit(1);
-    updates.vendorId = parseInt(vendorId);
-    updates.vendorName = vendor?.name ?? "Unknown";
-    updates.vendorGstin = vendor?.gstin ?? null;
+    const [vendor] = await db.select().from(vendorsTable)
+      .where(and(eq(vendorsTable.id, vendorId), eq(vendorsTable.businessId, businessId)))
+      .limit(1);
+    if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
+    updates.vendorId = vendor.id;
+    updates.vendorName = vendor.name;
+    updates.vendorGstin = vendor.gstin ?? null;
   }
-  const [purchase] = await db.update(purchasesTable).set(updates).where(and(eq(purchasesTable.id, parseInt(req.params.id)), eq(purchasesTable.businessId, businessId!))).returning();
+  const [purchase] = await db.update(purchasesTable).set(updates).where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId))).returning();
   if (!purchase) return res.status(404).json({ error: "Not found" });
   return res.json(mapPurchase(purchase));
 });
 
-router.delete("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  await db.delete(purchasesTable).where(and(eq(purchasesTable.id, parseInt(req.params.id)), eq(purchasesTable.businessId, businessId!)));
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+  const businessId = req.businessId;
+  await db.delete(purchasesTable).where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)));
   return res.json({ success: true });
 });
 

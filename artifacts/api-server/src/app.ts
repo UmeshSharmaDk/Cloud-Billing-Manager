@@ -11,6 +11,14 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+/**
+ * The API sits behind the platform's router, so the socket address is always
+ * the proxy. Without this the per-IP rate limiter sees one client for the
+ * whole world and either locks everyone out at once or nobody at all.
+ * One hop — never `true`, which would let a caller forge the chain.
+ */
+app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,

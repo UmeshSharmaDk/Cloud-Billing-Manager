@@ -37,10 +37,11 @@ fortnight of disciplined hardening.
 
 ---
 
-## Status — Phase 1 complete
+## Status — Phases 1 and 2 complete
 
-Phase 1 of the remediation plan is implemented on branch `claude/security-threats-review-gq7rhu`.
-The three critical findings and F-10 are fixed and verified; everything else below still stands.
+Phases 1 and 2 of the remediation plan are implemented on branch
+`claude/security-threats-review-gq7rhu`. Twelve of the nineteen findings are fixed and verified
+against a real Postgres with a 45-check integration suite; the rest are Phase 3.
 
 | ID | Status | Verification |
 | --- | --- | --- |
@@ -48,7 +49,54 @@ The three critical findings and F-10 are fixed and verified; everything else bel
 | F-02 | **Fixed** | Demo credential block removed from the login page and `replit.md`; absent from the production frontend bundle. **Operator action still required — see below.** |
 | F-03 | **Fixed** | Argon2id (19 MiB, t=2, p=1) with a per-password salt; legacy SHA-256 hashes verify once and are re-hashed on the spot. 18/18 behavioural checks pass. |
 | F-10 | **Fixed** | Terminal error handler returns `{error, requestId}` and nothing else; full detail is logged server-side under the same id. Logger now treats an unset `NODE_ENV` as production. |
-| F-04 … F-09, F-11 … F-14, L-01 … L-05 | Open | Phases 2 and 3. |
+| F-04 | **Fixed** | Zod validation on every route. Type-confused login, negative quantity, 900% GST rate, malformed date and non-numeric `:id` all return `400`; unknown body keys are stripped rather than written. |
+| F-05 | **Fixed** | The four unscoped lookups now filter by `businessId` and return `400` instead of silently falling back. A two-tenant suite proves every `:id` route is `404` across the boundary and that no cross-tenant name or GSTIN appears in any response. |
+| F-06 | **Fixed** | Per-IP limiter plus a per-account lockout held in Postgres, so it survives restarts and spans autoscale instances. Locks after 11 failures with exponential backoff, and holds even against the correct password. |
+| F-07 | **Fixed** | `requireAuth` loads the user row on every request. Promotion, demotion, deactivation and subscription expiry all take effect immediately — previously up to seven days. |
+| F-11 | **Fixed** (caps) | `?limit=100000000`, `?limit=abc` and `?page=0` are `400`; report spans are capped at 366 days and default to the current month; the admin user lists filter, count and page in SQL. |
+| L-02 | **Fixed** | E-way bills can no longer reference another tenant's invoice. |
+| F-08, F-09, F-12, F-13, F-14 (enumeration), L-01, L-03 – L-05 | Open | Phase 3. |
+
+### Phase 2 notes
+
+**The generated schemas could not be used, and that is a finding in itself.** The plan assumed
+attaching `@workspace/api-zod` to each route would be mechanical. It is not: the OpenAPI spec has
+drifted behind the implementation, and enforcing it would have rejected requests the app makes
+today — `CreateInvoiceBody` requires `customerId` (walk-in invoices have none), invoice and purchase
+line items are specified as `productName`/`rate` but sent as `description`/`unitPrice`,
+`CreatePurchaseBody` requires `invoiceNumber`/`invoiceDate` where the client sends
+`billNumber`/`billDate`, and e-way bills, the admin routes and the HSN report are absent from the
+spec entirely. The schemas in `artifacts/api-server/src/schemas/index.ts` are therefore written
+against the routes as they actually behave. This raises the priority of L-03 (reconcile the spec):
+until it is done, the spec is documentation, not a contract.
+
+**GST rate is bounded at 0–28 rather than enumerated.** The plan proposed an enum of the statutory
+slabs. Special rates (0.1, 1.5, 6, 7.5) exist alongside the headline ones, and rejecting a valid rate
+blocks a real invoice, which is worse operationally than accepting an unusual one. The bound is what
+defeats the attack — a 900% rate no longer reaches a GSTR-1 filing.
+
+**Validated query values live on `req.validatedQuery`, not `req.query`.** Express 5 defines
+`req.query` as a getter with no setter, so the usual overwrite-in-place pattern throws in strict mode.
+
+**Two adjacent fixes came along.** L-02 (e-way bills referencing another tenant's invoice) is the same
+bug class as F-05 and was fixed with it. Separately, list endpoints reported an unfiltered `total`
+alongside a filtered page, so the UI computed the wrong page count whenever a search was active; that
+is corrected in all seven list routes.
+
+**What F-11 does not cover.** `/dashboard/stats` and `/admin/stats` still compute their aggregates by
+reading whole tables into memory. That is a scaling cost, not a live vulnerability, and rewriting
+financial aggregations without tests covering them is a worse risk than leaving them slow. They remain
+open.
+
+### Found while implementing Phase 2
+
+**A business with no state code issues IGST on local sales.** `invoices.ts` decides interstate by
+comparing `placeOfSupply` against the business's `stateCode`. Registration never sets a state code, so
+until an owner fills it in on the settings page, every invoice compares against `""`, is treated as
+interstate, and is charged IGST instead of CGST+SGST. The totals are right; the split is wrong, and a
+wrong split is a wrong GST return. Not a security issue and not in any phase — but it should be fixed
+before the next filing, either by requiring the state code at registration or by refusing to issue an
+invoice while it is unset.
 
 ### Operator actions that code cannot perform
 
@@ -241,6 +289,8 @@ Migrating without forcing a global reset:
 
 ## F-04 — Not one endpoint validates its request body
 
+**Status: fixed in Phase 2.** See the Phase 2 notes above: the generated schemas could not be used verbatim.
+
 **CWE-20** · all 13 routers under `artifacts/api-server/src/routes/`
 
 Every handler destructures `req.body` and passes values to Drizzle unchecked. The only `.parse()` call
@@ -282,6 +332,8 @@ contract is looser than reality — non-negative quantities, GST rate constraine
 (0, 0.25, 3, 5, 12, 18, 28), `role` as an enum.
 
 ## F-05 — Customer and vendor lookups skip the tenant filter
+
+**Status: fixed in Phase 2**, with a two-tenant integration suite guarding it.
 
 **CWE-639** · `invoices.ts:115`, `invoices.ts:181`, `purchases.ts:149`, `purchases.ts:192`
 
@@ -331,6 +383,8 @@ probe. Then remove the class of bug:
 
 ## F-06 — Login accepts unlimited attempts at full speed
 
+**Status: fixed in Phase 2.** Database-backed lockout, so it holds across autoscale instances.
+
 **CWE-307** · `routes/auth.ts:45`, `app.ts`
 
 No rate-limiting middleware anywhere, no per-account attempt counter, no lockout, no CAPTCHA, no delay.
@@ -365,6 +419,8 @@ router.post("/register", authLimiter, handler);
 - Log failed attempts with account and source IP; alert on bursts.
 
 ## F-07 — Revoking access does nothing for seven days
+
+**Status: fixed in Phase 2.** `requireAuth` re-reads the user row on every request.
 
 **CWE-613** · `auth.ts:15-17, 27-43, 112-114`
 
@@ -503,6 +559,8 @@ Set `NODE_ENV=production` in the deployment environment as a second line of defe
 also branches on it, so production is currently running the pretty-printing dev transport too.
 
 ## F-11 — Pagination is advisory and several endpoints read whole tables
+
+**Status: partly fixed in Phase 2.** Caps and report bounds are in; the dashboard and admin stats aggregations still read whole tables.
 
 **CWE-770** · `customers.ts:20`, `invoices.ts:94`, `reports.ts:144,158`, `admin.ts:18,60`, `dashboard.ts:17-21`
 
@@ -656,7 +714,7 @@ phase substitutes for an earlier one.
 
 *Roughly one focused day. Until all four land, assume any deployed instance is fully compromised.*
 
-### Phase 2 — before a second tenant's data is on the platform
+### Phase 2 — before a second tenant's data is on the platform  ✅ done
 
 - **F-05** — scope the four customer/vendor lookups, then add the cross-tenant integration test.
 - **F-04** — wire the existing `@workspace/api-zod` schemas in as validation middleware on every route.
@@ -664,7 +722,8 @@ phase substitutes for an earlier one.
 - **F-06** — rate-limit the auth endpoints, per IP and per account.
 - **F-11** — cap `limit`, paginate the report and admin endpoints.
 
-*Roughly a week. This is where tenant isolation stops being a convention and becomes a guarantee.*
+*Implemented and verified: 45 integration checks against a real Postgres, covering cross-tenant
+probes, validation, lockout, live authorization and GST-calculation regressions.*
 
 ### Phase 3 — before general availability
 

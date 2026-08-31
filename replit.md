@@ -10,6 +10,9 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/api-server run test:integration` — security integration suite
+  (cross-tenant isolation, validation, lockout, live authorization). Needs a running server and a
+  real Postgres; see the header of `artifacts/api-server/test/integration.mjs`.
 - Required env: `DATABASE_URL` — Postgres connection string, `SESSION_SECRET` — JWT signing secret,
   minimum 32 chars (`openssl rand -base64 48`). Both fail the boot if unset; there are no defaults.
 

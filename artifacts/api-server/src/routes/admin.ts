@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, count, desc } from "drizzle-orm";
+import { eq, ne, and, or, ilike, count, desc } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
 
 const router = Router();
 
@@ -55,20 +57,26 @@ router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
 });
 
 // GET /admin/users — list all users with business info
-router.get("/users", requireAuth, requireAdmin, async (req: any, res) => {
-  const { search, page = "1", limit = "50" } = req.query as any;
-  const allUsers = await db.select().from(usersTable).orderBy(desc(usersTable.createdAt));
-  const filtered = search
-    ? allUsers.filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()))
-    : allUsers;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  const paged = filtered.slice(offset, offset + parseInt(limit));
-  return res.json({ users: paged.map(mapUser), total: filtered.length });
+router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuery), async (req: any, res) => {
+  const { search, page, limit } = req.validatedQuery;
+  // Filtering, counting and paging happen in SQL. This handler used to read
+  // every user row into memory on each request and slice the array, so its
+  // cost grew with the size of the platform while `limit` came straight from
+  // the query string.
+  const where = search
+    ? or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`))
+    : undefined;
+
+  const users = await db.select().from(usersTable).where(where)
+    .orderBy(desc(usersTable.createdAt))
+    .limit(limit).offset((page - 1) * limit);
+  const [{ count: total }] = await db.select({ count: count() }).from(usersTable).where(where);
+  return res.json({ users: users.map(mapUser), total: Number(total) });
 });
 
 // GET /admin/users/:id — get a user with all their business data
-router.get("/users/:id", requireAuth, requireAdmin, async (req: any, res) => {
-  const userId = parseInt(req.params.id);
+router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: any, res) => {
+  const userId = req.validatedParams.id;
   const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
 
@@ -98,14 +106,14 @@ router.get("/users/:id", requireAuth, requireAdmin, async (req: any, res) => {
 });
 
 // PATCH /admin/users/:id — update user subscription/status
-router.patch("/users/:id", requireAuth, requireAdmin, async (req: any, res) => {
+router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody), async (req: any, res) => {
   const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
   const updates: any = {};
   if (isActive !== undefined) updates.isActive = isActive;
   if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
   if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd || null;
   if (role !== undefined) updates.role = role;
-  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, parseInt(req.params.id))).returning();
+  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, req.validatedParams.id)).returning();
   if (!user) return res.status(404).json({ error: "User not found" });
   return res.json(mapUser(user));
 });
