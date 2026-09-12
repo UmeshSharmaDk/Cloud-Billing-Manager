@@ -58,6 +58,36 @@ paths:
         "401":
           description: Unauthorized
 
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change your own password
+      description: >-
+        Requires the current password. On success the session cookie is
+        re-issued, so the browser is not left holding one minted under the old
+        credential.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordInput"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                required: [success]
+        "400":
+          description: The new password does not meet the policy
+        "403":
+          description: The current password is incorrect
+
   /auth/register:
     post:
       operationId: register
@@ -1137,6 +1167,18 @@ components:
         status:
           type: string
       required: [status]
+
+    ChangePasswordInput:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+          minLength: 12
+          maxLength: 128
+          description: At least 12 characters; screened against common and breached passwords.
+      required: [currentPassword, newPassword]
 
     LoginInput:
       type: object

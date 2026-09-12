@@ -41,6 +41,25 @@ export const LoginResponse = zod.object({
 
 
 /**
+ * Requires the current password. On success the session cookie is re-issued, so the browser is not left holding one minted under the old credential.
+ * @summary Change your own password
+ */
+export const changePasswordBodyNewPasswordMin = 12;
+export const changePasswordBodyNewPasswordMax = 128;
+
+
+
+export const ChangePasswordBody = zod.object({
+  "currentPassword": zod.string(),
+  "newPassword": zod.string().min(changePasswordBodyNewPasswordMin).max(changePasswordBodyNewPasswordMax).describe('At least 12 characters; screened against common and breached passwords.')
+})
+
+export const ChangePasswordResponse = zod.object({
+  "success": zod.boolean()
+})
+
+
+/**
  * @summary Register new business user
  */
 export const RegisterBody = zod.object({

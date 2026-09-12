@@ -11,6 +11,8 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - `pnpm --filter @workspace/api-server run test` — unit tests (password policy, breach lookup)
+- Both suites run in CI (`.github/workflows/security.yml`); the integration job brings up its own
+  Postgres service container
 - `pnpm --filter @workspace/api-server run test:integration` — security integration suite
   (cross-tenant isolation, validation, lockout, live authorization, cookie sessions, CSRF, admin
   accountability, invoice numbering, transaction rollback). Needs a running server and a real

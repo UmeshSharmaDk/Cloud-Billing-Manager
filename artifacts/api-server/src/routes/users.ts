@@ -5,7 +5,7 @@ import { requireAuth, requireAdmin } from "./auth";
 import { hashPassword } from "../lib/password";
 import { validatePassword } from "../lib/password-policy";
 import { recordAudit, actorFrom } from "../lib/audit";
-import { requireStepUp } from "../middleware/step-up";
+import { requireStepUp, verifyStepUp } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import {
@@ -88,12 +88,6 @@ router.get("/:id", requireAuth, validateParams(IdParam), async (req: any, res) =
 });
 
 router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody),
-  async (req: any, res, next) => {
-    // A role change can hand out or take away platform administration, so it
-    // needs the caller's own password. Renames and subscription edits do not.
-    if (req.body.role === undefined) return next();
-    return requireStepUp(req, res, next);
-  },
   async (req: any, res) => {
     const targetId = req.validatedParams.id;
     const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
@@ -101,7 +95,14 @@ router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validat
     const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
 
+    // Confirmation is required to CHANGE a role, not merely to send the field.
+    // The admin edit form posts the whole record including the unchanged role,
+    // so gating on presence made every save fail — a subscription edit is not
+    // a privilege change and must not demand a password.
     if (role && role !== before.role) {
+      const stepUp = await verifyStepUp(req);
+      if (!stepUp.ok) return res.status(stepUp.status ?? 403).json(stepUp.body);
+
       const guard = await assertNotLastAdmin(before, role);
       if (guard) return res.status(409).json({ error: guard });
     }

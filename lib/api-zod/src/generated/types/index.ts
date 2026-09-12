@@ -10,6 +10,8 @@ export * from './adminStats';
 export * from './authResponse';
 export * from './business';
 export * from './businessUpdate';
+export * from './changePassword200';
+export * from './changePasswordInput';
 export * from './customer';
 export * from './customerInput';
 export * from './customerListResponse';

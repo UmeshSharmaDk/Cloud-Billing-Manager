@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
-import { useGetBusiness, useUpdateBusiness } from "@workspace/api-client-react";
+import { useChangePassword, useGetBusiness, useUpdateBusiness } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, CreditCard, FileText, Save } from "lucide-react";
+import { Building2, CreditCard, FileText, Save, KeyRound } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const INDIAN_STATES = [
@@ -54,10 +54,11 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="profile">
-        <TabsList className="grid grid-cols-3 w-full max-w-md">
+        <TabsList className="grid grid-cols-4 w-full max-w-xl">
           <TabsTrigger value="profile"><Building2 className="w-4 h-4 mr-1.5" />Profile</TabsTrigger>
           <TabsTrigger value="bank"><CreditCard className="w-4 h-4 mr-1.5" />Bank</TabsTrigger>
           <TabsTrigger value="invoice"><FileText className="w-4 h-4 mr-1.5" />Invoice</TabsTrigger>
+          <TabsTrigger value="security"><KeyRound className="w-4 h-4 mr-1.5" />Security</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile" className="mt-4">
@@ -111,6 +112,10 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="security" className="mt-4">
+          <ChangePasswordCard />
+        </TabsContent>
       </Tabs>
 
       <div className="flex justify-end">
@@ -120,5 +125,78 @@ export default function SettingsPage() {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Changing your own password. Until now the only route to a new password was
+ * asking an administrator to reset it — which meant a third party chose it and
+ * knew what it was.
+ */
+function ChangePasswordCard() {
+  const { toast } = useToast();
+  const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirm: "" });
+  const mutation = useChangePassword();
+
+  const tooShort = form.newPassword.length > 0 && form.newPassword.length < 12;
+  const mismatch = form.confirm.length > 0 && form.newPassword !== form.confirm;
+  const canSubmit =
+    form.currentPassword.length > 0 && form.newPassword.length >= 12 && !mismatch;
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    mutation.mutate(
+      { data: { currentPassword: form.currentPassword, newPassword: form.newPassword } },
+      {
+        onSuccess: () => {
+          toast({ title: "Password changed" });
+          setForm({ currentPassword: "", newPassword: "", confirm: "" });
+        },
+        onError: (err: any) =>
+          toast({
+            title: "Could not change password",
+            // The server explains exactly why — too short, too common, or
+            // found in a breach corpus. Repeat it rather than inventing one.
+            description: err?.data?.error ?? "Please try again.",
+            variant: "destructive",
+          }),
+      },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Change password</CardTitle></CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-4 max-w-md">
+          <div className="space-y-2">
+            <Label htmlFor="current-password">Current password</Label>
+            <Input id="current-password" type="password" autoComplete="current-password"
+              value={form.currentPassword}
+              onChange={(e) => setForm((f) => ({ ...f, currentPassword: e.target.value }))} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="new-password">New password</Label>
+            <Input id="new-password" type="password" autoComplete="new-password" minLength={12}
+              value={form.newPassword}
+              onChange={(e) => setForm((f) => ({ ...f, newPassword: e.target.value }))} />
+            <p className={`text-xs ${tooShort ? "text-destructive" : "text-muted-foreground"}`}>
+              At least 12 characters. A short phrase of a few words is easier to remember and harder
+              to guess than a short jumble.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="confirm-new-password">Confirm new password</Label>
+            <Input id="confirm-new-password" type="password" autoComplete="new-password"
+              value={form.confirm}
+              onChange={(e) => setForm((f) => ({ ...f, confirm: e.target.value }))} />
+            {mismatch && <p className="text-xs text-destructive">These do not match.</p>}
+          </div>
+          <Button type="submit" disabled={!canSubmit || mutation.isPending}>
+            {mutation.isPending ? "Changing..." : "Change password"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }

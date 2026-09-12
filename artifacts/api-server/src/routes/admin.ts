@@ -5,7 +5,7 @@ import { requireAuth, requireAdmin } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
-import { requireStepUp } from "../middleware/step-up";
+import { requireStepUp, verifyStepUp } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
 
 const router = Router();
@@ -112,10 +112,6 @@ router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), asy
 
 // PATCH /admin/users/:id — update user subscription/status
 router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody),
-  async (req: any, res, next) => {
-    if (req.body.role === undefined) return next();
-    return requireStepUp(req, res, next);
-  },
   async (req: any, res) => {
     const targetId = req.validatedParams.id;
     const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
@@ -123,7 +119,14 @@ router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), v
     const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
 
+    // Confirmation is required to CHANGE a role, not merely to send the field.
+    // The admin edit form posts the whole record including the unchanged role,
+    // so gating on presence made every save fail — a subscription edit is not
+    // a privilege change and must not demand a password.
     if (role && role !== before.role) {
+      const stepUp = await verifyStepUp(req);
+      if (!stepUp.ok) return res.status(stepUp.status ?? 403).json(stepUp.body);
+
       const guard = await assertNotLastAdmin(before, role);
       if (guard) return res.status(409).json({ error: guard });
     }

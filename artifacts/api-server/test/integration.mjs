@@ -478,6 +478,23 @@ const adminEmail = `admin${uniq}@example.test`;
   const rename = await call("PATCH", `/users/${bob.userId}`, { jar, body: { name: "Renamed" } });
   check("F-13", "an ordinary edit does not", rename.status === 200, `status ${rename.status}`);
 
+  // Regression: the admin edit form posts the whole record, unchanged role
+  // included. Gating on the field's presence made every save fail — including
+  // a subscription-only edit, which is not a privilege change.
+  const unchangedRole = await call("PATCH", `/users/${bob.userId}`, {
+    jar, body: { role: "user", subscriptionStatus: "yearly" },
+  });
+  check("F-13", "sending an UNCHANGED role does not demand a password",
+    unchangedRole.status === 200, `status ${unchangedRole.status}`);
+  check("F-13", "...and the edit alongside it still applied",
+    unchangedRole.data?.subscriptionStatus === "yearly", String(unchangedRole.data?.subscriptionStatus));
+
+  const realChange = await call("PATCH", `/users/${bob.userId}`, {
+    jar, body: { role: "admin", confirmPassword: NEW_PASSWORD },
+  });
+  check("F-13", "an actual role change with confirmation succeeds", realChange.status === 200, `status ${realChange.status}`);
+  await call("PATCH", `/users/${bob.userId}`, { jar, body: { role: "user", confirmPassword: NEW_PASSWORD } });
+
   const selfDelete = await call("DELETE", `/users/${alice.userId}`, { jar });
   check("F-13", "an admin cannot delete their own account", selfDelete.status === 409, `status ${selfDelete.status}`);
 
@@ -579,7 +596,10 @@ const adminEmail = `admin${uniq}@example.test`;
   const bizId = q(`SELECT business_id FROM users WHERE id=${biz.userId}`);
   const countProducts = () => q(`SELECT count(*) FROM products WHERE business_id=${bizId}`);
 
-  execSync(`psql "${process.env.DATABASE_URL}" -c "ALTER TABLE purchases ADD CONSTRAINT tmp_reject_failme CHECK (invoice_number NOT LIKE 'FAILME%')"`, { stdio: "ignore" });
+  // NOT VALID: enforce on new writes only. A previous run of this suite leaves
+  // a FAILME row behind, and without it the constraint refuses to be created.
+  execSync(`psql "${process.env.DATABASE_URL}" -c "ALTER TABLE purchases DROP CONSTRAINT IF EXISTS tmp_reject_failme"`, { stdio: "ignore" });
+  execSync(`psql "${process.env.DATABASE_URL}" -c "ALTER TABLE purchases ADD CONSTRAINT tmp_reject_failme CHECK (invoice_number NOT LIKE 'FAILME%') NOT VALID"`, { stdio: "ignore" });
   try {
     const before = countProducts();
     const bad = await call("POST", "/purchases", {

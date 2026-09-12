@@ -60,7 +60,8 @@ export default function RegisterPage() {
               </div>
               <div className="space-y-2">
                 <Label>Password</Label>
-                <Input type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} required />
+                <Input type="password" placeholder="At least 12 characters" minLength={12} value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} required />
+                <p className="text-xs text-muted-foreground">At least 12 characters, and not one that has appeared in a public breach.</p>
               </div>
               <div className="space-y-2">
                 <Label>Business Name</Label>

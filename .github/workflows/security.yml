@@ -15,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -63,9 +65,84 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm --filter @workspace/api-server run test
+
+  integration:
+    name: Security integration suite
+    runs-on: ubuntu-latest
+
+    # The suite is the only thing standing between this repository and the
+    # findings it just fixed coming back. It needs a real database: the
+    # cross-tenant, lockout, audit and invoice-numbering checks all assert on
+    # rows, and the concurrency check needs genuine transaction semantics.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gst
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/gst
+      ALLOWED_ORIGINS: http://localhost:25512
+      NODE_ENV: production
+      PORT: 8099
+      # No outbound call to Have I Been Pwned from CI: the suite must not fail
+      # because a third party is having a bad day. The lookup's own logic is
+      # covered by the unit tests in the typecheck job.
+      DISABLE_BREACH_CHECK: "true"
+      # The suite deliberately fails dozens of logins from one address, which
+      # would otherwise trip the per-IP limiter. The per-account lockout that
+      # F-06 asserts still runs at its real threshold of 10.
+      AUTH_RATE_LIMIT_MAX: "500"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Create the schema
+        run: pnpm --filter @workspace/db run push --force
+
+      - name: Build the API server
+        run: pnpm --filter @workspace/api-server run build
+
+      - name: Start the API server
+        run: |
+          SESSION_SECRET="$(openssl rand -base64 48)" \
+            node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          timeout 60 bash -c 'until curl -sf http://127.0.0.1:8099/api/healthz >/dev/null; do sleep 1; done'
+
+      - name: Run the integration suite
+        run: pnpm --filter @workspace/api-server run test:integration
+
+      - name: Server log on failure
+        if: failure()
+        run: tail -100 /tmp/api.log

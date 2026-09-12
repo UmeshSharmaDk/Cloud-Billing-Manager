@@ -9,6 +9,16 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface ChangePasswordInput {
+  currentPassword: string;
+  /**
+     * At least 12 characters; screened against common and breached passwords.
+     * @minLength 12
+     * @maxLength 128
+     */
+  newPassword: string;
+}
+
 export interface LoginInput {
   email: string;
   password: string;
@@ -656,6 +666,10 @@ export interface AdminStats {
   totalBusinesses: number;
   recentUsers?: User[];
 }
+
+export type ChangePassword200 = {
+  success: boolean;
+};
 
 export type ListUsersParams = {
 search?: string;

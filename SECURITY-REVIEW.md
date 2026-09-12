@@ -41,7 +41,7 @@ fortnight of disciplined hardening.
 
 All three phases of the remediation plan are implemented on branch
 `claude/security-threats-review-gq7rhu`. **Eighteen of the nineteen findings are fixed and
-verified** — 92 integration checks against a real Postgres plus 10 unit tests. The nineteenth
+verified** — 95 integration checks against a real Postgres plus 10 unit tests, both now running in CI. The nineteenth
 (F-14's account-enumeration half) is partly done and cannot be finished in code alone; see below.
 
 | ID | Status | Verification |
@@ -107,6 +107,29 @@ interstate, and is charged IGST instead of CGST+SGST. The totals are right; the 
 wrong split is a wrong GST return. Not a security issue and not in any phase — but it should be fixed
 before the next filing, either by requiring the state code at registration or by refusing to issue an
 invoice while it is unset.
+
+### Follow-up after Phase 3
+
+**A regression Phase 3 introduced, now fixed.** Step-up confirmation was gated on the `role` field
+being *present* in the body rather than on the role actually changing. The admin edit form posts the
+whole record, unchanged role included, so every save from the user-detail page returned `403` — a
+subscription edit was being refused for want of a password confirmation the UI never asked for. The
+check now compares against the stored role, and the form sends only what changed. Two integration
+checks pin it: an unchanged role does not demand a password, and the edit alongside it still applies.
+
+**The rest of that family.** Phase 3 shipped backend contracts without the UI to match:
+a confirm-password dialog for genuine role changes, a Security tab on Settings for the new
+self-service `POST /auth/change-password`, and register copy that said "Min 8 characters" while the
+server required 12. All three are done. `/auth/change-password` is now in the OpenAPI spec too, so it
+has a generated hook rather than a hand-rolled fetch — a small step against the drift described
+above, not a fix for it.
+
+**The suites now run in CI.** They previously existed but nothing ran them: the workflow did audit,
+secret scan and typecheck only, because there was no database. `.github/workflows/security.yml` gains
+an `integration` job with a Postgres service container that pushes the schema, builds and starts the
+API, and runs all 95 checks; the unit suite joins the typecheck job. Verified by replicating the job
+steps against a freshly created database — 95/95 from a clean slate, and the suite is idempotent
+across repeated runs.
 
 ### Phase 3 notes
 

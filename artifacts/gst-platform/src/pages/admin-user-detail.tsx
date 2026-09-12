@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ArrowLeft, Building2, FileText, ShoppingCart, Users, Package, Edit2, Save, UserCheck, UserX } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useEffect } from "react";
+import { ConfirmPasswordDialog } from "@/components/ConfirmPasswordDialog";
 
 export default function AdminUserDetailPage() {
   const [, params] = useRoute("/admin/users/:id");
@@ -37,11 +38,65 @@ export default function AdminUserDetailPage() {
     }
   }, [user.id]);
 
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  /**
+   * Send only what the administrator actually changed. Posting the whole
+   * record meant every save carried the (unchanged) role, and the API treats a
+   * role change as a privileged action — so a subscription edit was being
+   * refused for want of a password confirmation it never asked for.
+   */
+  const changedFields = () => {
+    const changed: Record<string, unknown> = {};
+    if (form.role !== user.role) changed.role = form.role;
+    if (form.subscriptionStatus !== (user.subscriptionStatus || "trial")) {
+      changed.subscriptionStatus = form.subscriptionStatus;
+    }
+    if (form.subscriptionEnd !== (user.subscriptionEnd?.slice(0, 10) || "")) {
+      changed.subscriptionEnd = form.subscriptionEnd;
+    }
+    return changed;
+  };
+
+  const submit = (changed: Record<string, unknown>, confirmPassword?: string) => {
+    updateMutation.mutate(
+      { id: userId, data: { ...changed, ...(confirmPassword ? { confirmPassword } : {}) } as any },
+      {
+        onSuccess: () => {
+          toast({ title: "User updated" });
+          setConfirmOpen(false);
+          setEditing(false);
+          refetch();
+        },
+        onError: (err: any) => {
+          // The API asks for confirmation when an action turns out to need it.
+          if (err?.data?.code === "step_up_required") {
+            setConfirmOpen(true);
+            return;
+          }
+          toast({
+            title: "Update failed",
+            description: err?.data?.error ?? "Please try again.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
   const handleSave = () => {
-    updateMutation.mutate({ id: userId, data: form as any }, {
-      onSuccess: () => { toast({ title: "User updated!" }); setEditing(false); refetch(); },
-      onError: () => toast({ title: "Update failed", variant: "destructive" }),
-    });
+    const changed = changedFields();
+    if (Object.keys(changed).length === 0) {
+      toast({ title: "Nothing to update" });
+      setEditing(false);
+      return;
+    }
+    // A role change needs the administrator's own password; nothing else does.
+    if ("role" in changed) {
+      setConfirmOpen(true);
+      return;
+    }
+    submit(changed);
   };
 
   const handleToggleActive = () => {
@@ -64,6 +119,16 @@ export default function AdminUserDetailPage() {
 
   return (
     <div className="space-y-4">
+      <ConfirmPasswordDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Confirm this role change"
+        description={`Changing ${user.name || "this user"}'s role to "${form.role}" grants or removes platform access. Enter your own password to continue.`}
+        confirmLabel="Change role"
+        pending={updateMutation.isPending}
+        onConfirm={(password) => submit(changedFields(), password)}
+      />
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3">
