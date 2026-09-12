@@ -24,6 +24,7 @@ paths:
   /healthz:
     get:
       operationId: healthCheck
+      security: []  # public: no session required
       tags: [health]
       summary: Health check
       responses:
@@ -38,6 +39,7 @@ paths:
   /auth/login:
     post:
       operationId: login
+      security: []  # public: no session required
       tags: [auth]
       summary: Login
       requestBody:
@@ -59,6 +61,7 @@ paths:
   /auth/register:
     post:
       operationId: register
+      security: []  # public: no session required
       tags: [auth]
       summary: Register new business user
       requestBody:
@@ -1102,7 +1105,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminStats"
 
+security:
+  # Every operation requires a session unless it overrides this with
+  # `security: []`. The spec previously declared no authentication at all, so
+  # the generated clients — and anyone reading it — saw a wholly public API.
+  - cookieAuth: []
+  - bearerAuth: []
+
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: gst_session
+      description: >-
+        Session cookie issued by /auth/login and /auth/register. HttpOnly, so
+        page scripts cannot read it. Browser clients must also send the CSRF
+        token from the readable `gst_csrf` cookie in an `X-CSRF-Token` header
+        on every state-changing request.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        For native clients that have no cookie jar. Browser clients should use
+        the cookie instead, so the token is never reachable from script.
   schemas:
     HealthStatus:
       type: object

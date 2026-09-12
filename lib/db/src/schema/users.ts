@@ -12,6 +12,13 @@ export const usersTable = pgTable("users", {
   subscriptionStatus: text("subscription_status"),
   subscriptionEnd: text("subscription_end"),
   businessId: integer("business_id"),
+  /**
+   * Soft delete. A hard DELETE removed only this row and left the business,
+   * invoices, customers and products behind with a dangling businessId —
+   * unreachable tax records that nobody could retrieve or remove. Statutory
+   * retention makes that the wrong default, so deletion is now reversible.
+   */
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

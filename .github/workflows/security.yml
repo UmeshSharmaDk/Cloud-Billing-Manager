@@ -1,0 +1,71 @@
+name: Security checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The workspace already delays new releases by a day
+      # (`minimumReleaseAge` in pnpm-workspace.yaml), which guards against a
+      # freshly published malicious version. That does nothing about known
+      # CVEs in packages that have been around for months, which is this step.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level=high
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # A hardcoded signing secret shipped in this repository once already.
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  no-fallback-secrets:
+    name: No fallback secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Catches the exact shape of the original finding: a secret read from the
+      # environment with a literal default, so a deployment that forgets to set
+      # the variable silently uses a value that is public in this repository.
+      - name: Reject `process.env.X ?? "literal"` for secret-shaped names
+        run: |
+          if grep -rInE 'process\.env(\.|\[")(\w*(SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL)\w*)("\])?\s*(\?\?|\|\|)\s*['"'"'"`]' \
+               --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' \
+               artifacts lib scripts; then
+            echo "::error::A secret is being read with a literal fallback. Fail closed instead."
+            exit 1
+          fi
+          echo "No fallback secrets found."
+
+  typecheck:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck

@@ -1,9 +1,12 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, ne, and, or, ilike, count, desc } from "drizzle-orm";
+import { eq, ne, and, or, ilike, isNull, count, desc } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
+import { recordAudit, actorFrom } from "../lib/audit";
+import { requireStepUp } from "../middleware/step-up";
+import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
 
 const router = Router();
 
@@ -17,7 +20,7 @@ function mapUser(u: any) {
 }
 
 router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
-  const allUsers = await db.select().from(usersTable);
+  const allUsers = await db.select().from(usersTable).where(isNull(usersTable.deletedAt));
   const businesses = await db.select().from(businessesTable);
   const [{ count: totalInvoices }] = await db.select({ count: count() }).from(invoicesTable);
   const nonAdmins = allUsers.filter(u => u.role !== "admin");
@@ -64,8 +67,9 @@ router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuer
   // cost grew with the size of the platform while `limit` came straight from
   // the query string.
   const where = search
-    ? or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`))
-    : undefined;
+    ? and(isNull(usersTable.deletedAt),
+          or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)))
+    : isNull(usersTable.deletedAt);
 
   const users = await db.select().from(usersTable).where(where)
     .orderBy(desc(usersTable.createdAt))
@@ -77,7 +81,8 @@ router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuer
 // GET /admin/users/:id — get a user with all their business data
 router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: any, res) => {
   const userId = req.validatedParams.id;
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+  const [user] = await db.select().from(usersTable)
+    .where(and(eq(usersTable.id, userId), isNull(usersTable.deletedAt))).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
 
   let business = null;
@@ -106,16 +111,49 @@ router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), asy
 });
 
 // PATCH /admin/users/:id — update user subscription/status
-router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody), async (req: any, res) => {
-  const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
-  const updates: any = {};
-  if (isActive !== undefined) updates.isActive = isActive;
-  if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
-  if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd || null;
-  if (role !== undefined) updates.role = role;
-  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, req.validatedParams.id)).returning();
-  if (!user) return res.status(404).json({ error: "User not found" });
-  return res.json(mapUser(user));
-});
+router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody),
+  async (req: any, res, next) => {
+    if (req.body.role === undefined) return next();
+    return requireStepUp(req, res, next);
+  },
+  async (req: any, res) => {
+    const targetId = req.validatedParams.id;
+    const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
+
+    const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
+    if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+
+    if (role && role !== before.role) {
+      const guard = await assertNotLastAdmin(before, role);
+      if (guard) return res.status(409).json({ error: guard });
+    }
+    if (isActive === false) {
+      const selfGuard = assertNotSelf(req.user.id, targetId);
+      if (selfGuard) return res.status(409).json({ error: selfGuard });
+      const guard = await assertNotLastAdmin(before, "user");
+      if (guard) return res.status(409).json({ error: guard });
+    }
+
+    const updates: any = {};
+    if (isActive !== undefined) updates.isActive = isActive;
+    if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
+    if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd || null;
+    if (role !== undefined) updates.role = role;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
+
+    const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, targetId)).returning();
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    await recordAudit({
+      ...actorFrom(req),
+      action: role && role !== before.role ? "user.role_changed" : "user.subscription_changed",
+      targetType: "user", targetId,
+      details: {
+        before: { role: before.role, isActive: before.isActive, subscriptionStatus: before.subscriptionStatus },
+        after: { role: user.role, isActive: user.isActive, subscriptionStatus: user.subscriptionStatus },
+      },
+    });
+    return res.json(mapUser(user));
+  });
 
 export default router;

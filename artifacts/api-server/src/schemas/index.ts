@@ -90,15 +90,29 @@ const searchShape = { search: z.string().max(200).optional() };
 
 export const LoginBody = z.object({
   email: z.string().max(320),
+  // Deliberately NOT the policy schema: an existing password set before the
+  // policy existed must still be able to sign in (and then be changed).
   password: z.string().max(1024),
 });
+
+/**
+ * A new password. Length is enforced here so the client gets a field-level
+ * error; `validatePassword` adds the breach-corpus check, which needs a
+ * network round trip and so cannot live in a synchronous schema.
+ */
+const newPassword = z.string().min(12).max(128);
 
 export const RegisterBody = z.object({
   name: shortText(200),
   email: z.string().email().max(320),
-  password: z.string().max(1024),
+  password: newPassword,
   businessName: shortText(200),
   gstin,
+});
+
+export const ChangePasswordBody = z.object({
+  currentPassword: z.string().max(1024),
+  newPassword,
 });
 
 // ---------------------------------------------------------------------------
@@ -126,7 +140,7 @@ export const ListUsersQuery = z.object({
 export const CreateUserBody = z.object({
   name: shortText(200),
   email: z.string().email().max(320),
-  password: z.string().max(1024),
+  password: newPassword,
   role: roleEnum,
   ...subscriptionShape,
 });
@@ -135,18 +149,24 @@ export const UpdateUserBody = z.object({
   name: shortText(200).optional(),
   email: z.string().email().max(320).optional(),
   role: roleEnum.optional(),
+  confirmPassword: z.string().max(1024).optional(),
   ...subscriptionShape,
 });
 
 export const AdminUpdateUserBody = z.object({
   isActive: z.boolean().optional(),
   role: roleEnum.optional(),
+  confirmPassword: z.string().max(1024).optional(),
   ...subscriptionShape,
 });
 
 export const ToggleStatusBody = z.object({ isActive: z.boolean() });
 
-export const ResetPasswordBody = z.object({ newPassword: z.string().max(1024) });
+/** `confirmPassword` is the caller's own password — see middleware/step-up.ts. */
+export const ResetPasswordBody = z.object({
+  newPassword,
+  confirmPassword: z.string().max(1024).optional(),
+});
 
 export const AdminListUsersQuery = z.object({ ...paginationShape, ...searchShape });
 

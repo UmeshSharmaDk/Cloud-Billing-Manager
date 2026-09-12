@@ -35,10 +35,33 @@ function lockDurationMs(failures: number): number {
   return Math.min(60_000 * 2 ** over, MAX_LOCK_MS);
 }
 
-/** Namespaced so an address and an account id can never collide. */
-export const ipKey = (ip: string) => `ip:${ip}`;
+/**
+ * Namespaced so an account id and an address can never collide.
+ *
+ * Addresses are deliberately absent: the durable lockout is per-account only.
+ * Applying an account-grade threshold to an address punishes everyone behind a
+ * shared NAT for one person's ten typos, and an attacker who rotates addresses
+ * walks around it anyway. Addresses are the in-memory limiter's job, at a
+ * threshold three times looser.
+ */
 export const userKey = (userId: number) => `user:${userId}`;
 export const emailKey = (email: string) => `email:${email.toLowerCase().slice(0, 200)}`;
+
+/**
+ * Failed auth attempts tolerated from one address per window.
+ *
+ * Tunable because the right number depends on deployment shape — a large
+ * office behind one NAT is a single address to us. Raise it deliberately, and
+ * note that the per-account lockout below is the layer that actually defends a
+ * targeted attack; this one is a coarse outer bound.
+ */
+const ipLimit = Number(process.env["AUTH_RATE_LIMIT_MAX"] ?? 30);
+
+if (!Number.isInteger(ipLimit) || ipLimit < 1) {
+  throw new Error(
+    `AUTH_RATE_LIMIT_MAX must be a positive integer (got "${process.env["AUTH_RATE_LIMIT_MAX"]}").`,
+  );
+}
 
 /**
  * Per-IP limiter for the auth routes. `skipSuccessfulRequests` means a working
@@ -47,7 +70,7 @@ export const emailKey = (email: string) => `email:${email.toLowerCase().slice(0,
  */
 export const authIpLimiter: ReturnType<typeof rateLimit> = rateLimit({
   windowMs: WINDOW_MS,
-  limit: 30,
+  limit: ipLimit,
   standardHeaders: "draft-7",
   legacyHeaders: false,
   skipSuccessfulRequests: true,

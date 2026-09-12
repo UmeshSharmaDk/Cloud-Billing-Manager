@@ -19,7 +19,7 @@ export default function LoginPage() {
   const mutation = useLogin({
     mutation: {
       onSuccess: (data: any) => {
-        login(data.token, data.user);
+        login(data.user);
       },
       onError: () => {
         toast({ title: "Login failed", description: "Invalid email or password.", variant: "destructive" });

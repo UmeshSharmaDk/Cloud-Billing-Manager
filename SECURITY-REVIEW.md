@@ -37,11 +37,12 @@ fortnight of disciplined hardening.
 
 ---
 
-## Status — Phases 1 and 2 complete
+## Status — all three phases complete
 
-Phases 1 and 2 of the remediation plan are implemented on branch
-`claude/security-threats-review-gq7rhu`. Twelve of the nineteen findings are fixed and verified
-against a real Postgres with a 45-check integration suite; the rest are Phase 3.
+All three phases of the remediation plan are implemented on branch
+`claude/security-threats-review-gq7rhu`. **Eighteen of the nineteen findings are fixed and
+verified** — 92 integration checks against a real Postgres plus 10 unit tests. The nineteenth
+(F-14's account-enumeration half) is partly done and cannot be finished in code alone; see below.
 
 | ID | Status | Verification |
 | --- | --- | --- |
@@ -55,7 +56,16 @@ against a real Postgres with a 45-check integration suite; the rest are Phase 3.
 | F-07 | **Fixed** | `requireAuth` loads the user row on every request. Promotion, demotion, deactivation and subscription expiry all take effect immediately — previously up to seven days. |
 | F-11 | **Fixed** (caps) | `?limit=100000000`, `?limit=abc` and `?page=0` are `400`; report spans are capped at 366 days and default to the current month; the admin user lists filter, count and page in SQL. |
 | L-02 | **Fixed** | E-way bills can no longer reference another tenant's invoice. |
-| F-08, F-09, F-12, F-13, F-14 (enumeration), L-01, L-03 – L-05 | Open | Phase 3. |
+| F-08 | **Fixed** | `cors()` replaced by an explicit origin allowlist that fails the boot if unset and rejects `*`. An unknown origin gets no `Access-Control-Allow-Origin` header at all. |
+| F-09 | **Fixed** | The session is an `HttpOnly` cookie; no token is reachable from page script anywhere in the app. Double-submit CSRF on every cookie-authenticated write. Helmet adds a `default-src 'none'` CSP, HSTS, nosniff and `X-Frame-Options: DENY`. Logout is no longer a stub. |
+| F-12 | **Fixed** | 12-character minimum, common-password screening, and a Have I Been Pwned k-anonymity lookup that fails open. New self-service `POST /auth/change-password`. |
+| F-13 | **Fixed** | Append-only `audit_log`; step-up re-authentication for password resets and role changes; soft delete so tenant records are never orphaned; last-admin and self-action guards. |
+| F-14 | **Partly fixed** | The timing half closed in Phase 1. Registration still confirms a known address — closing that needs email delivery this product has no provider for. Enumeration now charges the account lockout, so bulk probing hits the same backoff as password guessing. |
+| L-01 | **Fixed** | `.env*` ignored, `.env.example` added, gitleaks in CI. |
+| L-03 | **Fixed** | `securitySchemes` declared (cookie + bearer), applied globally, with the three genuinely public operations marked `security: []`. |
+| L-04 | **Fixed** | `.github/workflows/security.yml`: `pnpm audit`, gitleaks, typecheck, and a grep that rejects the exact `process.env.X ?? "literal"` shape that caused F-01. |
+| L-05 | **Fixed** | `cookie-parser` is now load-bearing rather than dead; `verifyToken` distinguishes an expired token from a malformed one. |
+| Code review | **Fixed** | Invoice numbering (financial-year series, atomic allocation, never reused, unique at the database level) and transactional invoice/purchase writes. |
 
 ### Phase 2 notes
 
@@ -98,6 +108,39 @@ wrong split is a wrong GST return. Not a security issue and not in any phase —
 before the next filing, either by requiring the state code at registration or by refusing to issue an
 invoice while it is unset.
 
+### Phase 3 notes
+
+**F-14 is the one finding I could not close, and I did not pretend otherwise.** Making registration
+non-enumerable means not telling the caller whether the address is taken — which means not signing
+them in either, which means the confirmation has to arrive by email. This codebase has no email
+provider and inventing one would have meant shipping a signup flow that nobody can complete. What
+landed instead: a failed registration against an existing address now increments the same lockout
+counters as a failed login, so bulk enumeration runs into exponential backoff. Closing it properly
+is a product decision (choose a mail provider, add verification) rather than a code change.
+
+**The HIBP lookup could not be exercised here.** This sandbox's egress proxy does not reach
+`api.pwnedpasswords.com`, so the live call fails open exactly as designed — which is also why it
+proves nothing. The decision logic is covered by 10 unit tests instead
+(`test/password-policy.test.ts`), including that only the five-character hash prefix ever leaves the
+process, that a padding row is not read as a hit, and that a network failure fails open rather than
+locking users out of registration.
+
+**The durable lockout is per-account, not per-address.** The first implementation counted failures
+against the IP as well, at the same threshold, which meant ten typos from one office locked out
+everyone behind that NAT — and an attacker rotating addresses walks around it anyway. Addresses are
+now the in-memory limiter's job at a threshold three times looser, which is what the module claimed
+to do all along.
+
+**Invoice numbering changes format.** Numbers become `<prefix>-<financial year>-<0001>`, e.g.
+`INV-2026-27-0001`. A business that already has invoices under the old `INV-<calendar year>-<n>`
+scheme will see the series restart. That is unavoidable when moving to a statutory FY series and is
+best done at an April boundary — worth telling customers before it happens.
+
+**One judgement call worth surfacing:** `AUTH_RATE_LIMIT_MAX` exists because the integration suite
+deliberately fails dozens of logins from one address and would otherwise lock itself out. The
+default stays at 30 and the per-account lockout the suite actually asserts runs at its real
+threshold of 10.
+
 ### Operator actions that code cannot perform
 
 1. **Set `SESSION_SECRET`** in the deployment environment (`openssl rand -base64 48`). The server will
@@ -110,6 +153,15 @@ invoice while it is unset.
 3. **Set `NODE_ENV=production`** in the deployment environment. The code no longer depends on this for
    safety — the error handler never leaks and the logger now fails safe — but setting it explicitly is
    still correct, and `.replit` was left untouched rather than guessing at its deployment-env schema.
+4. **Set `ALLOWED_ORIGINS`** to the exact origins the web app is served from. Like `SESSION_SECRET`,
+   the server refuses to start without it, so set it *before* the next deploy.
+5. **Set `COOKIE_SAME_SITE=none`** only if the app and API are served from different sites. It
+   requires HTTPS. The default `lax` is correct when they share a site.
+6. **Run the database migration.** Phase 3 adds `audit_log` and `invoice_counters`, a `deleted_at`
+   column on `users`, and a unique index on `(business_id, invoice_number)`. Apply with
+   `pnpm --filter @workspace/db run push`. The unique index will fail to build if duplicate invoice
+   numbers already exist — if it does, that is the old `COUNT(*) + 1` bug showing up in real data,
+   and those invoices need renumbering before the index can be created.
 
 ### Where the implementation deviates from the recommendations below
 
@@ -461,6 +513,8 @@ Also add an explicit `subscriptionEnd` check to the request path.
 
 ## F-08 — CORS is wide open to every origin
 
+**Status: fixed in Phase 3.** Explicit allowlist; the boot fails without it and rejects `*`.
+
 **CWE-942** · `app.ts:28`
 
 ```ts
@@ -487,6 +541,8 @@ app.use(cors({ origin: allowed, credentials: true, methods: ["GET","POST","PATCH
 Never reflect `req.headers.origin` back — that is a wildcard with extra steps.
 
 ## F-09 — Session token sits in localStorage behind no security headers
+
+**Status: fixed in Phase 3.** `HttpOnly` cookie plus double-submit CSRF, and helmet headers.
 
 **CWE-522 / CWE-693** · `context/AuthContext.tsx:17,23,45`, `app.ts`
 
@@ -590,6 +646,8 @@ a statement timeout on the pool.
 
 ## F-12 — A one-character password is accepted
 
+**Status: fixed in Phase 3.** 12-character minimum, breach screening, and self-service password change.
+
 **CWE-521** · `auth.ts:68-75`, `users.ts:103-108`, `pages/register.tsx:63`
 
 Registration checks only presence. The signup form's placeholder reads "Min 8 characters" but the input
@@ -612,6 +670,8 @@ Add a self-service password-change endpoint — there currently is none, so the 
 password is to ask an admin to reset it.
 
 ## F-13 — Admin actions are unlogged, unconfirmed and irreversible
+
+**Status: fixed in Phase 3.** Audit log, step-up auth, soft delete, last-admin guard.
 
 **CWE-778 / CWE-266** · `users.ts:91-108`, `admin.ts:101-111`
 
@@ -637,6 +697,8 @@ audit record, no re-authentication, no notification, and no guard against acting
 - Refuse any change that removes the last admin or targets the caller's own role.
 
 ## F-14 — Registration confirms which email addresses have accounts
+
+**Status: partly fixed.** The timing half closed in Phase 1; the enumeration half needs email delivery — see the Phase 3 notes.
 
 **CWE-204 / CWE-208** · `auth.ts:75`, `auth.ts:52`
 
@@ -725,7 +787,7 @@ phase substitutes for an earlier one.
 *Implemented and verified: 45 integration checks against a real Postgres, covering cross-tenant
 probes, validation, lockout, live authorization and GST-calculation regressions.*
 
-### Phase 3 — before general availability
+### Phase 3 — before general availability  ✅ done
 
 - **F-08 · F-09** — origin allowlist, then `helmet` with a CSP and the token moved to an `HttpOnly`
   cookie with CSRF protection.
@@ -735,7 +797,9 @@ probes, validation, lockout, live authorization and GST-calculation regressions.
 - **L-01 … L-05** — secret scanning, dependency audit in CI, security schemes in the OpenAPI spec.
 - Invoice numbering, transactions, and the three starter test suites.
 
-*Roughly two to three weeks. Book an external penetration test at the end of it, not before.*
+*Implemented and verified: 92 integration checks plus 10 unit tests. Book an external penetration
+test now — that is the remaining step before general availability, and it is one no amount of
+self-review substitutes for.*
 
 ### Ongoing
 

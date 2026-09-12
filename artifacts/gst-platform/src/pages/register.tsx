@@ -18,7 +18,7 @@ export default function RegisterPage() {
   const mutation = useRegister({
     mutation: {
       onSuccess: (data: any) => {
-        login(data.token, data.user);
+        login(data.user);
         toast({ title: "Welcome!", description: "Your account has been created." });
       },
       onError: (err: any) => {

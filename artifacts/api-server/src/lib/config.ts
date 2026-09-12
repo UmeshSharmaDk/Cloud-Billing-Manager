@@ -33,15 +33,85 @@ function requiredSecret(name: string): string {
   return value;
 }
 
+/**
+ * Origins allowed to call this API from a browser.
+ *
+ * Required, with no default. The previous `cors()` call sent
+ * `Access-Control-Allow-Origin: *`, which also makes cookie-based auth
+ * impossible — browsers refuse to combine credentials with a wildcard.
+ * Comma-separated, e.g. "https://app.example.com,https://admin.example.com".
+ */
+function requiredOrigins(name: string): readonly string[] {
+  const raw = process.env[name];
+  const origins = (raw ?? "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  if (origins.length === 0) {
+    throw new Error(
+      `${name} environment variable is required but was not provided. ` +
+        `Set it to a comma-separated list of origins allowed to call this API, ` +
+        `e.g. "https://app.example.com". Use "http://localhost:25512" for local development.`,
+    );
+  }
+
+  const invalid = origins.filter((o) => !/^https?:\/\/[^/]+$/.test(o));
+  if (invalid.length > 0) {
+    throw new Error(
+      `${name} contains entries that are not scheme://host origins: ${invalid.join(", ")}. ` +
+        `Do not include a path or a trailing slash, and never use "*".`,
+    );
+  }
+
+  return Object.freeze(origins);
+}
+
+/**
+ * Development mode is opt-in. Anything other than an explicit
+ * NODE_ENV=development is treated as production, so an unset variable fails
+ * safe rather than enabling developer conveniences on a live deployment.
+ */
+const isDevelopment = process.env.NODE_ENV === "development";
+
+/**
+ * `SameSite` for the session cookie.
+ *
+ * "lax" is right when the app and the API share a site. When they are served
+ * from different origins — which this project's port mapping allows — the
+ * browser will only send the cookie with "none", and "none" requires
+ * `Secure`. Hence the pairing below rather than two independent knobs.
+ */
+function cookieSameSite(): "lax" | "strict" | "none" {
+  const raw = (process.env["COOKIE_SAME_SITE"] ?? "lax").toLowerCase();
+  if (raw === "lax" || raw === "strict" || raw === "none") return raw;
+  throw new Error(
+    `COOKIE_SAME_SITE must be one of "lax", "strict" or "none" (got "${raw}").`,
+  );
+}
+
+const sameSite = cookieSameSite();
+
+if (sameSite === "none" && isDevelopment) {
+  // Not fatal, but it will not work: browsers drop SameSite=None without Secure.
+  // eslint-disable-next-line no-console
+  console.warn(
+    'COOKIE_SAME_SITE="none" requires HTTPS. Cookies will be rejected over plain HTTP.',
+  );
+}
+
 export const config = {
   /** Signing key for session tokens. No default — see the note above. */
   jwtSecret: requiredSecret("SESSION_SECRET"),
 
-  /**
-   * Development mode is opt-in. Anything other than an explicit
-   * NODE_ENV=development is treated as production, so an unset variable
-   * fails safe (plain JSON logs) rather than enabling developer conveniences
-   * on a live deployment.
-   */
-  isDevelopment: process.env.NODE_ENV === "development",
+  isDevelopment,
+
+  /** Browser origins permitted by CORS. */
+  allowedOrigins: requiredOrigins("ALLOWED_ORIGINS"),
+
+  cookie: {
+    sameSite,
+    /** Never send the session cookie over plain HTTP outside local development. */
+    secure: !isDevelopment || sameSite === "none",
+  },
 } as const;

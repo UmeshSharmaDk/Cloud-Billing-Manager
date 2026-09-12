@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { db, invoicesTable, businessesTable, customersTable, productsTable } from "@workspace/db";
-import { eq, ilike, and, count, gte, lte, desc } from "drizzle-orm";
+import { db, invoicesTable, businessesTable, customersTable, productsTable, invoiceCountersTable } from "@workspace/db";
+import { eq, ilike, and, count, gte, lte, desc, sql } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
@@ -67,13 +67,46 @@ function mapInvoice(inv: any) {
   };
 }
 
-async function generateInvoiceNumber(businessId: number): Promise<string> {
-  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+/**
+ * The Indian financial year containing a date, as "2025-26". It runs from
+ * 1 April to 31 March, so January to March belong to the year before.
+ */
+export function financialYear(isoDate: string): string {
+  const [y, m] = isoDate.split("-").map(Number);
+  const startYear = (m ?? 1) >= 4 ? y : y - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
+}
+
+/**
+ * Allocate the next invoice number for a business in a given financial year.
+ *
+ * The counter is incremented and read in one statement, so two concurrent
+ * callers serialise on the row and cannot be handed the same number — the old
+ * `COUNT(*) + 1` gave both the same answer. Because the counter only ever goes
+ * up, deleting an invoice no longer frees its number for reuse either.
+ *
+ * Runs inside the caller's transaction so a failed insert rolls the allocation
+ * back; a gap in the series is a compliance problem of its own.
+ */
+async function nextInvoiceNumber(
+  tx: any,
+  businessId: number,
+  invoiceDate: string,
+): Promise<string> {
+  const [business] = await tx.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
   const prefix = business?.invoicePrefix ?? "INV";
-  const [{ count: c }] = await db.select({ count: count() }).from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
-  const num = String(Number(c) + 1).padStart(4, "0");
-  const fy = new Date().getFullYear();
-  return `${prefix}-${fy}-${num}`;
+  const fy = financialYear(invoiceDate);
+
+  const [counter] = await tx
+    .insert(invoiceCountersTable)
+    .values({ businessId, financialYear: fy, lastNumber: 1 })
+    .onConflictDoUpdate({
+      target: [invoiceCountersTable.businessId, invoiceCountersTable.financialYear],
+      set: { lastNumber: sql`${invoiceCountersTable.lastNumber} + 1` },
+    })
+    .returning();
+
+  return `${prefix}-${fy}-${String(counter.lastNumber).padStart(4, "0")}`;
 }
 
 router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), async (req: any, res) => {
@@ -127,36 +160,45 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
   const isInterstate = placeOfSupply ? (placeOfSupply.trim() !== bizStateCode.trim()) : false;
 
   const gstCalc = calcGst(items, isInterstate);
-  const invoiceNumber = await generateInvoiceNumber(businessId);
 
-  const [invoice] = await db.insert(invoicesTable).values({
-    businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
-    customerId: resolvedCustomerId, customerName: resolvedCustomerName,
-    customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
-    isInterstate, notes, items: gstCalc.items,
-    subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(),
-    sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(),
-    totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(),
-    roundOff: gstCalc.roundOff.toString(), paidAmount: "0",
-  }).returning();
+  // One transaction. Previously the invoice was inserted and then stock was
+  // deducted in a loop of separate statements, so a failure part-way left an
+  // invoice recorded against stock that was never decremented — and the
+  // number allocation could succeed while the insert failed, leaving a gap.
+  const invoice = await db.transaction(async (tx) => {
+    const invoiceNumber = await nextInvoiceNumber(tx, businessId, invoiceDate);
 
-  // Deduct stock for each sold item
-  const allProducts = await db.select().from(productsTable).where(eq(productsTable.businessId, businessId));
-  for (const item of gstCalc.items) {
-    const qty = parseFloat(String(item.quantity ?? 0));
-    if (qty <= 0) continue;
-    let product = null;
-    if (item.productId) {
-      product = allProducts.find(p => p.id === item.productId) ?? null;
+    const [created] = await tx.insert(invoicesTable).values({
+      businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
+      customerId: resolvedCustomerId, customerName: resolvedCustomerName,
+      customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
+      isInterstate, notes, items: gstCalc.items,
+      subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(),
+      sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(),
+      totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(),
+      roundOff: gstCalc.roundOff.toString(), paidAmount: "0",
+    }).returning();
+
+    // Deduct stock for each sold item.
+    const allProducts = await tx.select().from(productsTable).where(eq(productsTable.businessId, businessId));
+    for (const item of gstCalc.items) {
+      const qty = parseFloat(String(item.quantity ?? 0));
+      if (qty <= 0) continue;
+      let product = null;
+      if (item.productId) {
+        product = allProducts.find((p: any) => p.id === item.productId) ?? null;
+      }
+      if (!product && item.description) {
+        product = allProducts.find((p: any) => p.name.toLowerCase() === String(item.description).toLowerCase()) ?? null;
+      }
+      if (product) {
+        const newQty = Math.max(0, parseFloat(product.stockQuantity) - qty);
+        await tx.update(productsTable).set({ stockQuantity: newQty.toString() }).where(eq(productsTable.id, product.id));
+      }
     }
-    if (!product && item.description) {
-      product = allProducts.find(p => p.name.toLowerCase() === String(item.description).toLowerCase()) ?? null;
-    }
-    if (product) {
-      const newQty = Math.max(0, parseFloat(product.stockQuantity) - qty);
-      await db.update(productsTable).set({ stockQuantity: newQty.toString() }).where(eq(productsTable.id, product.id));
-    }
-  }
+
+    return created;
+  });
 
   return res.status(201).json({ invoice: mapInvoice(invoice) });
 });

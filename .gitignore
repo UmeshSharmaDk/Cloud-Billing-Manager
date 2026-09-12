@@ -27,6 +27,11 @@ node_modules
 !.vscode/launch.json
 !.vscode/extensions.json
 
+# secrets — nothing with real credentials belongs in the repository
+.env
+.env.*
+!.env.example
+
 # misc
 /.sass-cache
 /connect.lock

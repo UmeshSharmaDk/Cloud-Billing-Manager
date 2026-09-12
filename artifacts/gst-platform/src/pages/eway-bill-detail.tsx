@@ -5,18 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Printer, XCircle, Truck, CheckCircle2, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
-
-function authFetch(url: string, options?: RequestInit) {
-  const token = localStorage.getItem("gst_token");
-  return fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options?.headers ?? {}),
-    },
-  });
-}
+import { authFetch } from "@/lib/api-fetch";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
   draft:     { label: "Draft",     icon: Clock,        className: "text-gray-600 bg-gray-100" },
