@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, productsTable } from "@workspace/db";
 import { eq, ilike, and, lte, sql, count } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
+import { dec, toColumn, toJson } from "../lib/money";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { ListProductsQuery, CreateProductBody, UpdateProductBody, IdParam } from "../schemas";
 
@@ -10,11 +11,11 @@ const router = Router();
 function mapProduct(p: any) {
   return {
     ...p,
-    purchasePrice: p.purchasePrice ? parseFloat(p.purchasePrice) : null,
-    sellingPrice: p.sellingPrice ? parseFloat(p.sellingPrice) : null,
-    gstRate: parseFloat(p.gstRate),
-    stockQuantity: parseFloat(p.stockQuantity),
-    lowStockThreshold: p.lowStockThreshold ? parseFloat(p.lowStockThreshold) : null,
+    purchasePrice: p.purchasePrice ? toJson(p.purchasePrice) : null,
+    sellingPrice: p.sellingPrice ? toJson(p.sellingPrice) : null,
+    gstRate: Number(dec(p.gstRate).toFixed(2)),
+    stockQuantity: Number(dec(p.stockQuantity).toFixed(3)),
+    lowStockThreshold: p.lowStockThreshold ? Number(dec(p.lowStockThreshold).toFixed(3)) : null,
   };
 }
 
@@ -39,11 +40,11 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateProductBody), 
   if (!name || !unit) return res.status(400).json({ error: "name and unit required" });
   const [product] = await db.insert(productsTable).values({
     businessId, name, sku, hsnCode, unit,
-    purchasePrice: purchasePrice?.toString(),
-    sellingPrice: sellingPrice?.toString(),
-    gstRate: (gstRate ?? 18).toString(),
-    stockQuantity: stockQuantity.toString(),
-    lowStockThreshold: lowStockThreshold?.toString(),
+    purchasePrice: purchasePrice === undefined || purchasePrice === null ? undefined : toColumn(purchasePrice),
+    sellingPrice: sellingPrice === undefined || sellingPrice === null ? undefined : toColumn(sellingPrice),
+    gstRate: dec(gstRate ?? 18).toFixed(2),
+    stockQuantity: dec(stockQuantity).toFixed(3),
+    lowStockThreshold: lowStockThreshold === undefined || lowStockThreshold === null ? undefined : dec(lowStockThreshold).toFixed(3),
     description, category,
   }).returning();
   return res.status(201).json(mapProduct(product));
@@ -59,10 +60,15 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateProductBody), async (req: any, res) => {
   const businessId = req.businessId;
   const fields = ["name","sku","hsnCode","unit","description","category","isActive"];
-  const numericFields = ["purchasePrice","sellingPrice","gstRate","stockQuantity","lowStockThreshold"];
+  // Money to two places, quantities to three — matching the column scales, so
+  // nothing is silently re-rounded on the way in.
+  const moneyFields = ["purchasePrice", "sellingPrice"];
+  const quantityFields = ["stockQuantity", "lowStockThreshold"];
   const updates: any = {};
   for (const f of fields) if (req.body[f] !== undefined) updates[f] = req.body[f];
-  for (const f of numericFields) if (req.body[f] !== undefined) updates[f] = req.body[f]?.toString();
+  for (const f of moneyFields) if (req.body[f] !== undefined) updates[f] = req.body[f] === null ? null : toColumn(req.body[f]);
+  for (const f of quantityFields) if (req.body[f] !== undefined) updates[f] = req.body[f] === null ? null : dec(req.body[f]).toFixed(3);
+  if (req.body.gstRate !== undefined) updates.gstRate = dec(req.body.gstRate).toFixed(2);
   const [product] = await db.update(productsTable).set(updates).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId))).returning();
   if (!product) return res.status(404).json({ error: "Not found" });
   return res.json(mapProduct(product));

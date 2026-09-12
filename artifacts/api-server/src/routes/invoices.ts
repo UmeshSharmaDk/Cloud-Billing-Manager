@@ -3,66 +3,81 @@ import { db, invoicesTable, businessesTable, customersTable, productsTable, invo
 import { eq, ilike, and, count, gte, lte, desc, sql } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 
 const router = Router();
 
 function calcGst(items: any[], isInterstate: boolean) {
-  let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
-  const processed = items.map(item => {
-    const qty = parseFloat(String(item.quantity ?? 1));
+  // Each line is rounded to paise here, and the invoice totals are the sum of
+  // those rounded values. The previous version accumulated the unrounded
+  // amounts, so the stored lines did not add up to the stored total.
+  const processed = items.map((item) => {
+    const qty = dec(item.quantity ?? 1);
     // Accept both `unitPrice` (frontend) and `rate` (legacy)
-    const rate = parseFloat(String(item.unitPrice ?? item.rate ?? 0));
-    const discount = parseFloat(String(item.discount ?? 0));
-    const gstRate = parseFloat(String(item.gstRate ?? 0));
-    const taxableAmount = qty * rate * (1 - discount / 100);
-    let itemCgst = 0, itemSgst = 0, itemIgst = 0;
-    if (isInterstate) {
-      itemIgst = taxableAmount * gstRate / 100;
-    } else {
-      itemCgst = taxableAmount * gstRate / 100 / 2;
-      itemSgst = taxableAmount * gstRate / 100 / 2;
-    }
-    subtotal += taxableAmount;
-    cgst += itemCgst;
-    sgst += itemSgst;
-    igst += itemIgst;
+    const rate = dec(item.unitPrice ?? item.rate ?? 0);
+    const discount = dec(item.discount ?? 0);
+    const gstRate = dec(item.gstRate ?? 0);
+
+    const taxableAmount = paise(
+      qty.times(rate).times(new Decimal(100).minus(discount)).dividedBy(100),
+    );
+    const lineGst = paise(taxableAmount.times(gstRate).dividedBy(100));
+
+    const igst = isInterstate ? lineGst : new Decimal(0);
+    const { cgst, sgst } = isInterstate
+      ? { cgst: new Decimal(0), sgst: new Decimal(0) }
+      : splitGst(lineGst);
+
     return {
       ...item,
-      unitPrice: rate,
-      taxableAmount: Math.round(taxableAmount * 100) / 100,
-      cgst: Math.round(itemCgst * 100) / 100,
-      sgst: Math.round(itemSgst * 100) / 100,
-      igst: Math.round(itemIgst * 100) / 100,
-      totalAmount: Math.round((taxableAmount + itemCgst + itemSgst + itemIgst) * 100) / 100,
+      unitPrice: rate.toNumber(),
+      taxableAmount: toJson(taxableAmount),
+      cgst: toJson(cgst),
+      sgst: toJson(sgst),
+      igst: toJson(igst),
+      // Exactly the sum of this line's own parts.
+      totalAmount: toJson(sum([taxableAmount, cgst, sgst, igst])),
     };
   });
-  const totalGst = cgst + sgst + igst;
-  const grandTotalRaw = subtotal + totalGst;
-  const grandTotal = Math.round(grandTotalRaw);
-  const roundOff = Math.round((grandTotal - grandTotalRaw) * 100) / 100;
+
+  const subtotal = sumBy(processed, (i) => i.taxableAmount);
+  const cgst = sumBy(processed, (i) => i.cgst);
+  const sgst = sumBy(processed, (i) => i.sgst);
+  const igst = sumBy(processed, (i) => i.igst);
+  const totalGst = sum([cgst, sgst, igst]);
+
+  const payable = subtotal.plus(totalGst);
+  const grandTotal = rupees(payable);
+  const roundOff = paise(grandTotal.minus(payable));
+
   return {
-    subtotal: Math.round(subtotal * 100) / 100,
-    cgst: Math.round(cgst * 100) / 100,
-    sgst: Math.round(sgst * 100) / 100,
-    igst: Math.round(igst * 100) / 100,
-    totalGst: Math.round(totalGst * 100) / 100,
-    grandTotal, roundOff, items: processed,
+    subtotal: toJson(subtotal),
+    cgst: toJson(cgst),
+    sgst: toJson(sgst),
+    igst: toJson(igst),
+    totalGst: toJson(totalGst),
+    grandTotal: grandTotal.toNumber(),
+    roundOff: toJson(roundOff),
+    items: processed,
   };
 }
 
 function mapInvoice(inv: any) {
+  const grandTotal = dec(inv.grandTotal);
+  const paidAmount = dec(inv.paidAmount);
+  const balanceDue = grandTotal.minus(paidAmount);
   return {
     ...inv,
-    subtotal: parseFloat(inv.subtotal),
-    cgst: parseFloat(inv.cgst),
-    sgst: parseFloat(inv.sgst),
-    igst: parseFloat(inv.igst),
-    totalGst: parseFloat(inv.totalGst),
-    grandTotal: parseFloat(inv.grandTotal),
-    roundOff: parseFloat(inv.roundOff),
-    paidAmount: parseFloat(inv.paidAmount),
-    balanceDue: Math.max(0, parseFloat(inv.grandTotal) - parseFloat(inv.paidAmount)),
+    subtotal: toJson(inv.subtotal),
+    cgst: toJson(inv.cgst),
+    sgst: toJson(inv.sgst),
+    igst: toJson(inv.igst),
+    totalGst: toJson(inv.totalGst),
+    grandTotal: toJson(grandTotal),
+    roundOff: toJson(inv.roundOff),
+    paidAmount: toJson(paidAmount),
+    balanceDue: toJson(balanceDue.isNegative() ? new Decimal(0) : balanceDue),
     items: Array.isArray(inv.items) ? inv.items : [],
   };
 }
@@ -173,17 +188,17 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
       customerId: resolvedCustomerId, customerName: resolvedCustomerName,
       customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
       isInterstate, notes, items: gstCalc.items,
-      subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(),
-      sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(),
-      totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(),
-      roundOff: gstCalc.roundOff.toString(), paidAmount: "0",
+      subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst),
+      sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst),
+      totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal),
+      roundOff: toColumn(gstCalc.roundOff), paidAmount: "0.00",
     }).returning();
 
     // Deduct stock for each sold item.
     const allProducts = await tx.select().from(productsTable).where(eq(productsTable.businessId, businessId));
     for (const item of gstCalc.items) {
-      const qty = parseFloat(String(item.quantity ?? 0));
-      if (qty <= 0) continue;
+      const qty = dec(item.quantity ?? 0);
+      if (qty.lessThanOrEqualTo(0)) continue;
       let product = null;
       if (item.productId) {
         product = allProducts.find((p: any) => p.id === item.productId) ?? null;
@@ -192,8 +207,9 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
         product = allProducts.find((p: any) => p.name.toLowerCase() === String(item.description).toLowerCase()) ?? null;
       }
       if (product) {
-        const newQty = Math.max(0, parseFloat(product.stockQuantity) - qty);
-        await tx.update(productsTable).set({ stockQuantity: newQty.toString() }).where(eq(productsTable.id, product.id));
+        const remaining = dec(product.stockQuantity).minus(qty);
+        const newQty = remaining.isNegative() ? new Decimal(0) : remaining;
+        await tx.update(productsTable).set({ stockQuantity: newQty.toFixed(3) }).where(eq(productsTable.id, product.id));
       }
     }
 
@@ -220,7 +236,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   if (notes !== undefined) updates.notes = notes;
   if (items) {
     const gstCalc = calcGst(items, isInterstate ?? false);
-    Object.assign(updates, { items: gstCalc.items, subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(), sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(), totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(), roundOff: gstCalc.roundOff.toString(), isInterstate: isInterstate ?? false });
+    Object.assign(updates, { items: gstCalc.items, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: isInterstate ?? false });
     if (customerId) {
       const [customer] = await db.select().from(customersTable)
         .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
@@ -249,7 +265,7 @@ router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam
   const newStatus = paymentStatus ?? status;
   const updates: any = {};
   if (newStatus) updates.status = newStatus;
-  if (paidAmount !== undefined) updates.paidAmount = paidAmount.toString();
+  if (paidAmount !== undefined) updates.paidAmount = toColumn(paidAmount);
   const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).returning();
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));

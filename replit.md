@@ -56,6 +56,9 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   embedded in the stored hash. Pre-existing SHA-256 hashes are re-hashed transparently on next login
   — see `artifacts/api-server/src/lib/password.ts`
 - GST calculation: CGST+SGST for intra-state, IGST for inter-state, based on `placeOfSupply` vs business state code
+- Money and tax use exact decimal arithmetic (`artifacts/api-server/src/lib/money.ts`, decimal.js).
+  Round at the line, then sum the rounded values, so an invoice total is always the exact sum of its
+  items — which is what a GSTR-1 return has to show. Do not reintroduce `parseFloat` for amounts.
 - Invoice numbering: `<prefix>-<financial year>-<0001>`, allocated from the `invoice_counters` table.
   Indian FY (April–March), never reused, unique per business at the database level
 - Privileged admin actions are recorded in `audit_log` and require the admin to re-enter their own

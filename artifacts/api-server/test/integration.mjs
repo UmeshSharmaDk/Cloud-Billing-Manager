@@ -629,6 +629,73 @@ const adminEmail = `admin${uniq}@example.test`;
     `status ${good.status}`);
 }
 
+
+// === money: line items must reconcile against the totals ===================
+{
+  const biz = await register("money");
+  await call("PATCH", "/business", { token: biz.token, body: { stateCode: "29" } });
+
+  const mk = (items, place = "29") => call("POST", "/invoices", {
+    token: biz.token,
+    body: { invoiceDate: "2026-08-01", customerName: "X", placeOfSupply: place, items },
+  });
+  const near = (a, b) => Math.abs(a - b) < 0.005;
+  const sumOf = (items, k) => Math.round(items.reduce((t, i) => t + Number(i[k]), 0) * 100) / 100;
+
+  // The exact shape that used to drift a paisa.
+  {
+    const inv = (await mk(Array.from({ length: 3 }, () => (
+      { description: "a", quantity: 1, unitPrice: 33.333, gstRate: 18 })))).data.invoice;
+    check("money", "3 x 33.333: line taxable values sum to the subtotal",
+      near(sumOf(inv.items, "taxableAmount"), inv.subtotal),
+      `lines ${sumOf(inv.items, "taxableAmount")} vs subtotal ${inv.subtotal}`);
+    check("money", "...CGST reconciles", near(sumOf(inv.items, "cgst"), inv.cgst));
+    check("money", "...SGST reconciles", near(sumOf(inv.items, "sgst"), inv.sgst));
+  }
+
+  // A spread of awkward values, intra- and inter-state.
+  {
+    const items = [
+      { description: "a", quantity: 3, unitPrice: 19.99, gstRate: 5 },
+      { description: "b", quantity: 1.5, unitPrice: 1234.567, gstRate: 12, discount: 7.5 },
+      { description: "c", quantity: 7, unitPrice: 0.01, gstRate: 28 },
+      { description: "d", quantity: 2.125, unitPrice: 99.995, gstRate: 18 },
+      { description: "e", quantity: 11, unitPrice: 3.33, gstRate: 0 },
+    ];
+    for (const [label, place] of [["intra-state", "29"], ["inter-state", "27"]]) {
+      const inv = (await mk(items, place)).data.invoice;
+      check("money", `${label}: lines sum to the subtotal`,
+        near(sumOf(inv.items, "taxableAmount"), inv.subtotal),
+        `${sumOf(inv.items, "taxableAmount")} vs ${inv.subtotal}`);
+      check("money", `${label}: CGST+SGST+IGST equals the total GST`,
+        near(inv.cgst + inv.sgst + inv.igst, inv.totalGst));
+      check("money", `${label}: grand total less round-off is subtotal + GST`,
+        near(inv.grandTotal - inv.roundOff, inv.subtotal + inv.totalGst),
+        `${inv.grandTotal} - ${inv.roundOff} vs ${inv.subtotal + inv.totalGst}`);
+      check("money", `${label}: each line's parts sum to its own total`,
+        inv.items.every((i) => near(i.taxableAmount + i.cgst + i.sgst + i.igst, i.totalAmount)));
+    }
+  }
+
+  // GSTR-1: the filed totals must match the invoices they are built from.
+  {
+    const r = await call("GET", "/reports/gstr1?month=8&year=2026", { token: biz.token });
+    const g = r.data;
+    check("money", "GSTR-1 taxable value equals the sum of its invoices",
+      near(sumOf(g.invoices, "subtotal"), g.totalTaxableValue),
+      `${sumOf(g.invoices, "subtotal")} vs ${g.totalTaxableValue}`);
+    check("money", "GSTR-1 CGST/SGST/IGST each reconcile",
+      near(sumOf(g.invoices, "cgst"), g.totalCgst) &&
+      near(sumOf(g.invoices, "sgst"), g.totalSgst) &&
+      near(sumOf(g.invoices, "igst"), g.totalIgst));
+    check("money", "GSTR-1 rate-wise taxable values sum to the total",
+      near(g.byRate.reduce((t, b) => t + b.taxable, 0), g.totalTaxableValue),
+      `byRate ${Math.round(g.byRate.reduce((t, b) => t + b.taxable, 0) * 100) / 100} vs ${g.totalTaxableValue}`);
+    check("money", "GSTR-1 rate-wise GST sums to the total tax",
+      near(g.byRate.reduce((t, b) => t + b.gst, 0), g.totalTax));
+  }
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

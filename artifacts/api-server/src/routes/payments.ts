@@ -2,13 +2,14 @@ import { Router } from "express";
 import { db, paymentsTable } from "@workspace/db";
 import { eq, and, count, desc } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
+import { toColumn, toJson } from "../lib/money";
 import { validateBody, validateQuery } from "../middleware/validate";
 import { ListPaymentsQuery, CreatePaymentBody } from "../schemas";
 
 const router = Router();
 
 function mapPayment(p: any) {
-  return { ...p, amount: parseFloat(p.amount) };
+  return { ...p, amount: toJson(p.amount) };
 }
 
 router.get("/", requireAuth, requireBusiness, validateQuery(ListPaymentsQuery), async (req: any, res) => {
@@ -28,7 +29,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), 
   const { type, amount, date, mode, referenceNumber, invoiceId, customerId, vendorId, notes } = req.body;
   if (!type || !amount || !date || !mode) return res.status(400).json({ error: "Required fields missing" });
   const [payment] = await db.insert(paymentsTable).values({
-    businessId, type, amount: amount.toString(), date, mode,
+    businessId, type, amount: toColumn(amount), date, mode,
     referenceNumber, invoiceId, customerId, vendorId, notes,
   }).returning();
   return res.status(201).json(mapPayment(payment));

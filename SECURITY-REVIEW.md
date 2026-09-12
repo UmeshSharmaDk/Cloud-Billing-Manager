@@ -41,7 +41,7 @@ fortnight of disciplined hardening.
 
 All three phases of the remediation plan are implemented on branch
 `claude/security-threats-review-gq7rhu`. **Eighteen of the nineteen findings are fixed and
-verified** — 95 integration checks against a real Postgres plus 10 unit tests, both now running in CI. The nineteenth
+verified** — 110 integration checks against a real Postgres plus 25 unit tests, both now running in CI. The nineteenth
 (F-14's account-enumeration half) is partly done and cannot be finished in code alone; see below.
 
 | ID | Status | Verification |
@@ -107,6 +107,40 @@ interstate, and is charged IGST instead of CGST+SGST. The totals are right; the 
 wrong split is a wrong GST return. Not a security issue and not in any phase — but it should be fixed
 before the next filing, either by requiring the state code at registration or by refusing to issue an
 invoice while it is unset.
+
+### Money in floats — fixed
+
+The drift was real and reproducible. Three lines of 33.333 on one invoice:
+
+```
+stored line taxableAmounts : 33.33 + 33.33 + 33.33 = 99.99
+invoice subtotal           : 100.00
+DRIFT                      : 0.01
+```
+
+The float representation error was the smaller half. The structural error was that each line was
+rounded to paise for storage while the invoice totals accumulated the **unrounded** values — so the
+lines never added up to the total, by construction. On a GSTR-1 return both are filed and both are
+expected to reconcile.
+
+The rule is now: **round at the line, then sum the rounded values**, so a total is the exact sum of
+its parts. `artifacts/api-server/src/lib/money.ts` wraps `decimal.js` with the handful of operations
+this domain needs; `parseFloat` no longer appears anywhere in the API server. Two details worth
+naming:
+
+- **CGST and SGST are split, not computed twice.** Rounding each half independently could leave
+  `cgst + sgst` a paisa away from the tax actually charged. One half is rounded and the other is the
+  remainder, so they always reconstruct the total.
+- **Values reach Postgres as decimal text**, not as a float rendered to a string, so nothing passes
+  through a binary float on the way into a `numeric` column.
+
+Verified: the same invoice now reports a subtotal of 99.99 — the honest figure — and reconciles.
+A property test over 500 generated invoices (fractional quantities, discounts, every GST slab,
+intra- and inter-state) asserts that lines sum exactly to the subtotal, to each tax component, and
+that grand total less round-off reconstructs the payable amount; 2,000 generated splits confirm
+CGST + SGST never loses or invents a paisa. The suite also records that the old float implementation
+*fails* the same invariant, so the regression cannot quietly return. End to end, GSTR-1's taxable
+value, tax components and rate-wise breakdown all reconcile against the invoices they are built from.
 
 ### Follow-up after Phase 3
 

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db, ewayBillsTable, businessesTable, invoicesTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
+import { dec, toColumn, toJson } from "../lib/money";
 import { validateBody, validateParams } from "../middleware/validate";
 import { CreateEwayBillBody, UpdateEwayBillBody, IdParam } from "../schemas";
 
@@ -10,11 +11,11 @@ const router = Router();
 function mapBill(b: any) {
   return {
     ...b,
-    totalValue: parseFloat(b.totalValue ?? "0"),
-    cgstValue: parseFloat(b.cgstValue ?? "0"),
-    sgstValue: parseFloat(b.sgstValue ?? "0"),
-    igstValue: parseFloat(b.igstValue ?? "0"),
-    totalInvValue: parseFloat(b.totalInvValue ?? "0"),
+    totalValue: toJson(b.totalValue ?? "0"),
+    cgstValue: toJson(b.cgstValue ?? "0"),
+    sgstValue: toJson(b.sgstValue ?? "0"),
+    igstValue: toJson(b.igstValue ?? "0"),
+    totalInvValue: toJson(b.totalInvValue ?? "0"),
     items: Array.isArray(b.items) ? b.items : [],
   };
 }
@@ -61,14 +62,14 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody),
     fromGstin, fromTrdName, fromAddr1, fromCity, fromState, fromPincode,
     toGstin, toTrdName, toAddr1, toCity, toState, toPincode,
     transMode: transMode ?? "1",
-    transDistance: transDistance ? String(transDistance) : null,
+    transDistance: transDistance === undefined || transDistance === null ? null : dec(transDistance).toFixed(2),
     transporterName, transporterId, transDocNo, transDocDate,
     vehicleNo, vehicleType: vehicleType ?? "R",
-    totalValue: totalValue ? String(totalValue) : "0",
-    cgstValue: cgstValue ? String(cgstValue) : "0",
-    sgstValue: sgstValue ? String(sgstValue) : "0",
-    igstValue: igstValue ? String(igstValue) : "0",
-    totalInvValue: totalInvValue ? String(totalInvValue) : "0",
+    totalValue: toColumn(totalValue ?? 0),
+    cgstValue: toColumn(cgstValue ?? 0),
+    sgstValue: toColumn(sgstValue ?? 0),
+    igstValue: toColumn(igstValue ?? 0),
+    totalInvValue: toColumn(totalInvValue ?? 0),
     items,
     invoiceId: resolvedInvoiceId,
     status: "draft",
@@ -100,7 +101,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   if (ewbDate !== undefined) updates.ewbDate = ewbDate;
   if (validUpto !== undefined) updates.validUpto = validUpto;
   if (transMode !== undefined) updates.transMode = transMode;
-  if (transDistance !== undefined) updates.transDistance = String(transDistance);
+  if (transDistance !== undefined) updates.transDistance = transDistance === null ? null : dec(transDistance).toFixed(2);
   if (transporterName !== undefined) updates.transporterName = transporterName;
   if (transporterId !== undefined) updates.transporterId = transporterId;
   if (transDocNo !== undefined) updates.transDocNo = transDocNo;
