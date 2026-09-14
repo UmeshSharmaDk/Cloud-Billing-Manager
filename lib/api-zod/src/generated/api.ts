@@ -88,6 +88,15 @@ export const GetMeResponse = zod.object({
 
 
 /**
+ * Revokes every session this account holds, including bearer tokens on clients with no cookie jar. Ordinary logout ends only the calling device's session.
+ * @summary Sign out on every device
+ */
+export const LogoutAllResponse = zod.object({
+  "success": zod.boolean()
+})
+
+
+/**
  * @summary List all users (admin)
  */
 export const ListUsersQueryParams = zod.object({
@@ -675,12 +684,14 @@ export const ListInvoicesResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -699,8 +710,10 @@ export const ListInvoicesResponse = zod.object({
  * @summary Create invoice
  */
 export const CreateInvoiceBody = zod.object({
-  "type": zod.string(),
-  "customerId": zod.number(),
+  "type": zod.string().optional(),
+  "customerId": zod.number().optional().describe('Omit for a walk-in customer and send `customerName` instead. The id must belong to the caller\'s own business.'),
+  "customerName": zod.string().optional().describe('Required when `customerId` is omitted.'),
+  "customerGstin": zod.string().nullish(),
   "invoiceDate": zod.string(),
   "dueDate": zod.string().nullish(),
   "placeOfSupply": zod.string().nullish(),
@@ -708,12 +721,14 @@ export const CreateInvoiceBody = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -755,12 +770,14 @@ export const GetInvoiceResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -790,12 +807,14 @@ export const UpdateInvoiceBody = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -829,12 +848,14 @@ export const UpdateInvoiceResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -863,7 +884,8 @@ export const UpdateInvoiceStatusParams = zod.object({
 })
 
 export const UpdateInvoiceStatusBody = zod.object({
-  "status": zod.string(),
+  "status": zod.enum(['paid', 'unpaid', 'partial', 'cancelled']).optional(),
+  "paymentStatus": zod.enum(['paid', 'unpaid', 'partial', 'cancelled']).optional().describe('Alias for `status`; whichever is present is used.'),
   "paidAmount": zod.number().nullish()
 })
 
@@ -890,12 +912,14 @@ export const UpdateInvoiceStatusResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -938,11 +962,13 @@ export const ListPurchasesResponse = zod.object({
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
   "productId": zod.number().nullish(),
-  "productName": zod.string(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
   "sgst": zod.number().optional(),
@@ -961,17 +987,21 @@ export const ListPurchasesResponse = zod.object({
  */
 export const CreatePurchaseBody = zod.object({
   "vendorId": zod.number(),
-  "invoiceNumber": zod.string(),
-  "invoiceDate": zod.string(),
+  "billNumber": zod.string().optional().describe('Bill reference. This is what clients send; generated when omitted.'),
+  "billDate": zod.coerce.date().optional().describe('Bill date. This is what clients send.'),
+  "invoiceNumber": zod.string().optional().describe('Legacy alias for `billNumber`.'),
+  "invoiceDate": zod.string().optional(),
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
   "productId": zod.number().nullish(),
-  "productName": zod.string(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
   "sgst": zod.number().optional(),
@@ -1006,11 +1036,13 @@ export const GetPurchaseResponse = zod.object({
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
   "productId": zod.number().nullish(),
-  "productName": zod.string(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
   "sgst": zod.number().optional(),
@@ -1037,11 +1069,13 @@ export const UpdatePurchaseBody = zod.object({
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
   "productId": zod.number().nullish(),
-  "productName": zod.string(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
   "sgst": zod.number().optional(),
@@ -1068,11 +1102,13 @@ export const UpdatePurchaseResponse = zod.object({
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
   "productId": zod.number().nullish(),
-  "productName": zod.string(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
   "sgst": zod.number().optional(),
@@ -1178,12 +1214,14 @@ export const GetRecentInvoicesResponseItem = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -1296,12 +1334,14 @@ export const GetGstr1ReportResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -1354,12 +1394,14 @@ export const GetGstr3bReportResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -1409,12 +1451,14 @@ export const GetSalesReportResponse = zod.object({
   "notes": zod.string().nullish(),
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
-  "productId": zod.number().nullable(),
-  "productName": zod.string(),
+  "productId": zod.number().nullish(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "discount": zod.number().optional(),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
@@ -1458,11 +1502,13 @@ export const GetPurchasesReportResponse = zod.object({
   "items": zod.array(zod.object({
   "id": zod.number().optional(),
   "productId": zod.number().nullish(),
-  "productName": zod.string(),
+  "description": zod.string().optional().describe('Line description. This is what clients send.'),
+  "productName": zod.string().optional().describe('Legacy alias for `description`. Accepted, never returned.'),
   "hsnCode": zod.string().nullish(),
   "quantity": zod.number(),
   "unit": zod.string().nullish(),
-  "rate": zod.number(),
+  "unitPrice": zod.number().optional().describe('Price per unit. This is what clients send.'),
+  "rate": zod.number().optional().describe('Legacy alias for `unitPrice`. Accepted, never returned.'),
   "gstRate": zod.number(),
   "cgst": zod.number().optional(),
   "sgst": zod.number().optional(),
@@ -1523,6 +1569,213 @@ export const GetHsnReportResponse = zod.object({
   "igst": zod.number(),
   "totalTax": zod.number()
 }))
+})
+
+
+/**
+ * @summary List platform users
+ */
+export const adminListUsersQueryPageDefault = 1;
+
+export const adminListUsersQueryLimitDefault = 20;
+export const adminListUsersQueryLimitMax = 100;
+
+
+
+export const AdminListUsersQueryParams = zod.object({
+  "search": zod.coerce.string().optional(),
+  "page": zod.coerce.number().min(1).default(adminListUsersQueryPageDefault),
+  "limit": zod.coerce.number().min(1).max(adminListUsersQueryLimitMax).default(adminListUsersQueryLimitDefault)
+})
+
+export const AdminListUsersResponse = zod.object({
+  "users": zod.array(zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.string(),
+  "isActive": zod.boolean(),
+  "subscriptionStatus": zod.string().nullish(),
+  "subscriptionEnd": zod.string().nullish(),
+  "businessId": zod.number().nullish(),
+  "createdAt": zod.string().optional()
+})),
+  "total": zod.number()
+})
+
+
+/**
+ * @summary Get a user with their business and record counts
+ */
+export const AdminGetUserParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AdminGetUserResponse = zod.record(zod.string(), zod.unknown())
+
+
+/**
+ * Changing `role` requires `confirmPassword` — the calling administrator's own password. Other edits do not.
+ * @summary Update a user's status, subscription or role
+ */
+export const AdminUpdateUserParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const AdminUpdateUserBody = zod.object({
+  "isActive": zod.boolean().optional(),
+  "role": zod.enum(['user', 'admin']).optional(),
+  "subscriptionStatus": zod.enum(['trial', 'monthly', 'yearly', 'expired']).nullish(),
+  "subscriptionEnd": zod.string().nullish(),
+  "confirmPassword": zod.string().optional().describe('The calling administrator\'s own password. Required to change `role`.')
+})
+
+export const AdminUpdateUserResponse = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.string(),
+  "isActive": zod.boolean(),
+  "subscriptionStatus": zod.string().nullish(),
+  "subscriptionEnd": zod.string().nullish(),
+  "businessId": zod.number().nullish(),
+  "createdAt": zod.string().optional()
+})
+
+
+/**
+ * @summary List e-way bills
+ */
+export const ListEwayBillsResponse = zod.object({
+  "bills": zod.array(zod.object({
+  "id": zod.number(),
+  "businessId": zod.number(),
+  "docNo": zod.string(),
+  "docDate": zod.coerce.date(),
+  "status": zod.enum(['draft', 'generated', 'cancelled']),
+  "ewbNo": zod.string().nullish(),
+  "vehicleNo": zod.string().nullish(),
+  "totalValue": zod.number().optional(),
+  "cgstValue": zod.number().optional(),
+  "sgstValue": zod.number().optional(),
+  "igstValue": zod.number().optional(),
+  "totalInvValue": zod.number().optional(),
+  "items": zod.array(zod.record(zod.string(), zod.unknown())).optional()
+}))
+})
+
+
+/**
+ * @summary Create an e-way bill
+ */
+export const CreateEwayBillBody = zod.object({
+  "docNo": zod.string(),
+  "docDate": zod.coerce.date(),
+  "supplyType": zod.string().nullish(),
+  "subSupplyType": zod.string().nullish(),
+  "docType": zod.string().nullish(),
+  "fromGstin": zod.string().nullish(),
+  "fromTrdName": zod.string().nullish(),
+  "fromAddr1": zod.string().nullish(),
+  "fromCity": zod.string().nullish(),
+  "fromState": zod.string().nullish(),
+  "fromPincode": zod.string().nullish(),
+  "toGstin": zod.string().nullish(),
+  "toTrdName": zod.string().nullish(),
+  "toAddr1": zod.string().nullish(),
+  "toCity": zod.string().nullish(),
+  "toState": zod.string().nullish(),
+  "toPincode": zod.string().nullish(),
+  "transMode": zod.string().nullish(),
+  "transDistance": zod.number().nullish(),
+  "transporterName": zod.string().nullish(),
+  "transporterId": zod.string().nullish(),
+  "transDocNo": zod.string().nullish(),
+  "transDocDate": zod.string().nullish(),
+  "vehicleNo": zod.string().nullish(),
+  "vehicleType": zod.string().nullish(),
+  "totalValue": zod.number().nullish(),
+  "cgstValue": zod.number().nullish(),
+  "sgstValue": zod.number().nullish(),
+  "igstValue": zod.number().nullish(),
+  "totalInvValue": zod.number().nullish(),
+  "items": zod.array(zod.record(zod.string(), zod.unknown())).optional(),
+  "invoiceId": zod.number().nullish().describe('Must reference an invoice belonging to the caller\'s own business.')
+})
+
+
+/**
+ * @summary Get an e-way bill
+ */
+export const GetEwayBillParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const GetEwayBillResponse = zod.object({
+  "id": zod.number(),
+  "businessId": zod.number(),
+  "docNo": zod.string(),
+  "docDate": zod.coerce.date(),
+  "status": zod.enum(['draft', 'generated', 'cancelled']),
+  "ewbNo": zod.string().nullish(),
+  "vehicleNo": zod.string().nullish(),
+  "totalValue": zod.number().optional(),
+  "cgstValue": zod.number().optional(),
+  "sgstValue": zod.number().optional(),
+  "igstValue": zod.number().optional(),
+  "totalInvValue": zod.number().optional(),
+  "items": zod.array(zod.record(zod.string(), zod.unknown())).optional()
+})
+
+
+/**
+ * @summary Update transport details or status
+ */
+export const UpdateEwayBillParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateEwayBillBody = zod.object({
+  "status": zod.enum(['draft', 'generated', 'cancelled']).optional(),
+  "ewbNo": zod.string().nullish(),
+  "ewbDate": zod.string().nullish(),
+  "validUpto": zod.string().nullish(),
+  "transMode": zod.string().nullish(),
+  "transDistance": zod.number().nullish(),
+  "transporterName": zod.string().nullish(),
+  "transporterId": zod.string().nullish(),
+  "transDocNo": zod.string().nullish(),
+  "transDocDate": zod.string().nullish(),
+  "vehicleNo": zod.string().nullish(),
+  "vehicleType": zod.string().nullish()
+})
+
+export const UpdateEwayBillResponse = zod.object({
+  "id": zod.number(),
+  "businessId": zod.number(),
+  "docNo": zod.string(),
+  "docDate": zod.coerce.date(),
+  "status": zod.enum(['draft', 'generated', 'cancelled']),
+  "ewbNo": zod.string().nullish(),
+  "vehicleNo": zod.string().nullish(),
+  "totalValue": zod.number().optional(),
+  "cgstValue": zod.number().optional(),
+  "sgstValue": zod.number().optional(),
+  "igstValue": zod.number().optional(),
+  "totalInvValue": zod.number().optional(),
+  "items": zod.array(zod.record(zod.string(), zod.unknown())).optional()
+})
+
+
+/**
+ * @summary Delete an e-way bill
+ */
+export const DeleteEwayBillParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteEwayBillResponse = zod.object({
+  "success": zod.boolean()
 })
 
 

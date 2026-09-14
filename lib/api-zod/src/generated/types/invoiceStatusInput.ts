@@ -5,9 +5,13 @@
  * GST Billing & Inventory Management Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { InvoiceStatusInputPaymentStatus } from './invoiceStatusInputPaymentStatus';
+import type { InvoiceStatusInputStatus } from './invoiceStatusInputStatus';
 
 export interface InvoiceStatusInput {
-  status: string;
+  status?: InvoiceStatusInputStatus;
+  /** Alias for `status`; whichever is present is used. */
+  paymentStatus?: InvoiceStatusInputPaymentStatus;
   /** @nullable */
   paidAmount?: number | null;
 }

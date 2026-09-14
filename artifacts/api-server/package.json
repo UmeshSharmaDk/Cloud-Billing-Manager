@@ -9,7 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:integration": "node test/integration.mjs",
-    "test:unit": "node test/password-policy.test.ts && node test/money.test.ts",
+    "test:unit": "node test/password-policy.test.ts && node test/money.test.ts && node test/spec-contract.test.mjs",
     "test": "pnpm run test:unit"
   },
   "dependencies": {

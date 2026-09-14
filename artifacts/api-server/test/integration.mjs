@@ -696,6 +696,160 @@ const adminEmail = `admin${uniq}@example.test`;
   }
 }
 
+
+// === aggregations: known data in, known numbers out ========================
+// These endpoints are being moved from "read every row and add it up in
+// JavaScript" to SQL aggregates. The figures are business-visible, so the
+// checks assert against independently computed expectations rather than a
+// snapshot of whatever the old code happened to return.
+{
+  const biz = await register("agg");
+  await call("PATCH", "/business", { token: biz.token, body: { stateCode: "29" } });
+  const T = { token: biz.token };
+
+  const mkInvoice = (date, unitPrice, qty, place = "29") => call("POST", "/invoices", {
+    ...T, body: { invoiceDate: date, customerName: "C", placeOfSupply: place,
+      items: [{ description: "w", quantity: qty, unitPrice, gstRate: 18 }] },
+  });
+
+  // Three invoices, all intra-state at 18%.
+  const i1 = (await mkInvoice("2026-08-05", 1000, 1)).data.invoice;   // 1000 + 180 = 1180
+  const i2 = (await mkInvoice("2026-08-06", 2000, 2)).data.invoice;   // 4000 + 720 = 4720
+  const i3 = (await mkInvoice("2026-08-07", 500, 3)).data.invoice;    // 1500 + 270 = 1770
+  await call("PATCH", `/invoices/${i2.id}/status`, { ...T, body: { status: "paid" } });
+
+  const vendor = (await call("POST", "/vendors", { ...T, body: { name: "V" } })).data;
+  const p1 = (await call("POST", "/purchases", { ...T, body: { vendorId: vendor.id, billDate: "2026-08-05",
+    items: [{ description: "raw", quantity: 10, unitPrice: 100, gstRate: 18 } ] } })).data; // 1000 + 180
+
+  await call("POST", "/customers", { ...T, body: { name: "Cust A" } });
+  await call("POST", "/customers", { ...T, body: { name: "Cust B" } });
+  await call("POST", "/products", { ...T, body: { name: "Low", unit: "Nos", stockQuantity: 1, lowStockThreshold: 5, sellingPrice: 10 } });
+  await call("POST", "/products", { ...T, body: { name: "Fine", unit: "Nos", stockQuantity: 99, lowStockThreshold: 5, sellingPrice: 10 } });
+
+  const expSales = i1.grandTotal + i2.grandTotal + i3.grandTotal;
+  const expGstOut = i1.totalGst + i2.totalGst + i3.totalGst;
+  const expOutstanding = i1.grandTotal + i3.grandTotal; // i2 was marked paid
+  const near = (a, b) => Math.abs(a - b) < 0.005;
+
+  const st = (await call("GET", "/dashboard/stats", T)).data;
+  check("aggregates", "dashboard totalSales matches the invoices raised",
+    near(st.totalSales, expSales), `${st.totalSales} vs ${expSales}`);
+  check("aggregates", "dashboard totalPurchases matches the bills recorded",
+    near(st.totalPurchases, p1.grandTotal), `${st.totalPurchases} vs ${p1.grandTotal}`);
+  check("aggregates", "dashboard totalGstPayable is output tax less input tax",
+    near(st.totalGstPayable, expGstOut - p1.totalGst), `${st.totalGstPayable} vs ${expGstOut - p1.totalGst}`);
+  check("aggregates", "dashboard totalOutstanding excludes the paid invoice",
+    near(st.totalOutstanding, expOutstanding), `${st.totalOutstanding} vs ${expOutstanding}`);
+  check("aggregates", "dashboard counts are right",
+    st.invoiceCount === 3 && st.customerCount === 2 && st.vendorCount === 1 && st.productCount >= 2,
+    `inv ${st.invoiceCount} cust ${st.customerCount} vend ${st.vendorCount} prod ${st.productCount}`);
+  check("aggregates", "dashboard lowStockCount counts only products under threshold",
+    st.lowStockCount === 1, String(st.lowStockCount));
+
+  // gst-summary is scoped to the CURRENT month, so the August invoices above
+  // must not appear in it. Raise one dated today and check both halves.
+  {
+    const before = (await call("GET", "/dashboard/gst-summary", T)).data;
+    const now = new Date();
+    const today = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-${String(now.getUTCDate()).padStart(2, "0")}`;
+    const thisMonth = (await mkInvoice(today, 1000, 1)).data.invoice;
+
+    const after = (await call("GET", "/dashboard/gst-summary", T)).data;
+    const outBefore = before.outputCgst + before.outputSgst + before.outputIgst;
+    const outAfter = after.outputCgst + after.outputSgst + after.outputIgst;
+    check("aggregates", "gst-summary counts only the current month",
+      near(outAfter - outBefore, thisMonth.totalGst),
+      `delta ${outAfter - outBefore} vs ${thisMonth.totalGst}`);
+    check("aggregates", "gst-summary net payable is output less input",
+      near(after.netPayable, outAfter - (after.inputCgst + after.inputSgst + after.inputIgst)),
+      `${after.netPayable}`);
+  }
+
+  const low = (await call("GET", "/dashboard/low-stock", T)).data;
+  check("aggregates", "low-stock returns exactly the product under threshold",
+    Array.isArray(low) && low.length === 1 && low[0].name === "Low", `${low?.length} rows`);
+
+  const top = (await call("GET", "/dashboard/top-products", T)).data;
+  check("aggregates", "top-products ranks by revenue",
+    Array.isArray(top) && top.length > 0 && top[0].totalRevenue >= (top[1]?.totalRevenue ?? 0),
+    JSON.stringify(top?.slice(0, 2)));
+
+  const rev = (await call("GET", "/dashboard/monthly-revenue", T)).data;
+  check("aggregates", "monthly-revenue returns six months",
+    Array.isArray(rev) && rev.length === 6, `${rev?.length} months`);
+  check("aggregates", "monthly-revenue months are labelled and numeric",
+    rev.every((m) => typeof m.month === "string" && Number.isFinite(m.sales)
+      && Number.isFinite(m.purchases) && Number.isFinite(m.gst)));
+
+  // Admin stats: seeded above, so only structural invariants are safe to assert.
+  const { execSync } = await import("node:child_process");
+  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${biz.userId}"`, { stdio: "ignore" });
+  const ad = (await call("GET", "/admin/stats", T)).data;
+  const dbUsers = Number(execSync(`psql -t -A "${process.env.DATABASE_URL}" -c "SELECT count(*) FROM users WHERE role <> 'admin' AND deleted_at IS NULL"`).toString().trim());
+  check("aggregates", "admin totalUsers counts non-admin, non-deleted users",
+    ad.totalUsers === dbUsers, `${ad.totalUsers} vs ${dbUsers}`);
+  check("aggregates", "admin active + inactive accounts for every counted user",
+    ad.activeUsers + ad.inactiveUsers === ad.totalUsers,
+    `${ad.activeUsers} + ${ad.inactiveUsers} vs ${ad.totalUsers}`);
+  check("aggregates", "admin recentUsers is capped at 10 and newest first",
+    ad.recentUsers.length <= 10 &&
+    ad.recentUsers.every((u, i, a) => i === 0 || new Date(a[i - 1].createdAt) >= new Date(u.createdAt)));
+  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='user' WHERE id=${biz.userId}"`, { stdio: "ignore" });
+}
+
+
+// === session revocation: bearer tokens can now be killed ===================
+{
+  const PW = "correct-horse-battery-staple";
+  const victim = await register("revoke");
+
+  // A bearer token works to begin with.
+  check("revocation", "a freshly issued bearer token works",
+    (await call("GET", "/auth/me", { token: victim.token })).status === 200);
+
+  // Signing out everywhere revokes it, even though it has no cookie to clear.
+  const jar = newJar();
+  await call("GET", "/healthz", { jar });
+  await call("POST", "/auth/login", { jar, body: { email: victim.email, password: PW } });
+  const all = await call("POST", "/auth/logout-all", { jar });
+  check("revocation", "logout-all succeeds", all.status === 200, `status ${all.status}`);
+  check("revocation", "the bearer token issued earlier is now rejected",
+    (await call("GET", "/auth/me", { token: victim.token })).status === 401);
+
+  // Changing a password revokes sessions held elsewhere...
+  const fresh = await call("POST", "/auth/login", { body: { email: victim.email, password: PW } });
+  const oldToken = fresh.data.token;
+  const jar2 = newJar();
+  await call("GET", "/healthz", { jar: jar2 });
+  await call("POST", "/auth/login", { jar: jar2, body: { email: victim.email, password: PW } });
+  const NEW_PW = "a-completely-different-passphrase-12";
+  const changed = await call("POST", "/auth/change-password", {
+    jar: jar2, body: { currentPassword: PW, newPassword: NEW_PW },
+  });
+  check("revocation", "password change succeeds", changed.status === 200, `status ${changed.status}`);
+  check("revocation", "a session held elsewhere is revoked by the password change",
+    (await call("GET", "/auth/me", { token: oldToken })).status === 401);
+  // ...but not the device that made the change.
+  check("revocation", "the device that changed the password stays signed in",
+    (await call("GET", "/auth/me", { jar: jar2 })).status === 200);
+
+  // An admin reset revokes the target's sessions.
+  const target = await register("resettarget");
+  const admin = await register("resetadmin");
+  const { execSync } = await import("node:child_process");
+  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${admin.userId}"`, { stdio: "ignore" });
+  const ajar = newJar();
+  await call("GET", "/healthz", { jar: ajar });
+  await call("POST", "/auth/login", { jar: ajar, body: { email: admin.email, password: PW } });
+  const reset = await call("POST", `/users/${target.userId}/reset-password`, {
+    jar: ajar, body: { newPassword: "yet-another-good-passphrase-44", confirmPassword: PW },
+  });
+  check("revocation", "admin reset succeeds", reset.status === 200, `status ${reset.status}`);
+  check("revocation", "the target's existing session is revoked by the reset",
+    (await call("GET", "/auth/me", { token: target.token })).status === 401);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

@@ -5,8 +5,18 @@ import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListPurchasesQuery, CreatePurchaseBody, UpdatePurchaseBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
+
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function calcPurchaseTotals(items: any[], isInterstate = false) {
   // Same rule as sales: round at the line, then sum the rounded values, so the
@@ -119,7 +129,7 @@ function mapPurchase(p: any) {
   };
 }
 
-router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery), async (req: any, res) => {
+router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const { search, vendorId, fromDate, toDate, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(purchasesTable.businessId, businessId)];
@@ -134,7 +144,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery),
   return res.json({ purchases: purchases.map(mapPurchase), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody), async (req: any, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody), async (req: Req, res) => {
   const businessId = req.businessId;
 
   // Accept both billNumber/billDate (frontend convention) and invoiceNumber/invoiceDate
@@ -180,14 +190,14 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody),
   return res.status(201).json(mapPurchase(purchase));
 });
 
-router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   const [purchase] = await db.select().from(purchasesTable).where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId))).limit(1);
   if (!purchase) return res.status(404).json({ error: "Not found" });
   return res.json(mapPurchase(purchase));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), async (req: any, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { vendorId, billNumber, billDate, invoiceNumber: rawNum, invoiceDate: rawDate, dueDate, notes, items, paymentStatus } = req.body;
   const updates: any = {};
@@ -224,7 +234,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   return res.json(mapPurchase(purchase));
 });
 
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   await db.delete(purchasesTable).where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)));
   return res.json({ success: true });

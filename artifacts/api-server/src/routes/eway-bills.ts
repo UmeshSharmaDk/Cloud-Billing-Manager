@@ -5,8 +5,18 @@ import { requireAuth, requireBusiness } from "./auth";
 import { dec, toColumn, toJson } from "../lib/money";
 import { validateBody, validateParams } from "../middleware/validate";
 import { CreateEwayBillBody, UpdateEwayBillBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
+
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function mapBill(b: any) {
   return {
@@ -20,7 +30,7 @@ function mapBill(b: any) {
   };
 }
 
-router.get("/", requireAuth, requireBusiness, async (req: any, res) => {
+router.get("/", requireAuth, requireBusiness, async (req: Req, res) => {
   const businessId = req.businessId;
   const bills = await db.select().from(ewayBillsTable)
     .where(eq(ewayBillsTable.businessId, businessId))
@@ -28,7 +38,7 @@ router.get("/", requireAuth, requireBusiness, async (req: any, res) => {
   return res.json({ bills: bills.map(mapBill) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody), async (req: any, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody), async (req: Req, res) => {
   const businessId = req.businessId;
 
   const {
@@ -78,7 +88,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody),
   return res.status(201).json({ bill: mapBill(bill) });
 });
 
-router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   const [bill] = await db.select().from(ewayBillsTable)
     .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, businessId)))
@@ -87,7 +97,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   return res.json(mapBill(bill));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateEwayBillBody), async (req: any, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateEwayBillBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const {
     status, ewbNo, ewbDate, validUpto,
@@ -118,7 +128,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   return res.json(mapBill(bill));
 });
 
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   await db.delete(ewayBillsTable)
     .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, businessId)));

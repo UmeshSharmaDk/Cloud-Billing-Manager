@@ -41,7 +41,7 @@ fortnight of disciplined hardening.
 
 All three phases of the remediation plan are implemented on branch
 `claude/security-threats-review-gq7rhu`. **Eighteen of the nineteen findings are fixed and
-verified** — 110 integration checks against a real Postgres plus 25 unit tests, both now running in CI. The nineteenth
+verified** — 133 integration checks against a real Postgres plus 34 unit tests, both running in CI. The nineteenth
 (F-14's account-enumeration half) is partly done and cannot be finished in code alone; see below.
 
 | ID | Status | Verification |
@@ -107,6 +107,54 @@ interstate, and is charged IGST instead of CGST+SGST. The totals are right; the 
 wrong split is a wrong GST return. Not a security issue and not in any phase — but it should be fixed
 before the next filing, either by requiring the state code at registration or by refusing to issue an
 invoice while it is unset.
+
+### Clearing the remaining backlog
+
+**F-11 is now fully closed.** `/dashboard/stats`, `/dashboard/gst-summary`, `/dashboard/low-stock`
+and `/admin/stats` computed their figures by reading whole tables into memory and filtering arrays;
+`/dashboard/monthly-revenue` issued twelve sequential queries, one per month per table. All are SQL
+aggregates now — two queries for the six-month series, `count(*) FILTER (...)` for the tallies. The
+rewrite was done test-first: the expected figures were pinned against independently computed
+expectations on seeded data *before* the change, and the SQL reproduces them exactly.
+
+**Bearer tokens can now be revoked.** A `tokenVersion` column on `users` is embedded in each token
+and checked on every request. Changing a password, an administrator resetting one, and deleting an
+account all bump it, so sessions held elsewhere die immediately rather than outliving the change by
+up to seven days. New `POST /auth/logout-all` revokes every session deliberately, with a
+**Sign out everywhere** control on the Settings → Security tab. Ordinary logout still ends only the
+calling device's session, which is what people expect. Tokens issued before the column existed carry
+no version and are treated as generation 0, so the upgrade does not sign everyone out.
+
+**The OpenAPI spec is a contract again.** The drift described above is fixed: walk-in invoices,
+`description`/`unitPrice` line items and `billNumber`/`billDate` purchases are all described
+correctly, with the old field names kept as deprecated aliases; `/auth/logout-all`, the admin user
+routes and the e-way bill routes are no longer missing. `test/spec-contract.test.mjs` validates the
+*generated* schemas against the payloads the frontend actually posts, so the next drift fails a test
+rather than being discovered by whoever tries to use them. `src/schemas/index.ts` stays hand-written,
+but for a better reason now: it carries bounds a contract cannot express — a GST rate capped at 28,
+money stopping short of what `numeric(15, 2)` holds, text lengths matched to their columns.
+
+**`req: any` is gone from the handlers.** New `lib/http.ts` types an authenticated request and a
+tenant-scoped one; 57 handlers use them. This is load-bearing, not decoration — a misspelled
+`req.buisnessId` and a read of a non-existent column on `req.user` are both compile errors now,
+verified by deliberately introducing each. The three middleware that *attach* those properties keep
+a loose signature, because they are what creates the shape.
+
+**Duplication:** `mapUser` moved to `lib/serialise.ts`, and `GET /api/users/admin/stats` — a second,
+subtly different copy of `/api/admin/stats` that counted deleted users and tallied administrators
+inconsistently — is deleted. One admin surface.
+
+### What is left, and why it is not code
+
+- **F-14's enumeration half** needs an email provider. Nothing about it is a coding problem.
+- **MFA for administrators** is a product feature — enrolment, QR provisioning, recovery codes, and
+  a policy for what happens when someone loses their authenticator. Shipping it badly is worse than
+  not shipping it, so it wants its own decision rather than a corner of a cleanup sweep.
+- **Postgres row-level security** is still the right durable answer to F-05, and is deliberately not
+  bundled here. It changes how *every* query executes, and the only thing that would have verified it
+  is the same suite that already passes — so folding it into a ten-item sweep would add risk without
+  adding demonstrated safety. It deserves a focused change.
+- **An external penetration test** remains the one step no amount of self-review substitutes for.
 
 ### Money in floats — fixed
 
@@ -214,7 +262,8 @@ threshold of 10.
    the server refuses to start without it, so set it *before* the next deploy.
 5. **Set `COOKIE_SAME_SITE=none`** only if the app and API are served from different sites. It
    requires HTTPS. The default `lax` is correct when they share a site.
-6. **Run the database migration.** Phase 3 adds `audit_log` and `invoice_counters`, a `deleted_at`
+6. **Run the database migration.** Phase 3 adds `audit_log` and `invoice_counters`, `deleted_at` and
+   `token_version` columns on `users`, a `deleted_at`
    column on `users`, and a unique index on `(business_id, invoice_number)`. Apply with
    `pnpm --filter @workspace/db run push`. The unique index will fail to build if duplicate invoice
    numbers already exist — if it does, that is the old `COUNT(*) + 1` bug showing up in real data,

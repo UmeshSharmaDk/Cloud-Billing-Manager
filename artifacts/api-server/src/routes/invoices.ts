@@ -5,8 +5,18 @@ import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
+
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function calcGst(items: any[], isInterstate: boolean) {
   // Each line is rounded to paise here, and the invoice totals are the sum of
@@ -124,7 +134,7 @@ async function nextInvoiceNumber(
   return `${prefix}-${fy}-${String(counter.lastNumber).padStart(4, "0")}`;
 }
 
-router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), async (req: any, res) => {
+router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const { search, type, status, customerId, fromDate, toDate, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(invoicesTable.businessId, businessId)];
@@ -141,7 +151,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), 
   return res.json({ invoices: invoices.map(mapInvoice), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), async (req: any, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), async (req: Req, res) => {
   const businessId = req.businessId;
 
   const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [] } = req.body;
@@ -219,14 +229,14 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
   return res.status(201).json({ invoice: mapInvoice(invoice) });
 });
 
-router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).limit(1);
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), async (req: any, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { type, customerId, invoiceDate, dueDate, placeOfSupply, isInterstate, notes, items } = req.body;
   const updates: any = {};
@@ -253,13 +263,13 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   return res.json(mapInvoice(invoice));
 });
 
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   await db.delete(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)));
   return res.json({ success: true });
 });
 
-router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: any, res) => {
+router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { paymentStatus, status, paidAmount } = req.body;
   const newStatus = paymentStatus ?? status;

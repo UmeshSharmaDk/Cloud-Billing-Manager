@@ -2,12 +2,14 @@ import { Router } from "express";
 import { db, usersTable, businessesTable } from "@workspace/db";
 import { eq, ilike, or, and, count, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
+import { mapUser } from "../lib/serialise";
 import { hashPassword } from "../lib/password";
 import { validatePassword } from "../lib/password-policy";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { requireStepUp, verifyStepUp } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import type { AuthedRequest, IdParams } from "../lib/http";
 import {
   ListUsersQuery, CreateUserBody, UpdateUserBody,
   ToggleStatusBody, ResetPasswordBody, IdParam,
@@ -15,16 +17,16 @@ import {
 
 const router = Router();
 
-function mapUser(user: any) {
-  return {
-    id: user.id, name: user.name, email: user.email, role: user.role,
-    isActive: user.isActive, subscriptionStatus: user.subscriptionStatus,
-    subscriptionEnd: user.subscriptionEnd, businessId: user.businessId,
-    createdAt: user.createdAt,
-  };
-}
+/**
+ * Handlers in this router run after `requireAuth`, so
+ * the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `user` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = AuthedRequest<any, any, IdParams>;
 
-router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async (req: any, res) => {
+
+router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async (req: Req, res) => {
   const { search, status, page, limit } = req.validatedQuery;
   const conditions: any[] = [];
   if (search) conditions.push(or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)));
@@ -41,7 +43,7 @@ router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async 
   return res.json({ users: users.map(mapUser), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async (req: any, res) => {
+router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
   const policyFailure = await validatePassword(password);
@@ -57,27 +59,15 @@ router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async 
   return res.status(201).json(mapUser(user));
 });
 
-router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res) => {
-  const allUsers = await db.select().from(usersTable);
-  const activeUsers = allUsers.filter(u => u.isActive && u.role !== "admin").length;
-  const inactiveUsers = allUsers.filter(u => !u.isActive).length;
-  const expiredSubscriptions = allUsers.filter(u => {
-    if (!u.subscriptionEnd) return false;
-    return new Date(u.subscriptionEnd) < new Date();
-  }).length;
-  const businesses = await db.select().from(businessesTable);
-  const recentUsers = allUsers.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 10);
-  return res.json({
-    totalUsers: allUsers.filter(u => u.role !== "admin").length,
-    activeUsers,
-    inactiveUsers,
-    expiredSubscriptions,
-    totalBusinesses: businesses.length,
-    recentUsers: recentUsers.map(mapUser),
-  });
-});
+/**
+ * `GET /api/users/admin/stats` used to live here: a second, subtly different
+ * copy of `GET /api/admin/stats` with its own bugs (it counted deleted users,
+ * and its "inactive" tally included administrators while "active" did not).
+ * Two overlapping admin surfaces is one too many — `/api/admin/stats` is the
+ * one the admin dashboard calls, and it is now the only one.
+ */
 
-router.get("/:id", requireAuth, validateParams(IdParam), async (req: any, res) => {
+router.get("/:id", requireAuth, validateParams(IdParam), async (req: Req, res) => {
   if (req.userRole !== "admin" && req.userId !== req.validatedParams.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
@@ -88,7 +78,7 @@ router.get("/:id", requireAuth, validateParams(IdParam), async (req: any, res) =
 });
 
 router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody),
-  async (req: any, res) => {
+  async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
 
@@ -131,7 +121,7 @@ router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validat
  * Soft-delete a user. The row and every business record attached to it stay
  * in place; a hard DELETE removed only the user and orphaned the rest.
  */
-router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: any, res) => {
+router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
   const targetId = req.validatedParams.id;
 
   const selfGuard = assertNotSelf(req.user.id, targetId);
@@ -144,7 +134,7 @@ router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async 
   if (guard) return res.status(409).json({ error: guard });
 
   await db.update(usersTable)
-    .set({ deletedAt: new Date(), isActive: false })
+    .set({ deletedAt: new Date(), isActive: false, tokenVersion: before.tokenVersion + 1 })
     .where(eq(usersTable.id, targetId));
 
   await recordAudit({
@@ -154,7 +144,7 @@ router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async 
   return res.json({ success: true });
 });
 
-router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdParam), validateBody(ToggleStatusBody), async (req: any, res) => {
+router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdParam), validateBody(ToggleStatusBody), async (req: Req, res) => {
   const targetId = req.validatedParams.id;
   const { isActive } = req.body;
 
@@ -180,7 +170,7 @@ router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdP
  * password, and it is recorded.
  */
 router.post("/:id/reset-password", requireAuth, requireAdmin, validateParams(IdParam),
-  validateBody(ResetPasswordBody), requireStepUp, async (req: any, res) => {
+  validateBody(ResetPasswordBody), requireStepUp, async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const { newPassword } = req.body;
 
@@ -190,8 +180,13 @@ router.post("/:id/reset-password", requireAuth, requireAdmin, validateParams(IdP
     const [target] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!target || target.deletedAt) return res.status(404).json({ error: "User not found" });
 
+    // Revoke the target's existing sessions as well. Resetting a password
+    // while leaving the old sessions live defeats the point of the reset.
     await db.update(usersTable)
-      .set({ passwordHash: await hashPassword(newPassword) })
+      .set({
+        passwordHash: await hashPassword(newPassword),
+        tokenVersion: target.tokenVersion + 1,
+      })
       .where(eq(usersTable.id, targetId));
 
     await recordAudit({

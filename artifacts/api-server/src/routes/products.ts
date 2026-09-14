@@ -5,8 +5,18 @@ import { requireAuth, requireBusiness } from "./auth";
 import { dec, toColumn, toJson } from "../lib/money";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { ListProductsQuery, CreateProductBody, UpdateProductBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
+
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function mapProduct(p: any) {
   return {
@@ -19,7 +29,7 @@ function mapProduct(p: any) {
   };
 }
 
-router.get("/", requireAuth, requireBusiness, validateQuery(ListProductsQuery), async (req: any, res) => {
+router.get("/", requireAuth, requireBusiness, validateQuery(ListProductsQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const { search, lowStock, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)];
@@ -34,7 +44,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListProductsQuery), 
   return res.json({ products: products.map(mapProduct), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreateProductBody), async (req: any, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreateProductBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { name, sku, hsnCode, unit, purchasePrice, sellingPrice, gstRate, stockQuantity = 0, lowStockThreshold, description, category } = req.body;
   if (!name || !unit) return res.status(400).json({ error: "name and unit required" });
@@ -50,14 +60,14 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateProductBody), 
   return res.status(201).json(mapProduct(product));
 });
 
-router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   const [product] = await db.select().from(productsTable).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId))).limit(1);
   if (!product) return res.status(404).json({ error: "Not found" });
   return res.json(mapProduct(product));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateProductBody), async (req: any, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateProductBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const fields = ["name","sku","hsnCode","unit","description","category","isActive"];
   // Money to two places, quantities to three — matching the column scales, so
@@ -74,7 +84,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   return res.json(mapProduct(product));
 });
 
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: any, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
   await db.update(productsTable).set({ isActive: false }).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId)));
   return res.json({ success: true });

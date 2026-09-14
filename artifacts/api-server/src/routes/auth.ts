@@ -13,6 +13,7 @@ import {
 import { validateBody } from "../middleware/validate";
 import { LoginBody, RegisterBody, ChangePasswordBody } from "../schemas";
 import { validatePassword } from "../lib/password-policy";
+import type { AuthedRequest } from "../lib/http";
 import {
   authIpLimiter,
   anyLocked,
@@ -24,15 +25,25 @@ import {
 
 const router = Router();
 
+/**
+ * Handlers that run after `requireAuth`. The middleware below take a bare
+ * request on purpose — they are what attaches `user` in the first place, so
+ * they cannot require it to already be there.
+ */
+type Req = AuthedRequest<any, any, any>;
+
 const JWT_SECRET = config.jwtSecret;
 
-function generateToken(userId: number, role: string): string {
-  return jwt.sign({ userId, role }, JWT_SECRET, { expiresIn: "7d" });
+function generateToken(userId: number, role: string, tokenVersion: number): string {
+  // `v` is the account's session generation. Bumping the column invalidates
+  // every token already issued, which is the only way to revoke a bearer token
+  // held by a client with no cookie jar.
+  return jwt.sign({ userId, role, v: tokenVersion }, JWT_SECRET, { expiresIn: "7d" });
 }
 
-export function verifyToken(token: string): { userId: number; role: string } | null {
+export function verifyToken(token: string): { userId: number; role: string; v?: number } | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as { userId: number; role: string };
+    return jwt.verify(token, JWT_SECRET) as { userId: number; role: string; v?: number };
   } catch (err) {
     // An expired token is routine; anything else usually means the signing key
     // changed or the token was tampered with, and a bare `catch {}` hid the
@@ -85,6 +96,7 @@ function readToken(req: any): string | null {
   return typeof cookie === "string" && cookie.length > 0 ? cookie : null;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- attaches the typed shape
 export async function requireAuth(req: any, res: any, next: any) {
   const token = readToken(req);
   if (!token) return res.status(401).json({ error: "Unauthorized" });
@@ -108,6 +120,13 @@ export async function requireAuth(req: any, res: any, next: any) {
   }
   if (isSubscriptionExpired(user)) {
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
+  }
+
+  // A token minted before the account's sessions were revoked. Tokens issued
+  // before this column existed carry no `v`; treat them as generation 0 so an
+  // existing session is not broken by the upgrade itself.
+  if ((payload.v ?? 0) !== user.tokenVersion) {
+    return res.status(401).json({ error: "Session expired. Please sign in again." });
   }
 
   req.user = user;
@@ -139,7 +158,7 @@ export function requireBusiness(req: any, res: any, next: any) {
   next();
 }
 
-router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: any, res) => {
+router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, res) => {
   const { email, password } = req.body;
   const normalisedEmail = email.toLowerCase();
 
@@ -189,7 +208,7 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: any, r
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
   }
 
-  const token = generateToken(user.id, user.role);
+  const token = generateToken(user.id, user.role, user.tokenVersion);
   setSessionCookies(res, token);
   return res.json({
     token,
@@ -202,7 +221,7 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: any, r
   });
 });
 
-router.post("/register", authIpLimiter, validateBody(RegisterBody), async (req: any, res) => {
+router.post("/register", authIpLimiter, validateBody(RegisterBody), async (req: Req, res) => {
   const { name, email, password, businessName, gstin } = req.body;
   const normalisedEmail = email.toLowerCase();
 
@@ -231,7 +250,7 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), async (req: 
 
   await db.update(usersTable).set({ businessId: business.id }).where(eq(usersTable.id, user.id));
 
-  const token = generateToken(user.id, user.role);
+  const token = generateToken(user.id, user.role, user.tokenVersion);
   setSessionCookies(res, token);
   return res.status(201).json({
     token,
@@ -244,7 +263,7 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), async (req: 
   });
 });
 
-router.get("/me", requireAuth, async (req: any, res) => {
+router.get("/me", requireAuth, async (req: Req, res) => {
   const user = req.user;
   return res.json({
     id: user.id, name: user.name, email: user.email, role: user.role,
@@ -273,7 +292,7 @@ router.post(
   "/change-password",
   requireAuth,
   validateBody(ChangePasswordBody),
-  async (req: any, res) => {
+  async (req: Req, res) => {
     const { currentPassword, newPassword } = req.body;
 
     const { valid } = await verifyPassword(req.user.passwordHash, currentPassword);
@@ -289,22 +308,45 @@ router.post(
     const policyFailure = await validatePassword(newPassword);
     if (policyFailure) return res.status(400).json({ error: policyFailure.message });
 
-    await db
+    // Bumping tokenVersion revokes every session issued under the old password
+    // — including bearer tokens on other devices, which is the point of a
+    // password change.
+    const [updated] = await db
       .update(usersTable)
-      .set({ passwordHash: await hashPassword(newPassword) })
-      .where(eq(usersTable.id, req.user.id));
+      .set({
+        passwordHash: await hashPassword(newPassword),
+        tokenVersion: req.user.tokenVersion + 1,
+      })
+      .where(eq(usersTable.id, req.user.id))
+      .returning();
 
     await clearFailures([userKey(req.user.id)]);
 
-    // Re-issue the session so the cookie is not one minted under the old
-    // credential. A bearer token held elsewhere still outlives this.
-    setSessionCookies(res, generateToken(req.user.id, req.user.role));
+    // Re-issue this device's session at the new generation, so the person who
+    // just changed their password is not signed out by their own action.
+    setSessionCookies(res, generateToken(updated.id, updated.role, updated.tokenVersion));
 
     return res.json({ success: true });
   },
 );
 
 router.post("/logout", (_req, res) => {
+  clearSessionCookies(res);
+  return res.json({ success: true });
+});
+
+/**
+ * Sign out on every device.
+ *
+ * Ordinary logout ends the session on the device that asked, which is what
+ * people expect. This revokes them all — the thing to reach for when a laptop
+ * goes missing, and the only way to invalidate a bearer token already issued.
+ */
+router.post("/logout-all", requireAuth, async (req: Req, res) => {
+  await db
+    .update(usersTable)
+    .set({ tokenVersion: req.user.tokenVersion + 1 })
+    .where(eq(usersTable.id, req.user.id));
   clearSessionCookies(res);
   return res.json({ success: true });
 });

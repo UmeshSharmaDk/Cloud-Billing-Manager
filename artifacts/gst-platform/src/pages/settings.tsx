@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useChangePassword, useGetBusiness, useUpdateBusiness } from "@workspace/api-client-react";
+import { useChangePassword, useGetBusiness, useLogoutAll, useUpdateBusiness } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -113,8 +113,9 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="security" className="mt-4">
+        <TabsContent value="security" className="mt-4 space-y-4">
           <ChangePasswordCard />
+          <SignOutEverywhereCard />
         </TabsContent>
       </Tabs>
 
@@ -196,6 +197,43 @@ function ChangePasswordCard() {
             {mutation.isPending ? "Changing..." : "Change password"}
           </Button>
         </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Revoking every session. Ordinary sign-out ends only this device's session;
+ * this one invalidates them all, which is what you want after losing a device.
+ */
+function SignOutEverywhereCard() {
+  const { toast } = useToast();
+  const mutation = useLogoutAll();
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Sign out everywhere</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground max-w-prose">
+          Ends every session on every device, including this one. Use it if a phone or laptop goes
+          missing, or if you think someone else has your password. You will need to sign in again.
+        </p>
+        <Button
+          variant="destructive"
+          disabled={mutation.isPending}
+          onClick={() =>
+            mutation.mutate(undefined as never, {
+              onSuccess: () => {
+                toast({ title: "Signed out everywhere" });
+                window.location.href = "/login";
+              },
+              onError: () =>
+                toast({ title: "Could not sign out everywhere", variant: "destructive" }),
+            })
+          }
+        >
+          {mutation.isPending ? "Signing out..." : "Sign out on all devices"}
+        </Button>
       </CardContent>
     </Card>
   );

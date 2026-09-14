@@ -1,66 +1,85 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, ne, and, or, ilike, isNull, count, desc } from "drizzle-orm";
+import { eq, ne, and, or, ilike, isNull, count, desc, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
+import { mapUser } from "../lib/serialise";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { requireStepUp, verifyStepUp } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
+import type { AuthedRequest, IdParams } from "../lib/http";
 
 const router = Router();
 
-function mapUser(u: any) {
-  return {
-    id: u.id, name: u.name, email: u.email, role: u.role,
-    isActive: u.isActive, subscriptionStatus: u.subscriptionStatus,
-    subscriptionEnd: u.subscriptionEnd, businessId: u.businessId,
-    createdAt: u.createdAt,
-  };
-}
+/**
+ * Handlers in this router run after `requireAuth`, so
+ * the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `user` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = AuthedRequest<any, any, IdParams>;
 
+
+/**
+ * Platform statistics, computed by the database.
+ *
+ * This read every user and every business into memory on each request and
+ * filtered the arrays eight times. The cost grew with the size of the platform
+ * — the endpoint got slower exactly as the product succeeded.
+ */
 router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
-  const allUsers = await db.select().from(usersTable).where(isNull(usersTable.deletedAt));
-  const businesses = await db.select().from(businessesTable);
-  const [{ count: totalInvoices }] = await db.select({ count: count() }).from(invoicesTable);
-  const nonAdmins = allUsers.filter(u => u.role !== "admin");
-  const activeUsers = nonAdmins.filter(u => u.isActive).length;
-  const inactiveUsers = nonAdmins.filter(u => !u.isActive).length;
-  const expiredSubscriptions = nonAdmins.filter(u => {
-    if (!u.subscriptionEnd) return false;
-    return new Date(u.subscriptionEnd) < new Date();
-  }).length;
+  const today = new Date().toISOString().slice(0, 10);
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
 
-  const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const newUsersThisMonth = nonAdmins.filter(u => new Date(u.createdAt) >= startOfMonth).length;
+  const notAdmin = and(ne(usersTable.role, "admin"), isNull(usersTable.deletedAt));
 
-  const monthlyCount = nonAdmins.filter(u => u.subscriptionStatus === "monthly").length;
-  const yearlyCount = nonAdmins.filter(u => u.subscriptionStatus === "yearly").length;
-  const trialCount = nonAdmins.filter(u => u.subscriptionStatus === "trial").length;
-  const expiredCount = nonAdmins.filter(u => u.subscriptionStatus === "expired").length;
+  const [[userAgg], [{ count: totalBusinesses }], [{ count: totalInvoices }], recentUsers] =
+    await Promise.all([
+      db.select({
+        total: count(),
+        active: sql<number>`count(*) FILTER (WHERE ${usersTable.isActive})`,
+        inactive: sql<number>`count(*) FILTER (WHERE NOT ${usersTable.isActive})`,
+        expired: sql<number>`count(*) FILTER (
+          WHERE ${usersTable.subscriptionEnd} IS NOT NULL AND ${usersTable.subscriptionEnd} < ${today}
+        )`,
+        newThisMonth: sql<number>`count(*) FILTER (WHERE ${usersTable.createdAt} >= ${startOfMonth})`,
+        monthly: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'monthly')`,
+        yearly: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'yearly')`,
+        trial: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'trial')`,
+        expiredStatus: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'expired')`,
+      }).from(usersTable).where(notAdmin),
 
-  const recentUsers = [...nonAdmins]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 10)
-    .map(mapUser);
+      db.select({ count: count() }).from(businessesTable),
+      db.select({ count: count() }).from(invoicesTable),
+
+      db.select().from(usersTable).where(notAdmin)
+        .orderBy(desc(usersTable.createdAt)).limit(10),
+    ]);
+
+  const activeUsers = Number(userAgg.active);
 
   return res.json({
-    totalUsers: nonAdmins.length,
+    totalUsers: Number(userAgg.total),
     activeUsers,
-    inactiveUsers,
-    expiredSubscriptions,
-    totalBusinesses: businesses.length,
+    inactiveUsers: Number(userAgg.inactive),
+    expiredSubscriptions: Number(userAgg.expired),
+    totalBusinesses: Number(totalBusinesses),
     totalInvoices: Number(totalInvoices),
     activeSubscriptions: activeUsers,
-    newUsersThisMonth,
-    monthlyCount, yearlyCount, trialCount, expiredCount,
-    recentUsers,
+    newUsersThisMonth: Number(userAgg.newThisMonth),
+    monthlyCount: Number(userAgg.monthly),
+    yearlyCount: Number(userAgg.yearly),
+    trialCount: Number(userAgg.trial),
+    expiredCount: Number(userAgg.expiredStatus),
+    recentUsers: recentUsers.map(mapUser),
   });
 });
 
 // GET /admin/users — list all users with business info
-router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuery), async (req: any, res) => {
+router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuery), async (req: Req, res) => {
   const { search, page, limit } = req.validatedQuery;
   // Filtering, counting and paging happen in SQL. This handler used to read
   // every user row into memory on each request and slice the array, so its
@@ -79,7 +98,7 @@ router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuer
 });
 
 // GET /admin/users/:id — get a user with all their business data
-router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: any, res) => {
+router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
   const userId = req.validatedParams.id;
   const [user] = await db.select().from(usersTable)
     .where(and(eq(usersTable.id, userId), isNull(usersTable.deletedAt))).limit(1);
@@ -112,7 +131,7 @@ router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), asy
 
 // PATCH /admin/users/:id — update user subscription/status
 router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody),
-  async (req: any, res) => {
+  async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
 

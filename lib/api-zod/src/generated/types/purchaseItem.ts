@@ -10,13 +10,25 @@ export interface PurchaseItem {
   id?: number;
   /** @nullable */
   productId?: number | null;
-  productName: string;
+  /** Line description. This is what clients send. */
+  description?: string;
+  /**
+     * Legacy alias for `description`. Accepted, never returned.
+     * @deprecated
+     */
+  productName?: string;
   /** @nullable */
   hsnCode?: string | null;
   quantity: number;
   /** @nullable */
   unit?: string | null;
-  rate: number;
+  /** Price per unit. This is what clients send. */
+  unitPrice?: number;
+  /**
+     * Legacy alias for `unitPrice`. Accepted, never returned.
+     * @deprecated
+     */
+  rate?: number;
   gstRate: number;
   cgst?: number;
   sgst?: number;

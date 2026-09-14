@@ -1,29 +1,19 @@
 /**
  * Request schemas for every route.
  *
- * WHY THESE ARE NOT THE GENERATED ONES
+ * These are hand-written rather than taken from `@workspace/api-zod`, and the
+ * reason has changed. The spec used to describe an older API — walk-in
+ * invoices, `description`/`unitPrice` line items, `billNumber`/`billDate`
+ * purchases and the e-way bill routes were all missing or wrong — so enforcing
+ * the generated schemas would have rejected requests the app makes every day.
+ * That drift is now fixed, and `test/spec-contract.test.mjs` holds it fixed by
+ * checking the generated schemas against the payloads the client really sends.
  *
- * `@workspace/api-zod` contains an orval-generated Zod schema for each
- * operation in `lib/api-spec/openapi.yaml`, and the intent was to attach those
- * directly. They cannot be used as-is: the spec has drifted behind the
- * implementation, and enforcing it would reject requests the app makes today.
- *
- *   - `CreateInvoiceBody` requires `customerId`, but the route also accepts a
- *     `customerName` for walk-in customers with no customer record.
- *   - `CreateInvoiceBody`/`CreatePurchaseBody` require `productName` and
- *     `rate` on line items; the client sends `description` and `unitPrice`.
- *   - `CreatePurchaseBody` requires `invoiceNumber`/`invoiceDate`; the client
- *     sends `billNumber`/`billDate`, and the number is optional.
- *   - `UpdateInvoiceStatusBody` requires `status`; the route reads
- *     `paymentStatus ?? status`.
- *   - E-way bills, the admin routes and the HSN report are absent from the
- *     spec entirely.
- *
- * So these are written against the routes as they actually behave, and are
- * deliberately a superset where the route accepts aliases. Reconciling the
- * OpenAPI document with the implementation (finding L-03) would let this file
- * be replaced by the generated schemas again; until then the spec is
- * documentation, not a contract, and this file is the contract.
+ * What remains here is the part a contract cannot express: bounds that exist
+ * because of this database and this tax regime. A GST rate capped at 28, money
+ * stopping short of what `numeric(15, 2)` can hold, page sizes capped at 100,
+ * text lengths matched to their columns. The spec says what the shape is; this
+ * file says what a sane value is.
  *
  * Objects strip unknown keys rather than rejecting them, which is what closes
  * mass assignment: only the named fields reach the handler.

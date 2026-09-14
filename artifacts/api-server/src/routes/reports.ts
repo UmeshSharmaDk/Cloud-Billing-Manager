@@ -5,8 +5,18 @@ import { requireAuth, requireBusiness } from "./auth";
 import { validateQuery } from "../middleware/validate";
 import { MonthYearQuery, DateRangeQuery } from "../schemas";
 import { dec, paise, sum, sumBy, toJson } from "../lib/money";
+import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
+
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 /**
  * Resolve a report window. The span itself is capped by `DateRangeQuery`; this
@@ -44,7 +54,7 @@ function mapPurchase(p: any) {
   };
 }
 
-router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: any, res) => {
+router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const now = new Date();
   const month = req.validatedQuery.month ?? now.getMonth() + 1;
@@ -102,7 +112,7 @@ router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery)
   });
 });
 
-router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: any, res) => {
+router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const now = new Date();
   const month = req.validatedQuery.month ?? now.getMonth() + 1;
@@ -154,7 +164,7 @@ router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery
   });
 });
 
-router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: any, res) => {
+router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const { from, to } = reportRange(req.validatedQuery);
   const conditions: any[] = [
@@ -169,7 +179,7 @@ router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery)
   return res.json({ totalSales: toJson(totalSales), totalGst: toJson(totalGst), netSales: toJson(totalSales.minus(totalGst)), invoiceCount: mapped.length, invoices: mapped });
 });
 
-router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: any, res) => {
+router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const { from, to } = reportRange(req.validatedQuery);
   const conditions: any[] = [
@@ -184,7 +194,7 @@ router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQu
   return res.json({ totalPurchases: toJson(totalPurchases), totalGst: toJson(totalGst), netPurchases: toJson(totalPurchases.minus(totalGst)), purchaseCount: mapped.length, purchases: mapped });
 });
 
-router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: any, res) => {
+router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const now = new Date();
   const month = req.validatedQuery.month ?? now.getMonth() + 1;
@@ -238,7 +248,7 @@ router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), 
   return res.json({ month, year, items });
 });
 
-router.get("/stock", requireAuth, requireBusiness, async (req: any, res) => {
+router.get("/stock", requireAuth, requireBusiness, async (req: Req, res) => {
   const businessId = req.businessId;
   const products = await db.select().from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));
   const mapped = products.map(p => ({
