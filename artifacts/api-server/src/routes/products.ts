@@ -1,81 +1,83 @@
 import { Router } from "express";
-import { db, productsTable, usersTable } from "@workspace/db";
+import { db, productsTable } from "@workspace/db";
 import { eq, ilike, and, lte, sql, count } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
+import { dec, toColumn, toJson } from "../lib/money";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { ListProductsQuery, CreateProductBody, UpdateProductBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
+import { mapProduct } from "../lib/serialise";
+import { lowStockSql } from "../lib/low-stock";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
 
-function mapProduct(p: any) {
-  return {
-    ...p,
-    purchasePrice: p.purchasePrice ? parseFloat(p.purchasePrice) : null,
-    sellingPrice: p.sellingPrice ? parseFloat(p.sellingPrice) : null,
-    gstRate: parseFloat(p.gstRate),
-    stockQuantity: parseFloat(p.stockQuantity),
-    lowStockThreshold: p.lowStockThreshold ? parseFloat(p.lowStockThreshold) : null,
-  };
-}
 
-router.get("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { search, lowStock, page = "1", limit = "20" } = req.query as any;
+router.get("/", requireAuth, requireBusiness, validateQuery(ListProductsQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const { search, lowStock, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)];
   if (search) conditions.push(ilike(productsTable.name, `%${search}%`));
-  if (lowStock === "true") {
-    conditions.push(lte(sql`CAST(${productsTable.stockQuantity} AS NUMERIC)`, sql`CAST(${productsTable.lowStockThreshold} AS NUMERIC)`));
-  }
+  // Shared definition — this filter used to omit every product with no
+  // threshold set, because `0 <= NULL` is NULL, not true.
+  if (lowStock === "true") conditions.push(lowStockSql(productsTable));
   const products = await db.select().from(productsTable).where(and(...conditions))
-    .limit(parseInt(limit)).offset((parseInt(page) - 1) * parseInt(limit))
+    .limit(limit).offset((page - 1) * limit)
     .orderBy(productsTable.name);
-  const [{ count: total }] = await db.select({ count: count() }).from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));
+  const [{ count: total }] = await db.select({ count: count() }).from(productsTable).where(and(...conditions));
   return res.json({ products: products.map(mapProduct), total: Number(total) });
 });
 
-router.post("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.post("/", requireAuth, requireBusiness, validateBody(CreateProductBody), async (req: Req, res) => {
+  const businessId = req.businessId;
   const { name, sku, hsnCode, unit, purchasePrice, sellingPrice, gstRate, stockQuantity = 0, lowStockThreshold, description, category } = req.body;
   if (!name || !unit) return res.status(400).json({ error: "name and unit required" });
   const [product] = await db.insert(productsTable).values({
     businessId, name, sku, hsnCode, unit,
-    purchasePrice: purchasePrice?.toString(),
-    sellingPrice: sellingPrice?.toString(),
-    gstRate: (gstRate ?? 18).toString(),
-    stockQuantity: stockQuantity.toString(),
-    lowStockThreshold: lowStockThreshold?.toString(),
+    purchasePrice: purchasePrice === undefined || purchasePrice === null ? undefined : toColumn(purchasePrice),
+    sellingPrice: sellingPrice === undefined || sellingPrice === null ? undefined : toColumn(sellingPrice),
+    gstRate: dec(gstRate ?? 18).toFixed(2),
+    stockQuantity: dec(stockQuantity).toFixed(3),
+    lowStockThreshold: lowStockThreshold === undefined || lowStockThreshold === null ? undefined : dec(lowStockThreshold).toFixed(3),
     description, category,
   }).returning();
   return res.status(201).json(mapProduct(product));
 });
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  const [product] = await db.select().from(productsTable).where(and(eq(productsTable.id, parseInt(req.params.id)), eq(productsTable.businessId, businessId!))).limit(1);
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const [product] = await db.select().from(productsTable).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId))).limit(1);
   if (!product) return res.status(404).json({ error: "Not found" });
   return res.json(mapProduct(product));
 });
 
-router.patch("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateProductBody), async (req: Req, res) => {
+  const businessId = req.businessId;
   const fields = ["name","sku","hsnCode","unit","description","category","isActive"];
-  const numericFields = ["purchasePrice","sellingPrice","gstRate","stockQuantity","lowStockThreshold"];
+  // Money to two places, quantities to three — matching the column scales, so
+  // nothing is silently re-rounded on the way in.
+  const moneyFields = ["purchasePrice", "sellingPrice"];
+  const quantityFields = ["stockQuantity", "lowStockThreshold"];
   const updates: any = {};
   for (const f of fields) if (req.body[f] !== undefined) updates[f] = req.body[f];
-  for (const f of numericFields) if (req.body[f] !== undefined) updates[f] = req.body[f]?.toString();
-  const [product] = await db.update(productsTable).set(updates).where(and(eq(productsTable.id, parseInt(req.params.id)), eq(productsTable.businessId, businessId!))).returning();
+  for (const f of moneyFields) if (req.body[f] !== undefined) updates[f] = req.body[f] === null ? null : toColumn(req.body[f]);
+  for (const f of quantityFields) if (req.body[f] !== undefined) updates[f] = req.body[f] === null ? null : dec(req.body[f]).toFixed(3);
+  if (req.body.gstRate !== undefined) updates.gstRate = dec(req.body.gstRate).toFixed(2);
+  const [product] = await db.update(productsTable).set(updates).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId))).returning();
   if (!product) return res.status(404).json({ error: "Not found" });
   return res.json(mapProduct(product));
 });
 
-router.delete("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  await db.update(productsTable).set({ isActive: false }).where(and(eq(productsTable.id, parseInt(req.params.id)), eq(productsTable.businessId, businessId!)));
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const businessId = req.businessId;
+  await db.update(productsTable).set({ isActive: false }).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId)));
   return res.json({ success: true });
 });
 

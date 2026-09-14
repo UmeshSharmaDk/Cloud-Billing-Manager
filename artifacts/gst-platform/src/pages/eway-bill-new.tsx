@@ -10,18 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Truck, FileText, MapPin, Package } from "lucide-react";
 import { Link } from "wouter";
 import { formatCurrency } from "@/lib/utils";
-
-function authFetch(url: string, options?: RequestInit) {
-  const token = localStorage.getItem("gst_token");
-  return fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options?.headers ?? {}),
-    },
-  });
-}
+import { authFetch } from "@/lib/api-fetch";
 
 const SUPPLY_TYPES = [
   { value: "O", label: "Outward" },

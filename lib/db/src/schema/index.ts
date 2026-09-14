@@ -7,3 +7,7 @@ export * from "./invoices";
 export * from "./purchases";
 export * from "./payments";
 export * from "./eway-bills";
+export * from "./login-attempts";
+export * from "./audit-log";
+export * from "./revoked-tokens";
+export * from "./invoice-counters";

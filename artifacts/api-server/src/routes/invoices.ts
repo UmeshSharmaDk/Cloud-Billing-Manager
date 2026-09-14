@@ -1,105 +1,142 @@
 import { Router } from "express";
-import { db, invoicesTable, usersTable, businessesTable, customersTable, productsTable } from "@workspace/db";
-import { eq, ilike, and, count, gte, lte, desc } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { db, invoicesTable, businessesTable, customersTable, productsTable, invoiceCountersTable, paymentsTable } from "@workspace/db";
+import { eq, ilike, and, count, gte, lte, desc, sql } from "drizzle-orm";
+import { requireAuth, requireBusiness } from "./auth";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
+import { resolveSupplyType } from "../lib/gst";
+import { applyStockMovement, STOCK_OUT } from "../lib/stock";
+import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
+import { mapInvoice } from "../lib/serialise";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function calcGst(items: any[], isInterstate: boolean) {
-  let subtotal = 0, cgst = 0, sgst = 0, igst = 0;
-  const processed = items.map(item => {
-    const qty = parseFloat(String(item.quantity ?? 1));
+  // Each line is rounded to paise here, and the invoice totals are the sum of
+  // those rounded values. The previous version accumulated the unrounded
+  // amounts, so the stored lines did not add up to the stored total.
+  const processed = items.map((item) => {
+    const qty = dec(item.quantity ?? 1);
     // Accept both `unitPrice` (frontend) and `rate` (legacy)
-    const rate = parseFloat(String(item.unitPrice ?? item.rate ?? 0));
-    const discount = parseFloat(String(item.discount ?? 0));
-    const gstRate = parseFloat(String(item.gstRate ?? 0));
-    const taxableAmount = qty * rate * (1 - discount / 100);
-    let itemCgst = 0, itemSgst = 0, itemIgst = 0;
-    if (isInterstate) {
-      itemIgst = taxableAmount * gstRate / 100;
-    } else {
-      itemCgst = taxableAmount * gstRate / 100 / 2;
-      itemSgst = taxableAmount * gstRate / 100 / 2;
-    }
-    subtotal += taxableAmount;
-    cgst += itemCgst;
-    sgst += itemSgst;
-    igst += itemIgst;
+    const rate = dec(item.unitPrice ?? item.rate ?? 0);
+    const discount = dec(item.discount ?? 0);
+    const gstRate = dec(item.gstRate ?? 0);
+
+    const taxableAmount = paise(
+      qty.times(rate).times(new Decimal(100).minus(discount)).dividedBy(100),
+    );
+    const lineGst = paise(taxableAmount.times(gstRate).dividedBy(100));
+
+    const igst = isInterstate ? lineGst : new Decimal(0);
+    const { cgst, sgst } = isInterstate
+      ? { cgst: new Decimal(0), sgst: new Decimal(0) }
+      : splitGst(lineGst);
+
     return {
       ...item,
-      unitPrice: rate,
-      taxableAmount: Math.round(taxableAmount * 100) / 100,
-      cgst: Math.round(itemCgst * 100) / 100,
-      sgst: Math.round(itemSgst * 100) / 100,
-      igst: Math.round(itemIgst * 100) / 100,
-      totalAmount: Math.round((taxableAmount + itemCgst + itemSgst + itemIgst) * 100) / 100,
+      unitPrice: rate.toNumber(),
+      taxableAmount: toJson(taxableAmount),
+      cgst: toJson(cgst),
+      sgst: toJson(sgst),
+      igst: toJson(igst),
+      // Exactly the sum of this line's own parts.
+      totalAmount: toJson(sum([taxableAmount, cgst, sgst, igst])),
     };
   });
-  const totalGst = cgst + sgst + igst;
-  const grandTotalRaw = subtotal + totalGst;
-  const grandTotal = Math.round(grandTotalRaw);
-  const roundOff = Math.round((grandTotal - grandTotalRaw) * 100) / 100;
+
+  const subtotal = sumBy(processed, (i) => i.taxableAmount);
+  const cgst = sumBy(processed, (i) => i.cgst);
+  const sgst = sumBy(processed, (i) => i.sgst);
+  const igst = sumBy(processed, (i) => i.igst);
+  const totalGst = sum([cgst, sgst, igst]);
+
+  const payable = subtotal.plus(totalGst);
+  const grandTotal = rupees(payable);
+  const roundOff = paise(grandTotal.minus(payable));
+
   return {
-    subtotal: Math.round(subtotal * 100) / 100,
-    cgst: Math.round(cgst * 100) / 100,
-    sgst: Math.round(sgst * 100) / 100,
-    igst: Math.round(igst * 100) / 100,
-    totalGst: Math.round(totalGst * 100) / 100,
-    grandTotal, roundOff, items: processed,
+    subtotal: toJson(subtotal),
+    cgst: toJson(cgst),
+    sgst: toJson(sgst),
+    igst: toJson(igst),
+    totalGst: toJson(totalGst),
+    grandTotal: grandTotal.toNumber(),
+    roundOff: toJson(roundOff),
+    items: processed,
   };
 }
 
-function mapInvoice(inv: any) {
-  return {
-    ...inv,
-    subtotal: parseFloat(inv.subtotal),
-    cgst: parseFloat(inv.cgst),
-    sgst: parseFloat(inv.sgst),
-    igst: parseFloat(inv.igst),
-    totalGst: parseFloat(inv.totalGst),
-    grandTotal: parseFloat(inv.grandTotal),
-    roundOff: parseFloat(inv.roundOff),
-    paidAmount: parseFloat(inv.paidAmount),
-    balanceDue: Math.max(0, parseFloat(inv.grandTotal) - parseFloat(inv.paidAmount)),
-    items: Array.isArray(inv.items) ? inv.items : [],
-  };
+/**
+ * The Indian financial year containing a date, as "2025-26". It runs from
+ * 1 April to 31 March, so January to March belong to the year before.
+ */
+export function financialYear(isoDate: string): string {
+  const [y, m] = isoDate.split("-").map(Number);
+  const startYear = (m ?? 1) >= 4 ? y : y - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
 }
 
-async function generateInvoiceNumber(businessId: number): Promise<string> {
-  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+/**
+ * Allocate the next invoice number for a business in a given financial year.
+ *
+ * The counter is incremented and read in one statement, so two concurrent
+ * callers serialise on the row and cannot be handed the same number — the old
+ * `COUNT(*) + 1` gave both the same answer. Because the counter only ever goes
+ * up, deleting an invoice no longer frees its number for reuse either.
+ *
+ * Runs inside the caller's transaction so a failed insert rolls the allocation
+ * back; a gap in the series is a compliance problem of its own.
+ */
+async function nextInvoiceNumber(
+  tx: any,
+  businessId: number,
+  invoiceDate: string,
+): Promise<string> {
+  const [business] = await tx.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
   const prefix = business?.invoicePrefix ?? "INV";
-  const [{ count: c }] = await db.select({ count: count() }).from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
-  const num = String(Number(c) + 1).padStart(4, "0");
-  const fy = new Date().getFullYear();
-  return `${prefix}-${fy}-${num}`;
+  const fy = financialYear(invoiceDate);
+
+  const [counter] = await tx
+    .insert(invoiceCountersTable)
+    .values({ businessId, financialYear: fy, lastNumber: 1 })
+    .onConflictDoUpdate({
+      target: [invoiceCountersTable.businessId, invoiceCountersTable.financialYear],
+      set: { lastNumber: sql`${invoiceCountersTable.lastNumber} + 1` },
+    })
+    .returning();
+
+  return `${prefix}-${fy}-${String(counter.lastNumber).padStart(4, "0")}`;
 }
 
-router.get("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { search, type, status, customerId, fromDate, toDate, page = "1", limit = "20" } = req.query as any;
+router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const { search, type, status, customerId, fromDate, toDate, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(invoicesTable.businessId, businessId)];
   if (search) conditions.push(ilike(invoicesTable.invoiceNumber, `%${search}%`));
   if (type) conditions.push(eq(invoicesTable.type, type));
   if (status) conditions.push(eq(invoicesTable.status, status));
-  if (customerId) conditions.push(eq(invoicesTable.customerId, parseInt(customerId)));
+  if (customerId) conditions.push(eq(invoicesTable.customerId, customerId));
   if (fromDate) conditions.push(gte(invoicesTable.invoiceDate, fromDate));
   if (toDate) conditions.push(lte(invoicesTable.invoiceDate, toDate));
   const invoices = await db.select().from(invoicesTable).where(and(...conditions))
-    .limit(parseInt(limit)).offset((parseInt(page) - 1) * parseInt(limit))
+    .limit(limit).offset((page - 1) * limit)
     .orderBy(desc(invoicesTable.createdAt));
-  const [{ count: total }] = await db.select({ count: count() }).from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
+  const [{ count: total }] = await db.select({ count: count() }).from(invoicesTable).where(and(...conditions));
   return res.json({ invoices: invoices.map(mapInvoice), total: Number(total) });
 });
 
-router.post("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), async (req: Req, res) => {
+  const businessId = req.businessId;
 
   const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [] } = req.body;
 
@@ -112,99 +149,212 @@ router.post("/", requireAuth, async (req: any, res) => {
   let resolvedCustomerGstin = customGstin ?? null;
 
   if (customerId) {
-    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, parseInt(customerId))).limit(1);
-    if (customer) {
-      resolvedCustomerName = customer.name;
-      resolvedCustomerGstin = customer.gstin ?? null;
-    }
+    // Scoped to the caller's business. Without the businessId condition this
+    // lookup resolved ANY customer on the platform and copied their name and
+    // GSTIN onto the invoice, making invoice creation a read primitive over
+    // every tenant's counterparties.
+    const [customer] = await db.select().from(customersTable)
+      .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
+      .limit(1);
+    // Fail loudly rather than silently falling back: the silent fallback is
+    // what let the probe go unnoticed.
+    if (!customer) return res.status(400).json({ error: "Unknown customer" });
+    resolvedCustomerName = customer.name;
+    resolvedCustomerGstin = customer.gstin ?? null;
   }
 
-  // Auto-detect interstate based on business state code vs placeOfSupply
+  // CGST+SGST or IGST, decided by the seller's state against the place of
+  // supply. See `lib/gst.ts`: this used to treat a business with no state code
+  // as being in state "", which made every local sale look inter-state.
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
-  const bizStateCode = business?.stateCode ?? "";
-  const isInterstate = placeOfSupply ? (placeOfSupply.trim() !== bizStateCode.trim()) : false;
+  const supply = resolveSupplyType(business, placeOfSupply);
+  if (!supply.ok) return res.status(400).json({ error: supply.error });
 
-  const gstCalc = calcGst(items, isInterstate);
-  const invoiceNumber = await generateInvoiceNumber(businessId);
+  const gstCalc = calcGst(items, supply.isInterstate);
 
-  const [invoice] = await db.insert(invoicesTable).values({
-    businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
-    customerId: resolvedCustomerId, customerName: resolvedCustomerName,
-    customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
-    isInterstate, notes, items: gstCalc.items,
-    subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(),
-    sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(),
-    totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(),
-    roundOff: gstCalc.roundOff.toString(), paidAmount: "0",
-  }).returning();
+  // One transaction. Previously the invoice was inserted and then stock was
+  // deducted in a loop of separate statements, so a failure part-way left an
+  // invoice recorded against stock that was never decremented — and the
+  // number allocation could succeed while the insert failed, leaving a gap.
+  const invoice = await db.transaction(async (tx) => {
+    const invoiceNumber = await nextInvoiceNumber(tx, businessId, invoiceDate);
 
-  // Deduct stock for each sold item
-  const allProducts = await db.select().from(productsTable).where(eq(productsTable.businessId, businessId));
-  for (const item of gstCalc.items) {
-    const qty = parseFloat(String(item.quantity ?? 0));
-    if (qty <= 0) continue;
-    let product = null;
-    if (item.productId) {
-      product = allProducts.find(p => p.id === item.productId) ?? null;
-    }
-    if (!product && item.description) {
-      product = allProducts.find(p => p.name.toLowerCase() === String(item.description).toLowerCase()) ?? null;
-    }
-    if (product) {
-      const newQty = Math.max(0, parseFloat(product.stockQuantity) - qty);
-      await db.update(productsTable).set({ stockQuantity: newQty.toString() }).where(eq(productsTable.id, product.id));
-    }
-  }
+    const [created] = await tx.insert(invoicesTable).values({
+      businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
+      customerId: resolvedCustomerId, customerName: resolvedCustomerName,
+      customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
+      isInterstate: supply.isInterstate, notes, items: gstCalc.items,
+      subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst),
+      sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst),
+      totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal),
+      roundOff: toColumn(gstCalc.roundOff), paidAmount: "0.00",
+    }).returning();
+
+    // Goods leave on a sale. Routed through the shared helper so an edit or a
+    // delete can reverse exactly this movement.
+    await applyStockMovement(tx, productsTable, eq, businessId, gstCalc.items, STOCK_OUT);
+
+    return created;
+  });
 
   return res.status(201).json({ invoice: mapInvoice(invoice) });
 });
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).limit(1);
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).limit(1);
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });
 
-router.patch("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  const { type, customerId, invoiceDate, dueDate, placeOfSupply, isInterstate, notes, items } = req.body;
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), async (req: Req, res) => {
+  const businessId = req.businessId;
+  // `isInterstate` is deliberately not read from the body. It decides whether
+  // the customer may claim IGST or CGST+SGST credit, so it is the server's to
+  // derive from the place of supply — a client that could assert it could
+  // mis-state the tax head on an invoice that still totals correctly.
+  const { type, customerId, invoiceDate, dueDate, placeOfSupply, notes, items } = req.body;
+
+  // Read before writing: the effective place of supply may be one this request
+  // is not changing, and a 404 should not be discovered after building updates.
+  const [existing] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+    .limit(1);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  const effectivePlace = placeOfSupply !== undefined ? placeOfSupply : existing.placeOfSupply;
+  const supply = resolveSupplyType(business, effectivePlace);
+  if (!supply.ok) return res.status(400).json({ error: supply.error });
+
   const updates: any = {};
   if (type) updates.type = type;
   if (dueDate !== undefined) updates.dueDate = dueDate;
   if (placeOfSupply !== undefined) updates.placeOfSupply = placeOfSupply;
   if (notes !== undefined) updates.notes = notes;
-  if (items) {
-    const gstCalc = calcGst(items, isInterstate ?? false);
-    Object.assign(updates, { items: gstCalc.items, subtotal: gstCalc.subtotal.toString(), cgst: gstCalc.cgst.toString(), sgst: gstCalc.sgst.toString(), igst: gstCalc.igst.toString(), totalGst: gstCalc.totalGst.toString(), grandTotal: gstCalc.grandTotal.toString(), roundOff: gstCalc.roundOff.toString(), isInterstate: isInterstate ?? false });
-    if (customerId) {
-      const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, parseInt(customerId))).limit(1);
-      updates.customerId = parseInt(customerId);
-      updates.customerName = customer?.name ?? "Unknown";
-      updates.customerGstin = customer?.gstin ?? null;
-    }
-    if (invoiceDate) updates.invoiceDate = invoiceDate;
+
+  // Changing the customer or the date is applied whether or not the lines are
+  // being resent. Both used to sit inside the recompute branch below, so
+  // `PATCH {"customerId": 7}` on its own returned 200 having changed nothing —
+  // and a date change silently failed to move the invoice into the financial
+  // year that drives GSTR-1 period selection.
+  if (customerId) {
+    const [customer] = await db.select().from(customersTable)
+      .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
+      .limit(1);
+    if (!customer) return res.status(400).json({ error: "Unknown customer" });
+    updates.customerId = customer.id;
+    updates.customerName = customer.name;
+    updates.customerGstin = customer.gstin ?? null;
   }
-  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).returning();
+  if (invoiceDate) updates.invoiceDate = invoiceDate;
+
+  // Recompute when the lines change, and also when the supply type does —
+  // moving the place of supply across a state line changes which tax applies to
+  // lines nobody edited, and leaving the stored split alone would keep charging
+  // the old one.
+  const supplyTypeChanged = supply.isInterstate !== existing.isInterstate;
+  const linesToPrice = items ?? (supplyTypeChanged ? (existing.items as any[]) : null);
+
+  if (linesToPrice) {
+    const gstCalc = calcGst(linesToPrice, supply.isInterstate);
+    Object.assign(updates, { items: gstCalc.items, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: supply.isInterstate });
+  }
+
+  // A request that changes nothing is not an error, but `set({})` is invalid SQL.
+  if (Object.keys(updates).length === 0) return res.json(mapInvoice(existing));
+
+  const invoice = await db.transaction(async (tx) => {
+    // Only a change of lines moves goods. A re-split for a changed place of
+    // supply rewrites the same quantities, so reversing and reapplying it would
+    // net to nothing — but doing neither keeps the stored movement honest.
+    if (items) {
+      await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_OUT);
+      await applyStockMovement(tx, productsTable, eq, businessId, updates.items, STOCK_OUT);
+    }
+
+    const [updated] = await tx.update(invoicesTable).set(updates)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .returning();
+    return updated;
+  });
+
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });
 
-router.delete("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  await db.delete(invoicesTable).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!)));
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const businessId = req.businessId;
+
+  // Deleting an invoice un-sells its goods. Without this the stock it deducted
+  // stayed deducted, so a create/delete cycle walked inventory down with no
+  // sales on the books and the low-stock reports followed it.
+  await db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(invoicesTable)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .limit(1);
+    if (!existing) return;
+    await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_OUT);
+    await tx.delete(invoicesTable)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)));
+  });
   return res.json({ success: true });
 });
 
-router.patch("/:id/status", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  const { paymentStatus, status, paidAmount } = req.body;
+router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const { paymentStatus, status, paidAmount, mode, referenceNumber } = req.body;
   const newStatus = paymentStatus ?? status;
+
+  const [existing] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+    .limit(1);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
   const updates: any = {};
   if (newStatus) updates.status = newStatus;
-  if (paidAmount !== undefined) updates.paidAmount = paidAmount.toString();
-  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, parseInt(req.params.id)), eq(invoicesTable.businessId, businessId!))).returning();
-  if (!invoice) return res.status(404).json({ error: "Not found" });
+
+  // Marking an invoice paid used to set the status and nothing else, so the
+  // invoice showed "paid" with its full balance still due — `paidAmount` stayed
+  // at zero and `balanceDue` is derived from it. Settle the money alongside the
+  // status unless the caller states an amount itself.
+  const previouslyPaid = dec(existing.paidAmount);
+  let settled = previouslyPaid;
+  if (paidAmount !== undefined) {
+    settled = dec(paidAmount);
+  } else if (newStatus === "paid") {
+    settled = dec(existing.grandTotal);
+  } else if (newStatus === "unpaid" || newStatus === "cancelled") {
+    settled = dec(0);
+  }
+  if (!settled.equals(previouslyPaid)) updates.paidAmount = toColumn(settled);
+
+  const invoice = await db.transaction(async (tx) => {
+    const [updated] = await tx.update(invoicesTable).set(updates)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .returning();
+
+    // Record the receipt, so the Payments page reflects what actually happened.
+    // Its empty state has always promised that "payments are recorded when you
+    // mark invoices as paid"; nothing wrote one, so the page was always empty.
+    const received = settled.minus(previouslyPaid);
+    if (received.greaterThan(0)) {
+      await tx.insert(paymentsTable).values({
+        businessId,
+        type: "received",
+        amount: toColumn(received),
+        date: new Date().toISOString().slice(0, 10),
+        mode: mode ?? "cash",
+        referenceNumber: referenceNumber ?? null,
+        invoiceId: updated.id,
+        customerId: updated.customerId ?? null,
+        notes: `Invoice ${updated.invoiceNumber}`,
+      });
+    }
+
+    return updated;
+  });
+
   return res.json(mapInvoice(invoice));
 });
 

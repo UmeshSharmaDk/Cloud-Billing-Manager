@@ -9,6 +9,133 @@ export interface HealthStatus {
   status: string;
 }
 
+export interface ChangePasswordInput {
+  currentPassword: string;
+  /**
+     * At least 12 characters; screened against common and breached passwords.
+     * @minLength 12
+     * @maxLength 128
+     */
+  newPassword: string;
+}
+
+export type AdminUserUpdateRole = typeof AdminUserUpdateRole[keyof typeof AdminUserUpdateRole];
+
+
+export const AdminUserUpdateRole = {
+  user: 'user',
+  admin: 'admin',
+} as const;
+
+export type AdminUserUpdateSubscriptionStatus = typeof AdminUserUpdateSubscriptionStatus[keyof typeof AdminUserUpdateSubscriptionStatus] | null;
+
+
+export const AdminUserUpdateSubscriptionStatus = {
+  trial: 'trial',
+  monthly: 'monthly',
+  yearly: 'yearly',
+  expired: 'expired',
+} as const;
+
+export interface AdminUserUpdate {
+  isActive?: boolean;
+  role?: AdminUserUpdateRole;
+  subscriptionStatus?: AdminUserUpdateSubscriptionStatus;
+  subscriptionEnd?: string | null;
+  /** The calling administrator's own password. Required to change `role`. */
+  confirmPassword?: string;
+}
+
+export type EwayBillStatus = typeof EwayBillStatus[keyof typeof EwayBillStatus];
+
+
+export const EwayBillStatus = {
+  draft: 'draft',
+  generated: 'generated',
+  cancelled: 'cancelled',
+} as const;
+
+export type EwayBillItemsItem = { [key: string]: unknown };
+
+export interface EwayBill {
+  id: number;
+  businessId: number;
+  docNo: string;
+  docDate: string;
+  status: EwayBillStatus;
+  ewbNo?: string | null;
+  vehicleNo?: string | null;
+  totalValue?: number;
+  cgstValue?: number;
+  sgstValue?: number;
+  igstValue?: number;
+  totalInvValue?: number;
+  items?: EwayBillItemsItem[];
+  [key: string]: unknown;
+ }
+
+export type EwayBillInputItemsItem = { [key: string]: unknown };
+
+export interface EwayBillInput {
+  docNo: string;
+  docDate: string;
+  supplyType?: string | null;
+  subSupplyType?: string | null;
+  docType?: string | null;
+  fromGstin?: string | null;
+  fromTrdName?: string | null;
+  fromAddr1?: string | null;
+  fromCity?: string | null;
+  fromState?: string | null;
+  fromPincode?: string | null;
+  toGstin?: string | null;
+  toTrdName?: string | null;
+  toAddr1?: string | null;
+  toCity?: string | null;
+  toState?: string | null;
+  toPincode?: string | null;
+  transMode?: string | null;
+  transDistance?: number | null;
+  transporterName?: string | null;
+  transporterId?: string | null;
+  transDocNo?: string | null;
+  transDocDate?: string | null;
+  vehicleNo?: string | null;
+  vehicleType?: string | null;
+  totalValue?: number | null;
+  cgstValue?: number | null;
+  sgstValue?: number | null;
+  igstValue?: number | null;
+  totalInvValue?: number | null;
+  items?: EwayBillInputItemsItem[];
+  /** Must reference an invoice belonging to the caller's own business. */
+  invoiceId?: number | null;
+}
+
+export type EwayBillUpdateStatus = typeof EwayBillUpdateStatus[keyof typeof EwayBillUpdateStatus];
+
+
+export const EwayBillUpdateStatus = {
+  draft: 'draft',
+  generated: 'generated',
+  cancelled: 'cancelled',
+} as const;
+
+export interface EwayBillUpdate {
+  status?: EwayBillUpdateStatus;
+  ewbNo?: string | null;
+  ewbDate?: string | null;
+  validUpto?: string | null;
+  transMode?: string | null;
+  transDistance?: number | null;
+  transporterName?: string | null;
+  transporterId?: string | null;
+  transDocNo?: string | null;
+  transDocDate?: string | null;
+  vehicleNo?: string | null;
+  vehicleType?: string | null;
+}
+
 export interface LoginInput {
   email: string;
   password: string;
@@ -371,14 +498,26 @@ export interface ProductUpdate {
 export interface InvoiceItem {
   id?: number;
   /** @nullable */
-  productId: number | null;
-  productName: string;
+  productId?: number | null;
+  /** Line description. This is what clients send. */
+  description?: string;
+  /**
+     * Legacy alias for `description`. Accepted, never returned.
+     * @deprecated
+     */
+  productName?: string;
   /** @nullable */
   hsnCode?: string | null;
   quantity: number;
   /** @nullable */
   unit?: string | null;
-  rate: number;
+  /** Price per unit. This is what clients send. */
+  unitPrice?: number;
+  /**
+     * Legacy alias for `unitPrice`. Accepted, never returned.
+     * @deprecated
+     */
+  rate?: number;
   discount?: number;
   gstRate: number;
   cgst?: number;
@@ -423,8 +562,12 @@ export interface InvoiceListResponse {
 }
 
 export interface InvoiceInput {
-  type: string;
-  customerId: number;
+  type?: string;
+  /** Omit for a walk-in customer and send `customerName` instead. The id must belong to the caller's own business. */
+  customerId?: number;
+  /** Required when `customerId` is omitted. */
+  customerName?: string;
+  customerGstin?: string | null;
   invoiceDate: string;
   /** @nullable */
   dueDate?: string | null;
@@ -450,8 +593,33 @@ export interface InvoiceUpdate {
   items?: InvoiceItem[];
 }
 
+export type InvoiceStatusInputStatus = typeof InvoiceStatusInputStatus[keyof typeof InvoiceStatusInputStatus];
+
+
+export const InvoiceStatusInputStatus = {
+  paid: 'paid',
+  unpaid: 'unpaid',
+  partial: 'partial',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * Alias for `status`; whichever is present is used.
+ */
+export type InvoiceStatusInputPaymentStatus = typeof InvoiceStatusInputPaymentStatus[keyof typeof InvoiceStatusInputPaymentStatus];
+
+
+export const InvoiceStatusInputPaymentStatus = {
+  paid: 'paid',
+  unpaid: 'unpaid',
+  partial: 'partial',
+  cancelled: 'cancelled',
+} as const;
+
 export interface InvoiceStatusInput {
-  status: string;
+  status?: InvoiceStatusInputStatus;
+  /** Alias for `status`; whichever is present is used. */
+  paymentStatus?: InvoiceStatusInputPaymentStatus;
   /** @nullable */
   paidAmount?: number | null;
 }
@@ -460,13 +628,25 @@ export interface PurchaseItem {
   id?: number;
   /** @nullable */
   productId?: number | null;
-  productName: string;
+  /** Line description. This is what clients send. */
+  description?: string;
+  /**
+     * Legacy alias for `description`. Accepted, never returned.
+     * @deprecated
+     */
+  productName?: string;
   /** @nullable */
   hsnCode?: string | null;
   quantity: number;
   /** @nullable */
   unit?: string | null;
-  rate: number;
+  /** Price per unit. This is what clients send. */
+  unitPrice?: number;
+  /**
+     * Legacy alias for `unitPrice`. Accepted, never returned.
+     * @deprecated
+     */
+  rate?: number;
   gstRate: number;
   cgst?: number;
   sgst?: number;
@@ -502,8 +682,16 @@ export interface PurchaseListResponse {
 
 export interface PurchaseInput {
   vendorId: number;
-  invoiceNumber: string;
-  invoiceDate: string;
+  /** Bill reference. This is what clients send; generated when omitted. */
+  billNumber?: string;
+  /** Bill date. This is what clients send. */
+  billDate?: string;
+  /**
+     * Legacy alias for `billNumber`.
+     * @deprecated
+     */
+  invoiceNumber?: string;
+  invoiceDate?: string;
   /** @nullable */
   notes?: string | null;
   items: PurchaseItem[];
@@ -657,6 +845,14 @@ export interface AdminStats {
   recentUsers?: User[];
 }
 
+export type ChangePassword200 = {
+  success: boolean;
+};
+
+export type LogoutAll200 = {
+  success: boolean;
+};
+
 export type ListUsersParams = {
 search?: string;
 status?: string;
@@ -732,5 +928,32 @@ toDate?: string;
 export type GetHsnReportParams = {
 month?: number;
 year?: number;
+};
+
+export type AdminListUsersParams = {
+search?: string;
+/**
+ * @minimum 1
+ */
+page?: number;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};
+
+export type AdminGetUser200 = { [key: string]: unknown };
+
+export type ListEwayBills200 = {
+  bills: EwayBill[];
+};
+
+export type CreateEwayBill201 = {
+  bill: EwayBill;
+};
+
+export type DeleteEwayBill200 = {
+  success: boolean;
 };
 

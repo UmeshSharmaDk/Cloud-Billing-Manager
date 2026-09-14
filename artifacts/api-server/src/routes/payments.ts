@@ -1,40 +1,59 @@
 import { Router } from "express";
-import { db, paymentsTable, usersTable } from "@workspace/db";
+import { db, paymentsTable, invoicesTable, customersTable, vendorsTable } from "@workspace/db";
 import { eq, and, count, desc } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
+import { toColumn, toJson } from "../lib/money";
+import { validateBody, validateQuery } from "../middleware/validate";
+import { ListPaymentsQuery, CreatePaymentBody } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
+import { resolveTenantRefs } from "../lib/tenant-refs";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function mapPayment(p: any) {
-  return { ...p, amount: parseFloat(p.amount) };
+  return { ...p, amount: toJson(p.amount) };
 }
 
-router.get("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { type, page = "1", limit = "20" } = req.query as any;
+router.get("/", requireAuth, requireBusiness, validateQuery(ListPaymentsQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const { type, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(paymentsTable.businessId, businessId)];
   if (type) conditions.push(eq(paymentsTable.type, type));
   const payments = await db.select().from(paymentsTable).where(and(...conditions))
-    .limit(parseInt(limit)).offset((parseInt(page) - 1) * parseInt(limit))
+    .limit(limit).offset((page - 1) * limit)
     .orderBy(desc(paymentsTable.createdAt));
-  const [{ count: total }] = await db.select({ count: count() }).from(paymentsTable).where(eq(paymentsTable.businessId, businessId));
+  const [{ count: total }] = await db.select({ count: count() }).from(paymentsTable).where(and(...conditions));
   return res.json({ payments: payments.map(mapPayment), total: Number(total) });
 });
 
-router.post("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), async (req: Req, res) => {
+  const businessId = req.businessId;
   const { type, amount, date, mode, referenceNumber, invoiceId, customerId, vendorId, notes } = req.body;
   if (!type || !amount || !date || !mode) return res.status(400).json({ error: "Required fields missing" });
+
+  // Each of these named a row by id and was stored unchecked, so a payment
+  // could point at another tenant's invoice, customer or vendor. Zod proves
+  // they are positive integers; only a scoped lookup proves they are ours.
+  const refs = await resolveTenantRefs(businessId, {
+    invoiceId: { table: invoicesTable, value: invoiceId, label: "invoice" },
+    customerId: { table: customersTable, value: customerId, label: "customer" },
+    vendorId: { table: vendorsTable, value: vendorId, label: "vendor" },
+  });
+  if (!refs.ok) return res.status(400).json({ error: refs.error });
+
   const [payment] = await db.insert(paymentsTable).values({
-    businessId, type, amount: amount.toString(), date, mode,
-    referenceNumber, invoiceId, customerId, vendorId, notes,
+    businessId, type, amount: toColumn(amount), date, mode,
+    referenceNumber, notes,
+    invoiceId: refs.ids["invoiceId"], customerId: refs.ids["customerId"], vendorId: refs.ids["vendorId"],
   }).returning();
   return res.status(201).json(mapPayment(payment));
 });

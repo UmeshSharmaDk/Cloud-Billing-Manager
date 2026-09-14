@@ -9,8 +9,16 @@ import type { PurchaseItem } from './purchaseItem';
 
 export interface PurchaseInput {
   vendorId: number;
-  invoiceNumber: string;
-  invoiceDate: string;
+  /** Bill reference. This is what clients send; generated when omitted. */
+  billNumber?: string;
+  /** Bill date. This is what clients send. */
+  billDate?: Date;
+  /**
+     * Legacy alias for `billNumber`.
+     * @deprecated
+     */
+  invoiceNumber?: string;
+  invoiceDate?: string;
   /** @nullable */
   notes?: string | null;
   items: PurchaseItem[];

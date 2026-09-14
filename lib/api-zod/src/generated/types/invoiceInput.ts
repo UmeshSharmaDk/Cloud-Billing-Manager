@@ -8,8 +8,12 @@
 import type { InvoiceItem } from './invoiceItem';
 
 export interface InvoiceInput {
-  type: string;
-  customerId: number;
+  type?: string;
+  /** Omit for a walk-in customer and send `customerName` instead. The id must belong to the caller's own business. */
+  customerId?: number;
+  /** Required when `customerId` is omitted. */
+  customerName?: string;
+  customerGstin?: string | null;
   invoiceDate: string;
   /** @nullable */
   dueDate?: string | null;

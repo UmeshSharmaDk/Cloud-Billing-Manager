@@ -1,110 +1,228 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable } from "@workspace/db";
-import { eq, ilike, or, count } from "drizzle-orm";
+import { eq, ilike, or, and, count, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
-import crypto from "crypto";
+import { mapUser } from "../lib/serialise";
+import { systemScope } from "../middleware/tenant-scope";
+import { hashPassword } from "../lib/password";
+import { validatePassword } from "../lib/password-policy";
+import { recordAudit, actorFrom } from "../lib/audit";
+import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
+import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import type { AuthedRequest, IdParams } from "../lib/http";
+import {
+  ListUsersQuery, CreateUserBody, UpdateUserBody,
+  ToggleStatusBody, ResetPasswordBody, IdParam,
+} from "../schemas";
 
 const router = Router();
 
-function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password + "gst_salt_v1").digest("hex");
-}
+/**
+ * Every route here is already gated by `requireAdmin` and reads across all
+ * tenants by design — platform dashboards, user administration. Suspending the
+ * policies is therefore explicit and router-wide rather than sprinkled per
+ * query, and it means these handlers are trusting `requireAdmin` alone.
+ */
+router.use(systemScope);
 
-function mapUser(user: any) {
-  return {
-    id: user.id, name: user.name, email: user.email, role: user.role,
-    isActive: user.isActive, subscriptionStatus: user.subscriptionStatus,
-    subscriptionEnd: user.subscriptionEnd, businessId: user.businessId,
-    createdAt: user.createdAt,
-  };
-}
+/**
+ * Handlers in this router run after `requireAuth`, so
+ * the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `user` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = AuthedRequest<any, any, IdParams>;
 
-router.get("/", requireAuth, requireAdmin, async (req, res) => {
-  const { search, status, page = "1", limit = "20" } = req.query as any;
-  let query = db.select().from(usersTable).$dynamic();
+
+router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async (req: Req, res) => {
+  const { search, status, page, limit } = req.validatedQuery;
   const conditions: any[] = [];
   if (search) conditions.push(or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)));
   if (status === "active") conditions.push(eq(usersTable.isActive, true));
   if (status === "inactive") conditions.push(eq(usersTable.isActive, false));
-  if (conditions.length > 0) {
-    const { and } = await import("drizzle-orm");
-    query = query.where(and(...conditions));
-  }
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  const users = await query.limit(parseInt(limit)).offset(offset);
-  const [{ count: total }] = await db.select({ count: count() }).from(usersTable);
+  conditions.push(isNull(usersTable.deletedAt));
+  const where = and(...conditions);
+
+  const users = await db.select().from(usersTable).where(where)
+    .limit(limit).offset((page - 1) * limit);
+  // Count the filtered set, not the whole table: the previous total ignored
+  // `search` and `status`, so a filtered page reported the wrong page count.
+  const [{ count: total }] = await db.select({ count: count() }).from(usersTable).where(where);
   return res.json({ users: users.map(mapUser), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireAdmin, async (req, res) => {
+router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
+
+  // Creating an administrator is a privilege grant, so it is confirmed exactly
+  // as promoting one is. Without this the step-up on PATCH was trivially routed
+  // around: a stolen session could not promote an existing user, but could
+  // create a brand-new admin with a password of the attacker's choosing — and
+  // that account's sessions survive the real admin's `logout-all`.
+  if (role === "admin") {
+    const stepUp = await verifyStepUp(req);
+    if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+  }
+
+  const policyFailure = await validatePassword(password);
+  if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+
+  const normalisedEmail = String(email).toLowerCase();
+
+  // Checked rather than left to the unique index, which surfaced as a 500 and
+  // told the operator nothing.
+  const [taken] = await db.select({ id: usersTable.id }).from(usersTable)
+    .where(eq(usersTable.email, normalisedEmail)).limit(1);
+  if (taken) return res.status(409).json({ error: "That email address is already registered" });
+
   const [user] = await db.insert(usersTable).values({
-    name, email: email.toLowerCase(), passwordHash: hashPassword(password), role,
+    name, email: normalisedEmail, passwordHash: await hashPassword(String(password)), role,
     isActive: true, subscriptionStatus, subscriptionEnd,
   }).returning();
+  await recordAudit({
+    ...actorFrom(req), action: "user.created", targetType: "user", targetId: user.id,
+    details: { email: user.email, role: user.role },
+  });
   return res.status(201).json(mapUser(user));
 });
 
-router.get("/admin/stats", requireAuth, requireAdmin, async (_req, res) => {
-  const allUsers = await db.select().from(usersTable);
-  const activeUsers = allUsers.filter(u => u.isActive && u.role !== "admin").length;
-  const inactiveUsers = allUsers.filter(u => !u.isActive).length;
-  const expiredSubscriptions = allUsers.filter(u => {
-    if (!u.subscriptionEnd) return false;
-    return new Date(u.subscriptionEnd) < new Date();
-  }).length;
-  const businesses = await db.select().from(businessesTable);
-  const recentUsers = allUsers.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 10);
-  return res.json({
-    totalUsers: allUsers.filter(u => u.role !== "admin").length,
-    activeUsers,
-    inactiveUsers,
-    expiredSubscriptions,
-    totalBusinesses: businesses.length,
-    recentUsers: recentUsers.map(mapUser),
-  });
-});
+/**
+ * `GET /api/users/admin/stats` used to live here: a second, subtly different
+ * copy of `GET /api/admin/stats` with its own bugs (it counted deleted users,
+ * and its "inactive" tally included administrators while "active" did not).
+ * Two overlapping admin surfaces is one too many — `/api/admin/stats` is the
+ * one the admin dashboard calls, and it is now the only one.
+ */
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  if (req.userRole !== "admin" && req.userId !== parseInt(req.params.id)) {
+router.get("/:id", requireAuth, validateParams(IdParam), async (req: Req, res) => {
+  if (req.userRole !== "admin" && req.userId !== req.validatedParams.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, parseInt(req.params.id))).limit(1);
+  const [user] = await db.select().from(usersTable)
+    .where(and(eq(usersTable.id, req.validatedParams.id), isNull(usersTable.deletedAt))).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
   return res.json(mapUser(user));
 });
 
-router.patch("/:id", requireAuth, requireAdmin, async (req, res) => {
-  const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
-  const updates: any = {};
-  if (name) updates.name = name;
-  if (email) updates.email = email.toLowerCase();
-  if (role) updates.role = role;
-  if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
-  if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd;
-  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, parseInt(req.params.id))).returning();
-  if (!user) return res.status(404).json({ error: "User not found" });
-  return res.json(mapUser(user));
-});
+router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody),
+  async (req: Req, res) => {
+    const targetId = req.validatedParams.id;
+    const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
 
-router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
-  await db.delete(usersTable).where(eq(usersTable.id, parseInt(req.params.id)));
+    const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
+    if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+
+    // Confirmation is required to CHANGE a role, not merely to send the field.
+    // The admin edit form posts the whole record including the unchanged role,
+    // so gating on presence made every save fail — a subscription edit is not
+    // a privilege change and must not demand a password.
+    if (role && role !== before.role) {
+      const stepUp = await verifyStepUp(req);
+      if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+
+      const guard = await assertNotLastAdmin(before, role);
+      if (guard) return res.status(409).json({ error: guard });
+    }
+
+    const updates: any = {};
+    if (name) updates.name = name;
+    if (email) updates.email = email.toLowerCase();
+    if (role) updates.role = role;
+    if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
+    if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
+
+    const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, targetId)).returning();
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    await recordAudit({
+      ...actorFrom(req),
+      action: role && role !== before.role ? "user.role_changed" : "user.updated",
+      targetType: "user", targetId,
+      details: { before: { role: before.role, email: before.email }, after: { role: user.role, email: user.email } },
+    });
+    return res.json(mapUser(user));
+  });
+
+/**
+ * Soft-delete a user. The row and every business record attached to it stay
+ * in place; a hard DELETE removed only the user and orphaned the rest.
+ */
+router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
+  const targetId = req.validatedParams.id;
+
+  const selfGuard = assertNotSelf(req.user.id, targetId);
+  if (selfGuard) return res.status(409).json({ error: selfGuard });
+
+  const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
+  if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+
+  const guard = await assertNotLastAdmin(before, "user");
+  if (guard) return res.status(409).json({ error: guard });
+
+  await db.update(usersTable)
+    .set({ deletedAt: new Date(), isActive: false, tokenVersion: before.tokenVersion + 1 })
+    .where(eq(usersTable.id, targetId));
+
+  await recordAudit({
+    ...actorFrom(req), action: "user.deleted", targetType: "user", targetId,
+    details: { email: before.email, role: before.role },
+  });
   return res.json({ success: true });
 });
 
-router.patch("/:id/toggle-status", requireAuth, requireAdmin, async (req, res) => {
+router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdParam), validateBody(ToggleStatusBody), async (req: Req, res) => {
+  const targetId = req.validatedParams.id;
   const { isActive } = req.body;
-  const [user] = await db.update(usersTable).set({ isActive }).where(eq(usersTable.id, parseInt(req.params.id))).returning();
+
+  if (!isActive) {
+    const selfGuard = assertNotSelf(req.user.id, targetId);
+    if (selfGuard) return res.status(409).json({ error: selfGuard });
+  }
+
+  const [user] = await db.update(usersTable).set({ isActive })
+    .where(and(eq(usersTable.id, targetId), isNull(usersTable.deletedAt))).returning();
   if (!user) return res.status(404).json({ error: "User not found" });
+
+  await recordAudit({
+    ...actorFrom(req), action: "user.status_changed", targetType: "user", targetId,
+    details: { isActive },
+  });
   return res.json(mapUser(user));
 });
 
-router.post("/:id/reset-password", requireAuth, requireAdmin, async (req, res) => {
-  const { newPassword } = req.body;
-  if (!newPassword) return res.status(400).json({ error: "newPassword required" });
-  await db.update(usersTable).set({ passwordHash: hashPassword(newPassword) }).where(eq(usersTable.id, parseInt(req.params.id)));
-  return res.json({ success: true });
-});
+/**
+ * Reset another user's password. The most dangerous action an administrator
+ * can take — it yields their account — so it needs the administrator's own
+ * password, and it is recorded.
+ */
+router.post("/:id/reset-password", requireAuth, requireAdmin, validateParams(IdParam),
+  validateBody(ResetPasswordBody), requireStepUp, async (req: Req, res) => {
+    const targetId = req.validatedParams.id;
+    const { newPassword } = req.body;
+
+    const policyFailure = await validatePassword(newPassword);
+    if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+
+    const [target] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
+    if (!target || target.deletedAt) return res.status(404).json({ error: "User not found" });
+
+    // Revoke the target's existing sessions as well. Resetting a password
+    // while leaving the old sessions live defeats the point of the reset.
+    await db.update(usersTable)
+      .set({
+        passwordHash: await hashPassword(newPassword),
+        tokenVersion: target.tokenVersion + 1,
+      })
+      .where(eq(usersTable.id, targetId));
+
+    await recordAudit({
+      ...actorFrom(req), action: "user.password_reset", targetType: "user", targetId,
+      details: { email: target.email },
+    });
+    return res.json({ success: true });
+  });
 
 export default router;

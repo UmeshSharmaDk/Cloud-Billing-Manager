@@ -1,75 +1,116 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, count, desc } from "drizzle-orm";
+import { eq, ne, and, or, ilike, isNull, count, desc, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
+import { mapUser } from "../lib/serialise";
+import { systemScope } from "../middleware/tenant-scope";
+import { validateBody, validateQuery, validateParams } from "../middleware/validate";
+import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
+import { recordAudit, actorFrom } from "../lib/audit";
+import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
+import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
+import type { AuthedRequest, IdParams } from "../lib/http";
 
 const router = Router();
 
-function mapUser(u: any) {
-  return {
-    id: u.id, name: u.name, email: u.email, role: u.role,
-    isActive: u.isActive, subscriptionStatus: u.subscriptionStatus,
-    subscriptionEnd: u.subscriptionEnd, businessId: u.businessId,
-    createdAt: u.createdAt,
-  };
-}
+/**
+ * Every route here is already gated by `requireAdmin` and reads across all
+ * tenants by design — platform dashboards, user administration. Suspending the
+ * policies is therefore explicit and router-wide rather than sprinkled per
+ * query, and it means these handlers are trusting `requireAdmin` alone.
+ */
+router.use(systemScope);
 
+/**
+ * Handlers in this router run after `requireAuth`, so
+ * the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `user` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = AuthedRequest<any, any, IdParams>;
+
+
+/**
+ * Platform statistics, computed by the database.
+ *
+ * This read every user and every business into memory on each request and
+ * filtered the arrays eight times. The cost grew with the size of the platform
+ * — the endpoint got slower exactly as the product succeeded.
+ */
 router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
-  const allUsers = await db.select().from(usersTable);
-  const businesses = await db.select().from(businessesTable);
-  const [{ count: totalInvoices }] = await db.select({ count: count() }).from(invoicesTable);
-  const nonAdmins = allUsers.filter(u => u.role !== "admin");
-  const activeUsers = nonAdmins.filter(u => u.isActive).length;
-  const inactiveUsers = nonAdmins.filter(u => !u.isActive).length;
-  const expiredSubscriptions = nonAdmins.filter(u => {
-    if (!u.subscriptionEnd) return false;
-    return new Date(u.subscriptionEnd) < new Date();
-  }).length;
+  const today = new Date().toISOString().slice(0, 10);
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
 
-  const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const newUsersThisMonth = nonAdmins.filter(u => new Date(u.createdAt) >= startOfMonth).length;
+  const notAdmin = and(ne(usersTable.role, "admin"), isNull(usersTable.deletedAt));
 
-  const monthlyCount = nonAdmins.filter(u => u.subscriptionStatus === "monthly").length;
-  const yearlyCount = nonAdmins.filter(u => u.subscriptionStatus === "yearly").length;
-  const trialCount = nonAdmins.filter(u => u.subscriptionStatus === "trial").length;
-  const expiredCount = nonAdmins.filter(u => u.subscriptionStatus === "expired").length;
+  const [[userAgg], [{ count: totalBusinesses }], [{ count: totalInvoices }], recentUsers] =
+    await Promise.all([
+      db.select({
+        total: count(),
+        active: sql<number>`count(*) FILTER (WHERE ${usersTable.isActive})`,
+        inactive: sql<number>`count(*) FILTER (WHERE NOT ${usersTable.isActive})`,
+        expired: sql<number>`count(*) FILTER (
+          WHERE ${usersTable.subscriptionEnd} IS NOT NULL AND ${usersTable.subscriptionEnd} < ${today}
+        )`,
+        newThisMonth: sql<number>`count(*) FILTER (WHERE ${usersTable.createdAt} >= ${startOfMonth})`,
+        monthly: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'monthly')`,
+        yearly: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'yearly')`,
+        trial: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'trial')`,
+        expiredStatus: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'expired')`,
+      }).from(usersTable).where(notAdmin),
 
-  const recentUsers = [...nonAdmins]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 10)
-    .map(mapUser);
+      db.select({ count: count() }).from(businessesTable),
+      db.select({ count: count() }).from(invoicesTable),
+
+      db.select().from(usersTable).where(notAdmin)
+        .orderBy(desc(usersTable.createdAt)).limit(10),
+    ]);
+
+  const activeUsers = Number(userAgg.active);
 
   return res.json({
-    totalUsers: nonAdmins.length,
+    totalUsers: Number(userAgg.total),
     activeUsers,
-    inactiveUsers,
-    expiredSubscriptions,
-    totalBusinesses: businesses.length,
+    inactiveUsers: Number(userAgg.inactive),
+    expiredSubscriptions: Number(userAgg.expired),
+    totalBusinesses: Number(totalBusinesses),
     totalInvoices: Number(totalInvoices),
     activeSubscriptions: activeUsers,
-    newUsersThisMonth,
-    monthlyCount, yearlyCount, trialCount, expiredCount,
-    recentUsers,
+    newUsersThisMonth: Number(userAgg.newThisMonth),
+    monthlyCount: Number(userAgg.monthly),
+    yearlyCount: Number(userAgg.yearly),
+    trialCount: Number(userAgg.trial),
+    expiredCount: Number(userAgg.expiredStatus),
+    recentUsers: recentUsers.map(mapUser),
   });
 });
 
 // GET /admin/users — list all users with business info
-router.get("/users", requireAuth, requireAdmin, async (req: any, res) => {
-  const { search, page = "1", limit = "50" } = req.query as any;
-  const allUsers = await db.select().from(usersTable).orderBy(desc(usersTable.createdAt));
-  const filtered = search
-    ? allUsers.filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()))
-    : allUsers;
-  const offset = (parseInt(page) - 1) * parseInt(limit);
-  const paged = filtered.slice(offset, offset + parseInt(limit));
-  return res.json({ users: paged.map(mapUser), total: filtered.length });
+router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuery), async (req: Req, res) => {
+  const { search, page, limit } = req.validatedQuery;
+  // Filtering, counting and paging happen in SQL. This handler used to read
+  // every user row into memory on each request and slice the array, so its
+  // cost grew with the size of the platform while `limit` came straight from
+  // the query string.
+  const where = search
+    ? and(isNull(usersTable.deletedAt),
+          or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)))
+    : isNull(usersTable.deletedAt);
+
+  const users = await db.select().from(usersTable).where(where)
+    .orderBy(desc(usersTable.createdAt))
+    .limit(limit).offset((page - 1) * limit);
+  const [{ count: total }] = await db.select({ count: count() }).from(usersTable).where(where);
+  return res.json({ users: users.map(mapUser), total: Number(total) });
 });
 
 // GET /admin/users/:id — get a user with all their business data
-router.get("/users/:id", requireAuth, requireAdmin, async (req: any, res) => {
-  const userId = parseInt(req.params.id);
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
+  const userId = req.validatedParams.id;
+  const [user] = await db.select().from(usersTable)
+    .where(and(eq(usersTable.id, userId), isNull(usersTable.deletedAt))).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
 
   let business = null;
@@ -98,16 +139,52 @@ router.get("/users/:id", requireAuth, requireAdmin, async (req: any, res) => {
 });
 
 // PATCH /admin/users/:id — update user subscription/status
-router.patch("/users/:id", requireAuth, requireAdmin, async (req: any, res) => {
-  const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
-  const updates: any = {};
-  if (isActive !== undefined) updates.isActive = isActive;
-  if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
-  if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd || null;
-  if (role !== undefined) updates.role = role;
-  const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, parseInt(req.params.id))).returning();
-  if (!user) return res.status(404).json({ error: "User not found" });
-  return res.json(mapUser(user));
-});
+router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody),
+  async (req: Req, res) => {
+    const targetId = req.validatedParams.id;
+    const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;
+
+    const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
+    if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+
+    // Confirmation is required to CHANGE a role, not merely to send the field.
+    // The admin edit form posts the whole record including the unchanged role,
+    // so gating on presence made every save fail — a subscription edit is not
+    // a privilege change and must not demand a password.
+    if (role && role !== before.role) {
+      const stepUp = await verifyStepUp(req);
+      if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+
+      const guard = await assertNotLastAdmin(before, role);
+      if (guard) return res.status(409).json({ error: guard });
+    }
+    if (isActive === false) {
+      const selfGuard = assertNotSelf(req.user.id, targetId);
+      if (selfGuard) return res.status(409).json({ error: selfGuard });
+      const guard = await assertNotLastAdmin(before, "user");
+      if (guard) return res.status(409).json({ error: guard });
+    }
+
+    const updates: any = {};
+    if (isActive !== undefined) updates.isActive = isActive;
+    if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
+    if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd || null;
+    if (role !== undefined) updates.role = role;
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
+
+    const [user] = await db.update(usersTable).set(updates).where(eq(usersTable.id, targetId)).returning();
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    await recordAudit({
+      ...actorFrom(req),
+      action: role && role !== before.role ? "user.role_changed" : "user.subscription_changed",
+      targetType: "user", targetId,
+      details: {
+        before: { role: before.role, isActive: before.isActive, subscriptionStatus: before.subscriptionStatus },
+        after: { role: user.role, isActive: user.isActive, subscriptionStatus: user.subscriptionStatus },
+      },
+    });
+    return res.json(mapUser(user));
+  });
 
 export default router;

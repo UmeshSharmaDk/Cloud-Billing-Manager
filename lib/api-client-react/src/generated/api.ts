@@ -20,15 +20,25 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AdminGetUser200,
+  AdminListUsersParams,
   AdminStats,
+  AdminUserUpdate,
   AuthResponse,
   Business,
   BusinessUpdate,
+  ChangePassword200,
+  ChangePasswordInput,
+  CreateEwayBill201,
   Customer,
   CustomerInput,
   CustomerListResponse,
   CustomerUpdate,
   DashboardStats,
+  DeleteEwayBill200,
+  EwayBill,
+  EwayBillInput,
+  EwayBillUpdate,
   GetGstr1ReportParams,
   GetGstr3bReportParams,
   GetHsnReportParams,
@@ -44,6 +54,7 @@ import type {
   InvoiceStatusInput,
   InvoiceUpdate,
   ListCustomersParams,
+  ListEwayBills200,
   ListInvoicesParams,
   ListPaymentsParams,
   ListProductsParams,
@@ -51,6 +62,7 @@ import type {
   ListUsersParams,
   ListVendorsParams,
   LoginInput,
+  LogoutAll200,
   MonthlyRevenue,
   Payment,
   PaymentInput,
@@ -238,6 +250,78 @@ export const useLogin = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getLoginMutationOptions(options));
+    }
+
+export const getChangePasswordUrl = () => {
+
+
+
+
+  return `/api/auth/change-password`
+}
+
+/**
+ * Requires the current password. On success the session cookie is re-issued, so the browser is not left holding one minted under the old credential.
+ * @summary Change your own password
+ */
+export const changePassword = async (changePasswordInput: ChangePasswordInput, options?: RequestInit): Promise<ChangePassword200> => {
+
+  return customFetch<ChangePassword200>(getChangePasswordUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      changePasswordInput,)
+  }
+);}
+
+
+
+
+export const getChangePasswordMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof changePassword>>, TError,{data: BodyType<ChangePasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof changePassword>>, TError,{data: BodyType<ChangePasswordInput>}, TContext> => {
+
+const mutationKey = ['changePassword'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof changePassword>>, {data: BodyType<ChangePasswordInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  changePassword(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ChangePasswordMutationResult = NonNullable<Awaited<ReturnType<typeof changePassword>>>
+    export type ChangePasswordMutationBody = BodyType<ChangePasswordInput>
+    export type ChangePasswordMutationError = ErrorType<void>
+
+    /**
+ * @summary Change your own password
+ */
+export const useChangePassword = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof changePassword>>, TError,{data: BodyType<ChangePasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof changePassword>>,
+        TError,
+        {data: BodyType<ChangePasswordInput>},
+        TContext
+      > => {
+      return useMutation(getChangePasswordMutationOptions(options));
     }
 
 export const getRegisterUrl = () => {
@@ -456,6 +540,77 @@ export const useLogout = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getLogoutMutationOptions(options));
+    }
+
+export const getLogoutAllUrl = () => {
+
+
+
+
+  return `/api/auth/logout-all`
+}
+
+/**
+ * Revokes every session this account holds, including bearer tokens on clients with no cookie jar. Ordinary logout ends only the calling device's session.
+ * @summary Sign out on every device
+ */
+export const logoutAll = async ( options?: RequestInit): Promise<LogoutAll200> => {
+
+  return customFetch<LogoutAll200>(getLogoutAllUrl(),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+export const getLogoutAllMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logoutAll>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof logoutAll>>, TError,void, TContext> => {
+
+const mutationKey = ['logoutAll'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof logoutAll>>, void> = () => {
+
+
+          return  logoutAll(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LogoutAllMutationResult = NonNullable<Awaited<ReturnType<typeof logoutAll>>>
+
+    export type LogoutAllMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Sign out on every device
+ */
+export const useLogoutAll = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logoutAll>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof logoutAll>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getLogoutAllMutationOptions(options));
     }
 
 export const getListUsersUrl = (params?: ListUsersParams,) => {
@@ -4179,6 +4334,607 @@ export function useGetHsnReport<TData = Awaited<ReturnType<typeof getHsnReport>>
 
 
 
+
+export const getAdminListUsersUrl = (params?: AdminListUsersParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : value.toString())
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/admin/users?${stringifiedParams}` : `/api/admin/users`
+}
+
+/**
+ * @summary List platform users
+ */
+export const adminListUsers = async (params?: AdminListUsersParams, options?: RequestInit): Promise<UserListResponse> => {
+
+  return customFetch<UserListResponse>(getAdminListUsersUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getAdminListUsersQueryKey = (params?: AdminListUsersParams,) => {
+    return [
+    `/api/admin/users`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getAdminListUsersQueryOptions = <TData = Awaited<ReturnType<typeof adminListUsers>>, TError = ErrorType<unknown>>(params?: AdminListUsersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListUsers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminListUsersQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListUsers>>> = ({ signal }) => adminListUsers(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminListUsers>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminListUsersQueryResult = NonNullable<Awaited<ReturnType<typeof adminListUsers>>>
+export type AdminListUsersQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List platform users
+ */
+
+export function useAdminListUsers<TData = Awaited<ReturnType<typeof adminListUsers>>, TError = ErrorType<unknown>>(
+ params?: AdminListUsersParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminListUsers>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminListUsersQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getAdminGetUserUrl = (id: number,) => {
+
+
+
+
+  return `/api/admin/users/${id}`
+}
+
+/**
+ * @summary Get a user with their business and record counts
+ */
+export const adminGetUser = async (id: number, options?: RequestInit): Promise<AdminGetUser200> => {
+
+  return customFetch<AdminGetUser200>(getAdminGetUserUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getAdminGetUserQueryKey = (id: number,) => {
+    return [
+    `/api/admin/users/${id}`
+    ] as const;
+    }
+
+
+export const getAdminGetUserQueryOptions = <TData = Awaited<ReturnType<typeof adminGetUser>>, TError = ErrorType<void>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminGetUser>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getAdminGetUserQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof adminGetUser>>> = ({ signal }) => adminGetUser(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof adminGetUser>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type AdminGetUserQueryResult = NonNullable<Awaited<ReturnType<typeof adminGetUser>>>
+export type AdminGetUserQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get a user with their business and record counts
+ */
+
+export function useAdminGetUser<TData = Awaited<ReturnType<typeof adminGetUser>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof adminGetUser>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getAdminGetUserQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getAdminUpdateUserUrl = (id: number,) => {
+
+
+
+
+  return `/api/admin/users/${id}`
+}
+
+/**
+ * Changing `role` requires `confirmPassword` — the calling administrator's own password. Other edits do not.
+ * @summary Update a user's status, subscription or role
+ */
+export const adminUpdateUser = async (id: number,
+    adminUserUpdate: AdminUserUpdate, options?: RequestInit): Promise<User> => {
+
+  return customFetch<User>(getAdminUpdateUserUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminUserUpdate,)
+  }
+);}
+
+
+
+
+export const getAdminUpdateUserMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminUpdateUser>>, TError,{id: number;data: BodyType<AdminUserUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof adminUpdateUser>>, TError,{id: number;data: BodyType<AdminUserUpdate>}, TContext> => {
+
+const mutationKey = ['adminUpdateUser'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof adminUpdateUser>>, {id: number;data: BodyType<AdminUserUpdate>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  adminUpdateUser(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AdminUpdateUserMutationResult = NonNullable<Awaited<ReturnType<typeof adminUpdateUser>>>
+    export type AdminUpdateUserMutationBody = BodyType<AdminUserUpdate>
+    export type AdminUpdateUserMutationError = ErrorType<void>
+
+    /**
+ * @summary Update a user's status, subscription or role
+ */
+export const useAdminUpdateUser = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof adminUpdateUser>>, TError,{id: number;data: BodyType<AdminUserUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof adminUpdateUser>>,
+        TError,
+        {id: number;data: BodyType<AdminUserUpdate>},
+        TContext
+      > => {
+      return useMutation(getAdminUpdateUserMutationOptions(options));
+    }
+
+export const getListEwayBillsUrl = () => {
+
+
+
+
+  return `/api/eway-bills`
+}
+
+/**
+ * @summary List e-way bills
+ */
+export const listEwayBills = async ( options?: RequestInit): Promise<ListEwayBills200> => {
+
+  return customFetch<ListEwayBills200>(getListEwayBillsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListEwayBillsQueryKey = () => {
+    return [
+    `/api/eway-bills`
+    ] as const;
+    }
+
+
+export const getListEwayBillsQueryOptions = <TData = Awaited<ReturnType<typeof listEwayBills>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listEwayBills>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListEwayBillsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listEwayBills>>> = ({ signal }) => listEwayBills({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listEwayBills>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListEwayBillsQueryResult = NonNullable<Awaited<ReturnType<typeof listEwayBills>>>
+export type ListEwayBillsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List e-way bills
+ */
+
+export function useListEwayBills<TData = Awaited<ReturnType<typeof listEwayBills>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listEwayBills>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListEwayBillsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreateEwayBillUrl = () => {
+
+
+
+
+  return `/api/eway-bills`
+}
+
+/**
+ * @summary Create an e-way bill
+ */
+export const createEwayBill = async (ewayBillInput: EwayBillInput, options?: RequestInit): Promise<CreateEwayBill201> => {
+
+  return customFetch<CreateEwayBill201>(getCreateEwayBillUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      ewayBillInput,)
+  }
+);}
+
+
+
+
+export const getCreateEwayBillMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createEwayBill>>, TError,{data: BodyType<EwayBillInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createEwayBill>>, TError,{data: BodyType<EwayBillInput>}, TContext> => {
+
+const mutationKey = ['createEwayBill'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createEwayBill>>, {data: BodyType<EwayBillInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createEwayBill(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateEwayBillMutationResult = NonNullable<Awaited<ReturnType<typeof createEwayBill>>>
+    export type CreateEwayBillMutationBody = BodyType<EwayBillInput>
+    export type CreateEwayBillMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Create an e-way bill
+ */
+export const useCreateEwayBill = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createEwayBill>>, TError,{data: BodyType<EwayBillInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createEwayBill>>,
+        TError,
+        {data: BodyType<EwayBillInput>},
+        TContext
+      > => {
+      return useMutation(getCreateEwayBillMutationOptions(options));
+    }
+
+export const getGetEwayBillUrl = (id: number,) => {
+
+
+
+
+  return `/api/eway-bills/${id}`
+}
+
+/**
+ * @summary Get an e-way bill
+ */
+export const getEwayBill = async (id: number, options?: RequestInit): Promise<EwayBill> => {
+
+  return customFetch<EwayBill>(getGetEwayBillUrl(id),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetEwayBillQueryKey = (id: number,) => {
+    return [
+    `/api/eway-bills/${id}`
+    ] as const;
+    }
+
+
+export const getGetEwayBillQueryOptions = <TData = Awaited<ReturnType<typeof getEwayBill>>, TError = ErrorType<void>>(id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getEwayBill>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetEwayBillQueryKey(id);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getEwayBill>>> = ({ signal }) => getEwayBill(id, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(id), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getEwayBill>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetEwayBillQueryResult = NonNullable<Awaited<ReturnType<typeof getEwayBill>>>
+export type GetEwayBillQueryError = ErrorType<void>
+
+
+/**
+ * @summary Get an e-way bill
+ */
+
+export function useGetEwayBill<TData = Awaited<ReturnType<typeof getEwayBill>>, TError = ErrorType<void>>(
+ id: number, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getEwayBill>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetEwayBillQueryOptions(id,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getUpdateEwayBillUrl = (id: number,) => {
+
+
+
+
+  return `/api/eway-bills/${id}`
+}
+
+/**
+ * @summary Update transport details or status
+ */
+export const updateEwayBill = async (id: number,
+    ewayBillUpdate: EwayBillUpdate, options?: RequestInit): Promise<EwayBill> => {
+
+  return customFetch<EwayBill>(getUpdateEwayBillUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      ewayBillUpdate,)
+  }
+);}
+
+
+
+
+export const getUpdateEwayBillMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateEwayBill>>, TError,{id: number;data: BodyType<EwayBillUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateEwayBill>>, TError,{id: number;data: BodyType<EwayBillUpdate>}, TContext> => {
+
+const mutationKey = ['updateEwayBill'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateEwayBill>>, {id: number;data: BodyType<EwayBillUpdate>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateEwayBill(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateEwayBillMutationResult = NonNullable<Awaited<ReturnType<typeof updateEwayBill>>>
+    export type UpdateEwayBillMutationBody = BodyType<EwayBillUpdate>
+    export type UpdateEwayBillMutationError = ErrorType<void>
+
+    /**
+ * @summary Update transport details or status
+ */
+export const useUpdateEwayBill = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateEwayBill>>, TError,{id: number;data: BodyType<EwayBillUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateEwayBill>>,
+        TError,
+        {id: number;data: BodyType<EwayBillUpdate>},
+        TContext
+      > => {
+      return useMutation(getUpdateEwayBillMutationOptions(options));
+    }
+
+export const getDeleteEwayBillUrl = (id: number,) => {
+
+
+
+
+  return `/api/eway-bills/${id}`
+}
+
+/**
+ * @summary Delete an e-way bill
+ */
+export const deleteEwayBill = async (id: number, options?: RequestInit): Promise<DeleteEwayBill200> => {
+
+  return customFetch<DeleteEwayBill200>(getDeleteEwayBillUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+export const getDeleteEwayBillMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteEwayBill>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteEwayBill>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteEwayBill'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteEwayBill>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteEwayBill(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteEwayBillMutationResult = NonNullable<Awaited<ReturnType<typeof deleteEwayBill>>>
+
+    export type DeleteEwayBillMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Delete an e-way bill
+ */
+export const useDeleteEwayBill = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteEwayBill>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteEwayBill>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteEwayBillMutationOptions(options));
+    }
 
 export const getGetAdminStatsUrl = () => {
 

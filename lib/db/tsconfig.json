@@ -8,5 +8,9 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Applied against a live database as a migration step, not built with
+  // the library: it talks to `pg` directly so it can run before the ORM
+  // barrel is loadable.
+  "exclude": ["src/apply-rls.ts"]
 }

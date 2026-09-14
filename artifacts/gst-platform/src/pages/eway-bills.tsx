@@ -7,18 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Plus, Search, Truck, FileText, Eye } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
-
-function authFetch(url: string, options?: RequestInit) {
-  const token = localStorage.getItem("gst_token");
-  return fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options?.headers ?? {}),
-    },
-  });
-}
+import { authFetch } from "@/lib/api-fetch";
 
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   draft: { label: "Draft", className: "bg-gray-100 text-gray-700" },

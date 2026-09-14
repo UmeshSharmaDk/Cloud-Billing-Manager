@@ -1,0 +1,183 @@
+name: Security checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The workspace already delays new releases by a day
+      # (`minimumReleaseAge` in pnpm-workspace.yaml), which guards against a
+      # freshly published malicious version. That does nothing about known
+      # CVEs in packages that have been around for months, which is this step.
+      - name: Audit dependencies
+        run: pnpm audit --audit-level=high
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # A hardcoded signing secret shipped in this repository once already.
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  no-fallback-secrets:
+    name: No fallback secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Catches the exact shape of the original finding: a secret read from the
+      # environment with a literal default, so a deployment that forgets to set
+      # the variable silently uses a value that is public in this repository.
+      - name: Reject `process.env.X ?? "literal"` for secret-shaped names
+        run: |
+          if grep -rInE 'process\.env(\.|\[")(\w*(SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL)\w*)("\])?\s*(\?\?|\|\|)\s*['"'"'"`]' \
+               --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' \
+               artifacts lib scripts; then
+            echo "::error::A secret is being read with a literal fallback. Fail closed instead."
+            exit 1
+          fi
+          echo "No fallback secrets found."
+
+  typecheck:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm --filter @workspace/api-server run test
+
+  integration:
+    name: Security integration suite
+    runs-on: ubuntu-latest
+
+    # The suite is the only thing standing between this repository and the
+    # findings it just fixed coming back. It needs a real database: the
+    # cross-tenant, lockout, audit and invoice-numbering checks all assert on
+    # rows, and the concurrency check needs genuine transaction semantics.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gst
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Two connections, and the difference between them is the thing under
+      # test. The server runs as an unprivileged role so the policies actually
+      # apply to it; migrations and test fixtures run as the owner, which they
+      # have to, because the application role deliberately cannot alter a table
+      # or read across tenants.
+      DATABASE_URL: postgres://gst_app:gst_app@127.0.0.1:5432/gst
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/gst
+      ALLOWED_ORIGINS: http://localhost:25512
+      NODE_ENV: production
+      PORT: 8099
+      # No outbound call to Have I Been Pwned from CI: the suite must not fail
+      # because a third party is having a bad day. The lookup's own logic is
+      # covered by the unit tests in the typecheck job.
+      DISABLE_BREACH_CHECK: "true"
+      # The suite deliberately fails dozens of logins from one address, which
+      # would otherwise trip the per-IP limiter. The per-account lockout that
+      # F-06 asserts still runs at its real threshold of 10.
+      AUTH_RATE_LIMIT_MAX: "500"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Create the schema
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
+        run: pnpm --filter @workspace/db run push --force
+
+      - name: Create the unprivileged application role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d gst -v ON_ERROR_STOP=1 <<'SQL'
+          DROP ROLE IF EXISTS gst_app;
+          CREATE ROLE gst_app LOGIN PASSWORD 'gst_app' NOSUPERUSER NOBYPASSRLS;
+          GRANT USAGE ON SCHEMA public TO gst_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gst_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gst_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gst_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO gst_app;
+          SQL
+
+      - name: Apply the row-level security policies
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
+        run: pnpm --filter @workspace/db run rls:apply
+
+      - name: Build the API server
+        run: pnpm --filter @workspace/api-server run build
+
+      - name: Start the API server
+        run: |
+          SESSION_SECRET="$(openssl rand -base64 48)" \
+            node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          timeout 60 bash -c 'until curl -sf http://127.0.0.1:8099/api/healthz >/dev/null; do sleep 1; done'
+
+      - name: Run the integration suite
+        run: pnpm --filter @workspace/api-server run test:integration
+
+      # The suite above only makes requests the application is entitled to
+      # make, so it would pass just as happily with the policies switched off.
+      # This asserts on what the database refuses.
+      - name: Assert row-level security actually isolates tenants
+        run: pnpm --filter @workspace/db run test:rls
+
+      - name: Server log on failure
+        if: failure()
+        run: tail -100 /tmp/api.log

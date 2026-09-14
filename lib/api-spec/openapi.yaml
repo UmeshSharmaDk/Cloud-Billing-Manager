@@ -24,6 +24,7 @@ paths:
   /healthz:
     get:
       operationId: healthCheck
+      security: []  # public: no session required
       tags: [health]
       summary: Health check
       responses:
@@ -38,6 +39,7 @@ paths:
   /auth/login:
     post:
       operationId: login
+      security: []  # public: no session required
       tags: [auth]
       summary: Login
       requestBody:
@@ -56,9 +58,40 @@ paths:
         "401":
           description: Unauthorized
 
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change your own password
+      description: >-
+        Requires the current password. On success the session cookie is
+        re-issued, so the browser is not left holding one minted under the old
+        credential.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordInput"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                required: [success]
+        "400":
+          description: The new password does not meet the policy
+        "403":
+          description: The current password is incorrect
+
   /auth/register:
     post:
       operationId: register
+      security: []  # public: no session required
       tags: [auth]
       summary: Register new business user
       requestBody:
@@ -98,6 +131,26 @@ paths:
           description: Logged out
 
   # Users (Admin)
+
+  /auth/logout-all:
+    post:
+      operationId: logoutAll
+      tags: [auth]
+      summary: Sign out on every device
+      description: >-
+        Revokes every session this account holds, including bearer tokens on
+        clients with no cookie jar. Ordinary logout ends only the calling
+        device's session.
+      responses:
+        "200":
+          description: All sessions revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { success: { type: boolean } }
+                required: [success]
+
   /users:
     get:
       operationId: listUsers
@@ -1089,6 +1142,144 @@ paths:
                 $ref: "#/components/schemas/HsnReport"
 
   # Admin dashboard stats
+  /admin/users:
+    get:
+      operationId: adminListUsers
+      tags: [admin]
+      summary: List platform users
+      parameters:
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: page,   schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: limit,  schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+
+  /admin/users/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    get:
+      operationId: adminGetUser
+      tags: [admin]
+      summary: Get a user with their business and record counts
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404": { description: Not found }
+    patch:
+      operationId: adminUpdateUser
+      tags: [admin]
+      summary: Update a user's status, subscription or role
+      description: >-
+        Changing `role` requires `confirmPassword` — the calling
+        administrator's own password. Other edits do not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminUserUpdate"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "403": { description: Password confirmation required or incorrect }
+        "409": { description: Refused — this would remove the last administrator }
+
+  /eway-bills:
+    get:
+      operationId: listEwayBills
+      tags: [eway-bills]
+      summary: List e-way bills
+      responses:
+        "200":
+          description: Bills
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bills:
+                    type: array
+                    items: { $ref: "#/components/schemas/EwayBill" }
+                required: [bills]
+    post:
+      operationId: createEwayBill
+      tags: [eway-bills]
+      summary: Create an e-way bill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EwayBillInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bill: { $ref: "#/components/schemas/EwayBill" }
+                required: [bill]
+
+  /eway-bills/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    get:
+      operationId: getEwayBill
+      tags: [eway-bills]
+      summary: Get an e-way bill
+      responses:
+        "200":
+          description: Bill
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EwayBill" }
+        "404": { description: Not found }
+    patch:
+      operationId: updateEwayBill
+      tags: [eway-bills]
+      summary: Update transport details or status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EwayBillUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EwayBill" }
+        "404": { description: Not found }
+    delete:
+      operationId: deleteEwayBill
+      tags: [eway-bills]
+      summary: Delete an e-way bill
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { success: { type: boolean } }
+                required: [success]
+
   /admin/stats:
     get:
       operationId: getAdminStats
@@ -1102,7 +1293,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/AdminStats"
 
+security:
+  # Every operation requires a session unless it overrides this with
+  # `security: []`. The spec previously declared no authentication at all, so
+  # the generated clients — and anyone reading it — saw a wholly public API.
+  - cookieAuth: []
+  - bearerAuth: []
+
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: gst_session
+      description: >-
+        Session cookie issued by /auth/login and /auth/register. HttpOnly, so
+        page scripts cannot read it. Browser clients must also send the CSRF
+        token from the readable `gst_csrf` cookie in an `X-CSRF-Token` header
+        on every state-changing request.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        For native clients that have no cookie jar. Browser clients should use
+        the cookie instead, so the token is never reachable from script.
   schemas:
     HealthStatus:
       type: object
@@ -1110,6 +1325,104 @@ components:
         status:
           type: string
       required: [status]
+
+    ChangePasswordInput:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+          minLength: 12
+          maxLength: 128
+          description: At least 12 characters; screened against common and breached passwords.
+      required: [currentPassword, newPassword]
+
+    AdminUserUpdate:
+      type: object
+      properties:
+        isActive: { type: boolean }
+        role: { type: string, enum: [user, admin] }
+        subscriptionStatus: { type: string, enum: [trial, monthly, yearly, expired], nullable: true }
+        subscriptionEnd: { type: string, nullable: true }
+        confirmPassword:
+          type: string
+          description: The calling administrator's own password. Required to change `role`.
+
+    EwayBill:
+      type: object
+      additionalProperties: true
+      properties:
+        id: { type: integer }
+        businessId: { type: integer }
+        docNo: { type: string }
+        docDate: { type: string, format: date }
+        status: { type: string, enum: [draft, generated, cancelled] }
+        ewbNo: { type: string, nullable: true }
+        vehicleNo: { type: string, nullable: true }
+        totalValue: { type: number }
+        cgstValue: { type: number }
+        sgstValue: { type: number }
+        igstValue: { type: number }
+        totalInvValue: { type: number }
+        items: { type: array, items: { type: object, additionalProperties: true } }
+      required: [id, businessId, docNo, docDate, status]
+
+    EwayBillInput:
+      type: object
+      properties:
+        docNo: { type: string }
+        docDate: { type: string, format: date }
+        supplyType: { type: string, nullable: true }
+        subSupplyType: { type: string, nullable: true }
+        docType: { type: string, nullable: true }
+        fromGstin: { type: string, nullable: true }
+        fromTrdName: { type: string, nullable: true }
+        fromAddr1: { type: string, nullable: true }
+        fromCity: { type: string, nullable: true }
+        fromState: { type: string, nullable: true }
+        fromPincode: { type: string, nullable: true }
+        toGstin: { type: string, nullable: true }
+        toTrdName: { type: string, nullable: true }
+        toAddr1: { type: string, nullable: true }
+        toCity: { type: string, nullable: true }
+        toState: { type: string, nullable: true }
+        toPincode: { type: string, nullable: true }
+        transMode: { type: string, nullable: true }
+        transDistance: { type: number, nullable: true }
+        transporterName: { type: string, nullable: true }
+        transporterId: { type: string, nullable: true }
+        transDocNo: { type: string, nullable: true }
+        transDocDate: { type: string, nullable: true }
+        vehicleNo: { type: string, nullable: true }
+        vehicleType: { type: string, nullable: true }
+        totalValue: { type: number, nullable: true }
+        cgstValue: { type: number, nullable: true }
+        sgstValue: { type: number, nullable: true }
+        igstValue: { type: number, nullable: true }
+        totalInvValue: { type: number, nullable: true }
+        items: { type: array, items: { type: object, additionalProperties: true } }
+        invoiceId:
+          type: integer
+          nullable: true
+          description: Must reference an invoice belonging to the caller's own business.
+      required: [docNo, docDate]
+
+    EwayBillUpdate:
+      type: object
+      properties:
+        status: { type: string, enum: [draft, generated, cancelled] }
+        ewbNo: { type: string, nullable: true }
+        ewbDate: { type: string, nullable: true }
+        validUpto: { type: string, nullable: true }
+        transMode: { type: string, nullable: true }
+        transDistance: { type: number, nullable: true }
+        transporterName: { type: string, nullable: true }
+        transporterId: { type: string, nullable: true }
+        transDocNo: { type: string, nullable: true }
+        transDocDate: { type: string, nullable: true }
+        vehicleNo: { type: string, nullable: true }
+        vehicleType: { type: string, nullable: true }
 
     LoginInput:
       type: object
@@ -1581,22 +1894,32 @@ components:
 
     InvoiceItem:
       type: object
-      required: [productId, productName, quantity, rate, gstRate]
+      required: [quantity, gstRate]
       properties:
         id:
           type: integer
         productId:
           type: ["integer", "null"]
+        description:
+          type: string
+          description: Line description. This is what clients send.
         productName:
           type: string
+          deprecated: true
+          description: Legacy alias for `description`. Accepted, never returned.
         hsnCode:
           type: ["string", "null"]
         quantity:
           type: number
         unit:
           type: ["string", "null"]
+        unitPrice:
+          type: number
+          description: Price per unit. This is what clients send.
         rate:
           type: number
+          deprecated: true
+          description: Legacy alias for `unitPrice`. Accepted, never returned.
         discount:
           type: number
         gstRate:
@@ -1676,12 +1999,21 @@ components:
 
     InvoiceInput:
       type: object
-      required: [type, customerId, invoiceDate, items]
+      required: [invoiceDate, items]
       properties:
         type:
           type: string
         customerId:
           type: integer
+          description: >-
+            Omit for a walk-in customer and send `customerName` instead. The id
+            must belong to the caller's own business.
+        customerName:
+          type: string
+          description: Required when `customerId` is omitted.
+        customerGstin:
+          type: string
+          nullable: true
         invoiceDate:
           type: string
         dueDate:
@@ -1721,31 +2053,45 @@ components:
 
     InvoiceStatusInput:
       type: object
-      required: [status]
       properties:
         status:
           type: string
+          enum: [paid, unpaid, partial, cancelled]
+        paymentStatus:
+          type: string
+          enum: [paid, unpaid, partial, cancelled]
+          description: Alias for `status`; whichever is present is used.
         paidAmount:
           type: ["number", "null"]
 
     PurchaseItem:
       type: object
-      required: [productName, quantity, rate, gstRate]
+      required: [quantity, gstRate]
       properties:
         id:
           type: integer
         productId:
           type: ["integer", "null"]
+        description:
+          type: string
+          description: Line description. This is what clients send.
         productName:
           type: string
+          deprecated: true
+          description: Legacy alias for `description`. Accepted, never returned.
         hsnCode:
           type: ["string", "null"]
         quantity:
           type: number
         unit:
           type: ["string", "null"]
+        unitPrice:
+          type: number
+          description: Price per unit. This is what clients send.
         rate:
           type: number
+          deprecated: true
+          description: Legacy alias for `unitPrice`. Accepted, never returned.
         gstRate:
           type: number
         cgst:
@@ -1809,12 +2155,21 @@ components:
 
     PurchaseInput:
       type: object
-      required: [vendorId, invoiceNumber, invoiceDate, items]
+      required: [vendorId, items]
       properties:
         vendorId:
           type: integer
+        billNumber:
+          type: string
+          description: Bill reference. This is what clients send; generated when omitted.
+        billDate:
+          type: string
+          format: date
+          description: Bill date. This is what clients send.
         invoiceNumber:
           type: string
+          deprecated: true
+          description: Legacy alias for `billNumber`.
         invoiceDate:
           type: string
         notes:

@@ -17,6 +17,8 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _credentials: RequestCredentials | null = null;
+let _csrfTokenGetter: (() => string | null) | null = null;
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -39,9 +41,31 @@ export function setBaseUrl(url: string | null): void {
  *
  * NOTE: This function should never be used in web applications where session
  * token cookies are automatically associated with API calls by the browser.
+ * Web clients should use `setCredentialsMode("include")` and
+ * `setCsrfTokenGetter` instead, so the session token stays in an `HttpOnly`
+ * cookie that page scripts cannot read.
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+/**
+ * Send cookies with every request. Required for cookie-based sessions, and
+ * only effective when the API's CORS policy names this exact origin — browsers
+ * refuse to combine credentials with a wildcard `Access-Control-Allow-Origin`.
+ */
+export function setCredentialsMode(mode: RequestCredentials | null): void {
+  _credentials = mode;
+}
+
+/**
+ * Supply the CSRF token the server issued in its readable companion cookie.
+ * It is echoed as `X-CSRF-Token` on state-changing requests, which is what
+ * proves the request came from a page on an allowed origin rather than from
+ * a cross-site form.
+ */
+export function setCsrfTokenGetter(getter: (() => string | null) | null): void {
+  _csrfTokenGetter = getter;
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -358,9 +382,21 @@ export async function customFetch<T = unknown>(
     }
   }
 
+  // Echo the CSRF token on state-changing requests. Safe methods do not need
+  // it, and adding it there would only widen what a preflight must allow.
+  if (_csrfTokenGetter && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = _csrfTokenGetter();
+    if (csrf) headers.set("x-csrf-token", csrf);
+  }
+
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  const response = await fetch(input, {
+    ...init,
+    method,
+    headers,
+    ...(_credentials ? { credentials: _credentials } : {}),
+  });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

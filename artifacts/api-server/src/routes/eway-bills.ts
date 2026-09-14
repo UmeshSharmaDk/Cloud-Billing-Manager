@@ -1,39 +1,45 @@
 import { Router } from "express";
-import { db, ewayBillsTable, usersTable, businessesTable, invoicesTable } from "@workspace/db";
+import { db, ewayBillsTable, businessesTable, invoicesTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { requireAuth, requireBusiness } from "./auth";
+import { dec, toColumn, toJson } from "../lib/money";
+import { validateBody, validateParams } from "../middleware/validate";
+import { CreateEwayBillBody, UpdateEwayBillBody, IdParam } from "../schemas";
+import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
+
 
 function mapBill(b: any) {
   return {
     ...b,
-    totalValue: parseFloat(b.totalValue ?? "0"),
-    cgstValue: parseFloat(b.cgstValue ?? "0"),
-    sgstValue: parseFloat(b.sgstValue ?? "0"),
-    igstValue: parseFloat(b.igstValue ?? "0"),
-    totalInvValue: parseFloat(b.totalInvValue ?? "0"),
+    totalValue: toJson(b.totalValue ?? "0"),
+    cgstValue: toJson(b.cgstValue ?? "0"),
+    sgstValue: toJson(b.sgstValue ?? "0"),
+    igstValue: toJson(b.igstValue ?? "0"),
+    totalInvValue: toJson(b.totalInvValue ?? "0"),
     items: Array.isArray(b.items) ? b.items : [],
   };
 }
 
-router.get("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/", requireAuth, requireBusiness, async (req: Req, res) => {
+  const businessId = req.businessId;
   const bills = await db.select().from(ewayBillsTable)
     .where(eq(ewayBillsTable.businessId, businessId))
     .orderBy(desc(ewayBillsTable.createdAt));
   return res.json({ bills: bills.map(mapBill) });
 });
 
-router.post("/", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody), async (req: Req, res) => {
+  const businessId = req.businessId;
 
   const {
     supplyType, subSupplyType, docType, docNo, docDate,
@@ -45,8 +51,17 @@ router.post("/", requireAuth, async (req: any, res) => {
     items = [], invoiceId,
   } = req.body;
 
-  if (!docNo) return res.status(400).json({ error: "docNo required" });
-  if (!docDate) return res.status(400).json({ error: "docDate required" });
+  // Same class as the customer/vendor leak: an unscoped id let a bill reference
+  // another tenant's invoice. Nothing crossed the boundary yet, but it stored a
+  // dangling reference any future join would happily resolve.
+  let resolvedInvoiceId: number | null = null;
+  if (invoiceId) {
+    const [invoice] = await db.select({ id: invoicesTable.id }).from(invoicesTable)
+      .where(and(eq(invoicesTable.id, Number(invoiceId)), eq(invoicesTable.businessId, businessId)))
+      .limit(1);
+    if (!invoice) return res.status(400).json({ error: "Unknown invoice" });
+    resolvedInvoiceId = invoice.id;
+  }
 
   const [bill] = await db.insert(ewayBillsTable).values({
     businessId,
@@ -57,33 +72,33 @@ router.post("/", requireAuth, async (req: any, res) => {
     fromGstin, fromTrdName, fromAddr1, fromCity, fromState, fromPincode,
     toGstin, toTrdName, toAddr1, toCity, toState, toPincode,
     transMode: transMode ?? "1",
-    transDistance: transDistance ? String(transDistance) : null,
+    transDistance: transDistance === undefined || transDistance === null ? null : dec(transDistance).toFixed(2),
     transporterName, transporterId, transDocNo, transDocDate,
     vehicleNo, vehicleType: vehicleType ?? "R",
-    totalValue: totalValue ? String(totalValue) : "0",
-    cgstValue: cgstValue ? String(cgstValue) : "0",
-    sgstValue: sgstValue ? String(sgstValue) : "0",
-    igstValue: igstValue ? String(igstValue) : "0",
-    totalInvValue: totalInvValue ? String(totalInvValue) : "0",
+    totalValue: toColumn(totalValue ?? 0),
+    cgstValue: toColumn(cgstValue ?? 0),
+    sgstValue: toColumn(sgstValue ?? 0),
+    igstValue: toColumn(igstValue ?? 0),
+    totalInvValue: toColumn(totalInvValue ?? 0),
     items,
-    invoiceId: invoiceId ? parseInt(invoiceId) : null,
+    invoiceId: resolvedInvoiceId,
     status: "draft",
   }).returning();
 
   return res.status(201).json({ bill: mapBill(bill) });
 });
 
-router.get("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const businessId = req.businessId;
   const [bill] = await db.select().from(ewayBillsTable)
-    .where(and(eq(ewayBillsTable.id, parseInt(req.params.id)), eq(ewayBillsTable.businessId, businessId!)))
+    .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, businessId)))
     .limit(1);
   if (!bill) return res.status(404).json({ error: "Not found" });
   return res.json(mapBill(bill));
 });
 
-router.patch("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateEwayBillBody), async (req: Req, res) => {
+  const businessId = req.businessId;
   const {
     status, ewbNo, ewbDate, validUpto,
     transMode, transDistance, transporterName, transporterId,
@@ -96,7 +111,7 @@ router.patch("/:id", requireAuth, async (req: any, res) => {
   if (ewbDate !== undefined) updates.ewbDate = ewbDate;
   if (validUpto !== undefined) updates.validUpto = validUpto;
   if (transMode !== undefined) updates.transMode = transMode;
-  if (transDistance !== undefined) updates.transDistance = String(transDistance);
+  if (transDistance !== undefined) updates.transDistance = transDistance === null ? null : dec(transDistance).toFixed(2);
   if (transporterName !== undefined) updates.transporterName = transporterName;
   if (transporterId !== undefined) updates.transporterId = transporterId;
   if (transDocNo !== undefined) updates.transDocNo = transDocNo;
@@ -107,16 +122,16 @@ router.patch("/:id", requireAuth, async (req: any, res) => {
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
 
   const [bill] = await db.update(ewayBillsTable).set(updates)
-    .where(and(eq(ewayBillsTable.id, parseInt(req.params.id)), eq(ewayBillsTable.businessId, businessId!)))
+    .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, businessId)))
     .returning();
   if (!bill) return res.status(404).json({ error: "Not found" });
   return res.json(mapBill(bill));
 });
 
-router.delete("/:id", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const businessId = req.businessId;
   await db.delete(ewayBillsTable)
-    .where(and(eq(ewayBillsTable.id, parseInt(req.params.id)), eq(ewayBillsTable.businessId, businessId!)));
+    .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, businessId)));
   return res.json({ success: true });
 });
 

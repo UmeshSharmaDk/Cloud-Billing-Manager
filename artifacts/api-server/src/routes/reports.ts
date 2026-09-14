@@ -1,38 +1,61 @@
 import { Router } from "express";
-import { db, invoicesTable, purchasesTable, productsTable, usersTable } from "@workspace/db";
-import { eq, and, gte, lte } from "drizzle-orm";
-import { requireAuth } from "./auth";
+import { db, invoicesTable, purchasesTable, productsTable } from "@workspace/db";
+import { eq, and, gte, lte, count, desc, sum as sqlSum } from "drizzle-orm";
+import { requireAuth, requireBusiness } from "./auth";
+import { validateQuery } from "../middleware/validate";
+import { MonthYearQuery, DateRangeQuery } from "../schemas";
+import { dec, paise, sum, sumBy, toJson } from "../lib/money";
+import type { TenantRequest, IdParams } from "../lib/http";
+import { mapInvoice, mapPurchase } from "../lib/serialise";
+import { isLowStock } from "../lib/low-stock";
 
 const router = Router();
 
-async function getBusinessId(userId: number): Promise<number | null> {
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-  return user?.businessId ?? null;
-}
+/**
+ * Most rows a report will return in one response.
+ *
+ * These endpoints used to serialise every matched row — a 366-day sales report
+ * on an active business is a year of invoices in a single payload, built in
+ * memory and held there until it is written. The summary figures are what the
+ * page actually shows, and they are now computed in SQL over the *whole* range,
+ * so capping the row list costs nothing in accuracy. `truncated` tells a caller
+ * the list is a sample rather than the lot.
+ */
+const REPORT_ROW_CAP = 500;
 
-function mapInvoice(inv: any) {
-  return {
-    ...inv, subtotal: parseFloat(inv.subtotal), cgst: parseFloat(inv.cgst),
-    sgst: parseFloat(inv.sgst), igst: parseFloat(inv.igst), totalGst: parseFloat(inv.totalGst),
-    grandTotal: parseFloat(inv.grandTotal), roundOff: parseFloat(inv.roundOff),
-    paidAmount: parseFloat(inv.paidAmount), items: Array.isArray(inv.items) ? inv.items : [],
-  };
-}
+/**
+ * Handlers in this router run after `requireAuth` and `requireBusiness`, so
+ * the caller's tenant is resolved and the user row is loaded. Typing them this way is what
+ * makes a missing or misspelled `businessId` a compile error rather than
+ * `undefined` reaching a query.
+ */
+type Req = TenantRequest<any, any, IdParams>;
 
-function mapPurchase(p: any) {
-  return {
-    ...p, subtotal: parseFloat(p.subtotal), cgst: parseFloat(p.cgst), sgst: parseFloat(p.sgst),
-    igst: parseFloat(p.igst), totalGst: parseFloat(p.totalGst), grandTotal: parseFloat(p.grandTotal),
-    items: Array.isArray(p.items) ? p.items : [],
-  };
-}
 
-router.get("/gstr1", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+/**
+ * Resolve a report window. The span itself is capped by `DateRangeQuery`; this
+ * supplies the other half — an absent range used to mean "every invoice this
+ * business has ever raised", read into memory and serialised in one response.
+ * An unspecified range now means the current month.
+ */
+function reportRange(q: { fromDate?: string; toDate?: string }): { from: string; to: string } {
+  if (q.fromDate && q.toDate) return { from: q.fromDate, to: q.toDate };
   const now = new Date();
-  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
-  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    from: q.fromDate ?? `${y}-${pad(m)}-01`,
+    to: q.toDate ?? `${y}-${pad(m)}-${pad(lastDay)}`,
+  };
+}
+
+router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const now = new Date();
+  const month = req.validatedQuery.month ?? now.getMonth() + 1;
+  const year = req.validatedQuery.year ?? now.getFullYear();
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
@@ -43,52 +66,54 @@ router.get("/gstr1", requireAuth, async (req: any, res) => {
   const intraState = mapped.filter(i => !i.isInterstate);
   const interState = mapped.filter(i => i.isInterstate);
 
-  const totalTaxableValue = mapped.reduce((s, i) => s + i.subtotal, 0);
-  const totalCgst = mapped.reduce((s, i) => s + i.cgst, 0);
-  const totalSgst = mapped.reduce((s, i) => s + i.sgst, 0);
-  const totalIgst = mapped.reduce((s, i) => s + i.igst, 0);
-  const totalTax = totalCgst + totalSgst + totalIgst;
-  const totalAmount = mapped.reduce((s, i) => s + i.grandTotal, 0);
+  // Summed as decimals. Adding two-decimal amounts as floats accumulates
+  // representation error, and this figure is filed.
+  const totalTaxableValue = sumBy(mapped, (i) => i.subtotal);
+  const totalCgst = sumBy(mapped, (i) => i.cgst);
+  const totalSgst = sumBy(mapped, (i) => i.sgst);
+  const totalIgst = sumBy(mapped, (i) => i.igst);
+  const totalTax = sum([totalCgst, totalSgst, totalIgst]);
+  const totalAmount = sumBy(mapped, (i) => i.grandTotal);
 
-  const rateMap: Record<number, { taxable: number; gst: number }> = {};
+  const rateMap = new Map<string, { taxable: ReturnType<typeof dec>; gst: ReturnType<typeof dec> }>();
   for (const inv of mapped) {
     for (const item of inv.items) {
-      const rate = parseFloat(String(item.gstRate ?? 0));
-      if (!rateMap[rate]) rateMap[rate] = { taxable: 0, gst: 0 };
-      rateMap[rate].taxable += parseFloat(String(item.taxableAmount ?? 0));
-      rateMap[rate].gst += parseFloat(String(item.cgst ?? 0)) + parseFloat(String(item.sgst ?? 0)) + parseFloat(String(item.igst ?? 0));
+      const rate = dec(item.gstRate ?? 0).toFixed(2);
+      const bucket = rateMap.get(rate) ?? { taxable: dec(0), gst: dec(0) };
+      bucket.taxable = bucket.taxable.plus(dec(item.taxableAmount ?? 0));
+      bucket.gst = bucket.gst.plus(sum([item.cgst ?? 0, item.sgst ?? 0, item.igst ?? 0]));
+      rateMap.set(rate, bucket);
     }
   }
-  const byRate = Object.entries(rateMap)
-    .map(([rate, v]) => ({ rate: parseFloat(rate), taxable: Math.round(v.taxable * 100) / 100, gst: Math.round(v.gst * 100) / 100 }))
+  const byRate = [...rateMap.entries()]
+    .map(([rate, v]) => ({ rate: Number(rate), taxable: toJson(v.taxable), gst: toJson(v.gst) }))
     .sort((a, b) => a.rate - b.rate);
 
   return res.json({
     month, year,
     totalInvoices: mapped.length,
-    totalTaxable: Math.round(totalTaxableValue * 100) / 100,
-    totalGst: Math.round(totalTax * 100) / 100,
-    totalAmount: Math.round(totalAmount * 100) / 100,
-    totalTaxableValue: Math.round(totalTaxableValue * 100) / 100,
-    totalCgst: Math.round(totalCgst * 100) / 100,
-    totalSgst: Math.round(totalSgst * 100) / 100,
-    totalIgst: Math.round(totalIgst * 100) / 100,
-    totalTax: Math.round(totalTax * 100) / 100,
+    totalTaxable: toJson(totalTaxableValue),
+    totalGst: toJson(totalTax),
+    totalAmount: toJson(totalAmount),
+    totalTaxableValue: toJson(totalTaxableValue),
+    totalCgst: toJson(totalCgst),
+    totalSgst: toJson(totalSgst),
+    totalIgst: toJson(totalIgst),
+    totalTax: toJson(totalTax),
     intraStateCount: intraState.length,
-    intraStateTaxable: Math.round(intraState.reduce((s, i) => s + i.subtotal, 0) * 100) / 100,
+    intraStateTaxable: toJson(sumBy(intraState, (i) => i.subtotal)),
     interStateCount: interState.length,
-    interStateTaxable: Math.round(interState.reduce((s, i) => s + i.subtotal, 0) * 100) / 100,
+    interStateTaxable: toJson(sumBy(interState, (i) => i.subtotal)),
     byRate,
     invoices: mapped.map(inv => ({ ...inv, taxableAmount: inv.subtotal, totalAmount: inv.grandTotal })),
   });
 });
 
-router.get("/gstr3b", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
   const now = new Date();
-  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
-  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const month = req.validatedQuery.month ?? now.getMonth() + 1;
+  const year = req.validatedQuery.year ?? now.getFullYear();
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
@@ -99,75 +124,103 @@ router.get("/gstr3b", requireAuth, async (req: any, res) => {
   const mappedInv = invoices.map(mapInvoice);
   const mappedPur = purchases.map(mapPurchase);
 
-  const outwardCgst = mappedInv.reduce((s, i) => s + i.cgst, 0);
-  const outwardSgst = mappedInv.reduce((s, i) => s + i.sgst, 0);
-  const outwardIgst = mappedInv.reduce((s, i) => s + i.igst, 0);
-  const outwardTaxable = mappedInv.reduce((s, i) => s + i.subtotal, 0);
+  const outwardCgst = sumBy(mappedInv, (i) => i.cgst);
+  const outwardSgst = sumBy(mappedInv, (i) => i.sgst);
+  const outwardIgst = sumBy(mappedInv, (i) => i.igst);
+  const outwardTaxable = sumBy(mappedInv, (i) => i.subtotal);
 
-  const inputCgst = mappedPur.reduce((s, p) => s + p.cgst, 0);
-  const inputSgst = mappedPur.reduce((s, p) => s + p.sgst, 0);
-  const inputIgst = mappedPur.reduce((s, p) => s + p.igst, 0);
+  const inputCgst = sumBy(mappedPur, (p) => p.cgst);
+  const inputSgst = sumBy(mappedPur, (p) => p.sgst);
+  const inputIgst = sumBy(mappedPur, (p) => p.igst);
 
-  const netCgst = Math.max(0, outwardCgst - inputCgst);
-  const netSgst = Math.max(0, outwardSgst - inputSgst);
-  const netIgst = Math.max(0, outwardIgst - inputIgst);
-  const netTax = (outwardCgst + outwardSgst + outwardIgst) - (inputCgst + inputSgst + inputIgst);
+  const atLeastZero = (d: ReturnType<typeof dec>) => (d.isNegative() ? dec(0) : d);
+  const netCgst = atLeastZero(outwardCgst.minus(inputCgst));
+  const netSgst = atLeastZero(outwardSgst.minus(inputSgst));
+  const netIgst = atLeastZero(outwardIgst.minus(inputIgst));
+  const netTax = sum([outwardCgst, outwardSgst, outwardIgst])
+    .minus(sum([inputCgst, inputSgst, inputIgst]));
 
   return res.json({
     month, year,
-    outwardTaxable: Math.round(outwardTaxable * 100) / 100,
-    outwardCgst: Math.round(outwardCgst * 100) / 100,
-    outwardSgst: Math.round(outwardSgst * 100) / 100,
-    outwardIgst: Math.round(outwardIgst * 100) / 100,
-    inputCgst: Math.round(inputCgst * 100) / 100,
-    inputSgst: Math.round(inputSgst * 100) / 100,
-    inputIgst: Math.round(inputIgst * 100) / 100,
-    netCgst: Math.round(netCgst * 100) / 100,
-    netSgst: Math.round(netSgst * 100) / 100,
-    netIgst: Math.round(netIgst * 100) / 100,
-    totalTax: Math.round(netTax * 100) / 100,
-    totalTaxableValue: Math.round(outwardTaxable * 100) / 100,
-    totalCgst: Math.round(outwardCgst * 100) / 100,
-    totalSgst: Math.round(outwardSgst * 100) / 100,
-    totalIgst: Math.round(outwardIgst * 100) / 100,
+    outwardTaxable: toJson(outwardTaxable),
+    outwardCgst: toJson(outwardCgst),
+    outwardSgst: toJson(outwardSgst),
+    outwardIgst: toJson(outwardIgst),
+    inputCgst: toJson(inputCgst),
+    inputSgst: toJson(inputSgst),
+    inputIgst: toJson(inputIgst),
+    netCgst: toJson(netCgst),
+    netSgst: toJson(netSgst),
+    netIgst: toJson(netIgst),
+    totalTax: toJson(netTax),
+    totalTaxableValue: toJson(outwardTaxable),
+    totalCgst: toJson(outwardCgst),
+    totalSgst: toJson(outwardSgst),
+    totalIgst: toJson(outwardIgst),
     invoices: mappedInv.map(inv => ({ ...inv, taxableAmount: inv.subtotal, totalAmount: inv.grandTotal })),
   });
 });
 
-router.get("/sales", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { fromDate, toDate } = req.query as any;
-  const conditions: any[] = [eq(invoicesTable.businessId, businessId)];
-  if (fromDate) conditions.push(gte(invoicesTable.invoiceDate, fromDate));
-  if (toDate) conditions.push(lte(invoicesTable.invoiceDate, toDate));
-  const invoices = await db.select().from(invoicesTable).where(and(...conditions));
-  const mapped = invoices.map(mapInvoice);
-  const totalSales = mapped.reduce((s, i) => s + i.grandTotal, 0);
-  const totalGst = mapped.reduce((s, i) => s + i.totalGst, 0);
-  return res.json({ totalSales: Math.round(totalSales * 100) / 100, totalGst: Math.round(totalGst * 100) / 100, netSales: Math.round((totalSales - totalGst) * 100) / 100, invoiceCount: mapped.length, invoices: mapped });
+router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const { from, to } = reportRange(req.validatedQuery);
+  const conditions: any[] = [
+    eq(invoicesTable.businessId, businessId),
+    gte(invoicesTable.invoiceDate, from),
+    lte(invoicesTable.invoiceDate, to),
+  ];
+  // Totals over the whole range, from the database.
+  const [totals] = await db.select({
+    totalSales: sqlSum(invoicesTable.grandTotal),
+    totalGst: sqlSum(invoicesTable.totalGst),
+    invoiceCount: count(),
+  }).from(invoicesTable).where(and(...conditions));
+
+  const invoices = await db.select().from(invoicesTable).where(and(...conditions))
+    .orderBy(desc(invoicesTable.invoiceDate)).limit(REPORT_ROW_CAP);
+
+  const totalSales = dec(totals.totalSales ?? 0);
+  const totalGst = dec(totals.totalGst ?? 0);
+  const invoiceCount = Number(totals.invoiceCount);
+  return res.json({
+    totalSales: toJson(totalSales), totalGst: toJson(totalGst),
+    netSales: toJson(totalSales.minus(totalGst)), invoiceCount,
+    invoices: invoices.map(mapInvoice), truncated: invoiceCount > invoices.length,
+  });
 });
 
-router.get("/purchases", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
-  const { fromDate, toDate } = req.query as any;
-  const conditions: any[] = [eq(purchasesTable.businessId, businessId)];
-  if (fromDate) conditions.push(gte(purchasesTable.invoiceDate, fromDate));
-  if (toDate) conditions.push(lte(purchasesTable.invoiceDate, toDate));
-  const purchases = await db.select().from(purchasesTable).where(and(...conditions));
-  const mapped = purchases.map(mapPurchase);
-  const totalPurchases = mapped.reduce((s, p) => s + p.grandTotal, 0);
-  const totalGst = mapped.reduce((s, p) => s + p.totalGst, 0);
-  return res.json({ totalPurchases: Math.round(totalPurchases * 100) / 100, totalGst: Math.round(totalGst * 100) / 100, netPurchases: Math.round((totalPurchases - totalGst) * 100) / 100, purchaseCount: mapped.length, purchases: mapped });
+router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const { from, to } = reportRange(req.validatedQuery);
+  const conditions: any[] = [
+    eq(purchasesTable.businessId, businessId),
+    gte(purchasesTable.invoiceDate, from),
+    lte(purchasesTable.invoiceDate, to),
+  ];
+  const [totals] = await db.select({
+    totalPurchases: sqlSum(purchasesTable.grandTotal),
+    totalGst: sqlSum(purchasesTable.totalGst),
+    purchaseCount: count(),
+  }).from(purchasesTable).where(and(...conditions));
+
+  const purchases = await db.select().from(purchasesTable).where(and(...conditions))
+    .orderBy(desc(purchasesTable.invoiceDate)).limit(REPORT_ROW_CAP);
+
+  const totalPurchases = dec(totals.totalPurchases ?? 0);
+  const totalGst = dec(totals.totalGst ?? 0);
+  const purchaseCount = Number(totals.purchaseCount);
+  return res.json({
+    totalPurchases: toJson(totalPurchases), totalGst: toJson(totalGst),
+    netPurchases: toJson(totalPurchases.minus(totalGst)), purchaseCount,
+    purchases: purchases.map(mapPurchase), truncated: purchaseCount > purchases.length,
+  });
 });
 
-router.get("/hsn", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const businessId = req.businessId;
   const now = new Date();
-  const month = parseInt((req.query.month as string) ?? String(now.getMonth() + 1));
-  const year = parseInt((req.query.year as string) ?? String(now.getFullYear()));
+  const month = req.validatedQuery.month ?? now.getMonth() + 1;
+  const year = req.validatedQuery.year ?? now.getFullYear();
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
@@ -175,7 +228,12 @@ router.get("/hsn", requireAuth, async (req: any, res) => {
   const invoices = await db.select().from(invoicesTable)
     .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
 
-  const hsnMap: Record<string, { description: string; quantity: number; uqc: string; taxableValue: number; cgst: number; sgst: number; igst: number }> = {};
+  type HsnBucket = {
+    description: string; uqc: string;
+    quantity: ReturnType<typeof dec>; taxableValue: ReturnType<typeof dec>;
+    cgst: ReturnType<typeof dec>; sgst: ReturnType<typeof dec>; igst: ReturnType<typeof dec>;
+  };
+  const hsnMap: Record<string, HsnBucket> = {};
 
   for (const inv of invoices) {
     const items = Array.isArray(inv.items) ? inv.items : [];
@@ -184,51 +242,49 @@ router.get("/hsn", requireAuth, async (req: any, res) => {
       if (!hsnMap[hsnCode]) {
         hsnMap[hsnCode] = {
           description: item.description ?? item.productName ?? "",
-          quantity: 0, uqc: item.unit ?? "Nos",
-          taxableValue: 0, cgst: 0, sgst: 0, igst: 0,
+          uqc: item.unit ?? "Nos",
+          quantity: dec(0), taxableValue: dec(0), cgst: dec(0), sgst: dec(0), igst: dec(0),
         };
       }
-      hsnMap[hsnCode].quantity += parseFloat(String(item.quantity ?? 0));
-      hsnMap[hsnCode].taxableValue += parseFloat(String(item.taxableAmount ?? 0));
-      hsnMap[hsnCode].cgst += parseFloat(String(item.cgst ?? 0));
-      hsnMap[hsnCode].sgst += parseFloat(String(item.sgst ?? 0));
-      hsnMap[hsnCode].igst += parseFloat(String(item.igst ?? 0));
+      const bucket = hsnMap[hsnCode];
+      bucket.quantity = bucket.quantity.plus(dec(item.quantity ?? 0));
+      bucket.taxableValue = bucket.taxableValue.plus(dec(item.taxableAmount ?? 0));
+      bucket.cgst = bucket.cgst.plus(dec(item.cgst ?? 0));
+      bucket.sgst = bucket.sgst.plus(dec(item.sgst ?? 0));
+      bucket.igst = bucket.igst.plus(dec(item.igst ?? 0));
     }
   }
 
   const items = Object.entries(hsnMap).map(([hsnCode, v]) => ({
     hsnCode,
     description: v.description,
-    quantity: Math.round(v.quantity * 100) / 100,
+    quantity: toJson(v.quantity),
     uqc: v.uqc,
-    taxableValue: Math.round(v.taxableValue * 100) / 100,
-    cgst: Math.round(v.cgst * 100) / 100,
-    sgst: Math.round(v.sgst * 100) / 100,
-    igst: Math.round(v.igst * 100) / 100,
-    totalTax: Math.round((v.cgst + v.sgst + v.igst) * 100) / 100,
+    taxableValue: toJson(v.taxableValue),
+    cgst: toJson(v.cgst),
+    sgst: toJson(v.sgst),
+    igst: toJson(v.igst),
+    totalTax: toJson(sum([v.cgst, v.sgst, v.igst])),
   })).sort((a, b) => a.hsnCode.localeCompare(b.hsnCode));
 
   return res.json({ month, year, items });
 });
 
-router.get("/stock", requireAuth, async (req: any, res) => {
-  const businessId = await getBusinessId(req.userId);
-  if (!businessId) return res.status(400).json({ error: "No business" });
+router.get("/stock", requireAuth, requireBusiness, async (req: Req, res) => {
+  const businessId = req.businessId;
   const products = await db.select().from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));
   const mapped = products.map(p => ({
     ...p,
-    purchasePrice: p.purchasePrice ? parseFloat(p.purchasePrice) : null,
-    sellingPrice: p.sellingPrice ? parseFloat(p.sellingPrice) : null,
-    gstRate: parseFloat(p.gstRate),
-    stockQuantity: parseFloat(p.stockQuantity),
-    lowStockThreshold: p.lowStockThreshold ? parseFloat(p.lowStockThreshold) : null,
+    purchasePrice: p.purchasePrice ? toJson(p.purchasePrice) : null,
+    sellingPrice: p.sellingPrice ? toJson(p.sellingPrice) : null,
+    gstRate: Number(dec(p.gstRate).toFixed(2)),
+    stockQuantity: Number(dec(p.stockQuantity).toFixed(3)),
+    lowStockThreshold: p.lowStockThreshold ? Number(dec(p.lowStockThreshold).toFixed(3)) : null,
   }));
-  const totalStockValue = mapped.reduce((s, p) => s + (p.sellingPrice ?? 0) * p.stockQuantity, 0);
-  const lowStockProducts = mapped.filter(p => {
-    const threshold = p.lowStockThreshold ?? 5;
-    return p.stockQuantity < threshold;
-  }).length;
-  return res.json({ totalProducts: mapped.length, totalStockValue: Math.round(totalStockValue * 100) / 100, lowStockProducts, products: mapped });
+  const totalStockValue = mapped.reduce(
+    (acc, p) => acc.plus(dec(p.sellingPrice ?? 0).times(dec(p.stockQuantity))), dec(0));
+  const lowStockProducts = mapped.filter(isLowStock).length;
+  return res.json({ totalProducts: mapped.length, totalStockValue: toJson(totalStockValue), lowStockProducts, products: mapped });
 });
 
 export default router;
