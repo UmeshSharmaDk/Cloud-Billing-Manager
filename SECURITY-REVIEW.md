@@ -150,11 +150,73 @@ inconsistently — is deleted. One admin surface.
 - **MFA for administrators** is a product feature — enrolment, QR provisioning, recovery codes, and
   a policy for what happens when someone loses their authenticator. Shipping it badly is worse than
   not shipping it, so it wants its own decision rather than a corner of a cleanup sweep.
-- **Postgres row-level security** is still the right durable answer to F-05, and is deliberately not
-  bundled here. It changes how *every* query executes, and the only thing that would have verified it
-  is the same suite that already passes — so folding it into a ten-item sweep would add risk without
-  adding demonstrated safety. It deserves a focused change.
 - **An external penetration test** remains the one step no amount of self-review substitutes for.
+
+## Row-level security — done
+
+F-05 was four query sites, out of roughly forty, that resolved a record by its primary key without a
+tenant filter. All four were fixed, and the fix is a discipline: every future query site has to
+remember. Code review already failed to catch these four once.
+
+The policies are the thing that does not have to remember. Every tenant table now carries
+`ENABLE`/`FORCE ROW LEVEL SECURITY` and a policy matching `app.business_id`, set per request with
+`SET LOCAL`. With no tenant set the policies match *nothing* — a path that escapes the scope returns
+an empty page rather than another tenant's ledger.
+
+### Three ways this fails silently, and what was done about each
+
+Each of these was reproduced against a real Postgres before any code was written, because all three
+produce a system that looks protected.
+
+**A superuser ignores RLS entirely, even with FORCE.** Hosted Postgres hands out an admin connection
+string by default, so the natural setup has policies installed and no protection at all. This is the
+worst failure mode available: it is indistinguishable from success. The API server now checks its own
+role at boot and logs a warning naming it; `rls:apply` prints the same; and the enforcement test
+below *refuses to run* rather than passing vacuously.
+
+**A query outside the scope would silently see nothing.** Pinning the tenant needs the `set_config`
+and the query on the same connection, which with a pool means a transaction. Threading a handle
+through a hundred call sites is exactly the kind of change that gets forgotten once, so the exported
+`db` is a proxy: inside a scope it forwards to that scope's transaction, outside one it is the
+ordinary pool. No call site opts in, so none can forget.
+
+**A pooled connection could carry one request's tenant into the next.** `set_config(..., true)` is
+`SET LOCAL`, scoped to the transaction. Asserted directly: after `COMMIT` and after `ROLLBACK`, the
+same connection sees nothing.
+
+### Two scopes, and the cost
+
+`requireBusiness` opens a tenant scope. Two places legitimately span tenants and say so explicitly
+via `systemScope` — the platform admin dashboards, and authentication and registration, which run
+before a tenant is known. Anything reached that way is trusting its own authorization checks with no
+database-level net underneath, which is why it is applied per-router rather than being the default.
+
+The cost is honest: **one transaction is held open per request**, from `requireBusiness` until the
+response is written. It commits on the way out, or rolls back if the handler produced a 5xx. On a
+connection-constrained deployment this changes pool sizing, and a slow handler now holds a connection
+for its whole duration rather than per query. That is the price of the guarantee; it should be
+watched under load.
+
+### Verified
+
+A passing application suite proves nothing here — every request it makes is one the application is
+*entitled* to make, so it would pass just as happily with the policies switched off. So there are two
+suites, both run in CI against a `NOSUPERUSER NOBYPASSRLS` role:
+
+| Suite | Asserts |
+| --- | --- |
+| `test:integration` (133 checks) | the application still works with policies enforced |
+| `test:rls` (17 checks) | what the database *refuses* |
+
+The second is the one that matters: unscoped reads return zero rows on every tenant table; a scoped
+connection sees its own rows and no other, including when another tenant's id is named directly;
+an unfiltered lookup by primary key — the exact shape of F-05 — returns nothing; cross-tenant
+`INSERT` is refused by `WITH CHECK` and a cross-tenant `UPDATE` cannot walk a row across the
+boundary; and the scope does not outlive its transaction.
+
+**Operators must create the dedicated role** (`lib/db/README-rls.md`). Until `DATABASE_URL` points at
+a role that cannot bypass, tenant isolation still rests entirely on the application's query filters —
+and the boot log will say so.
 
 ### Money in floats — fixed
 
@@ -910,6 +972,5 @@ self-review substitutes for.*
 ### Ongoing
 
 - Multi-factor authentication for all admin accounts.
-- Postgres row-level security as the durable answer to F-05.
 - A data-retention and backup policy matching GST record-keeping obligations, with restores tested.
 - Alerting on failed-login bursts, admin actions, and 5xx rates.

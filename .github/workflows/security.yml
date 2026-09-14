@@ -99,7 +99,13 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/gst
+      # Two connections, and the difference between them is the thing under
+      # test. The server runs as an unprivileged role so the policies actually
+      # apply to it; migrations and test fixtures run as the owner, which they
+      # have to, because the application role deliberately cannot alter a table
+      # or read across tenants.
+      DATABASE_URL: postgres://gst_app:gst_app@127.0.0.1:5432/gst
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/gst
       ALLOWED_ORIGINS: http://localhost:25512
       NODE_ENV: production
       PORT: 8099
@@ -128,7 +134,30 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
 
       - name: Create the schema
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
         run: pnpm --filter @workspace/db run push --force
+
+      - name: Create the unprivileged application role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h 127.0.0.1 -U postgres -d gst -v ON_ERROR_STOP=1 <<'SQL'
+          DROP ROLE IF EXISTS gst_app;
+          CREATE ROLE gst_app LOGIN PASSWORD 'gst_app' NOSUPERUSER NOBYPASSRLS;
+          GRANT USAGE ON SCHEMA public TO gst_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gst_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gst_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gst_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO gst_app;
+          SQL
+
+      - name: Apply the row-level security policies
+        env:
+          DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
+        run: pnpm --filter @workspace/db run rls:apply
 
       - name: Build the API server
         run: pnpm --filter @workspace/api-server run build
@@ -142,6 +171,12 @@ jobs:
 
       - name: Run the integration suite
         run: pnpm --filter @workspace/api-server run test:integration
+
+      # The suite above only makes requests the application is entitled to
+      # make, so it would pass just as happily with the policies switched off.
+      # This asserts on what the database refuses.
+      - name: Assert row-level security actually isolates tenants
+        run: pnpm --filter @workspace/db run test:rls
 
       - name: Server log on failure
         if: failure()

@@ -6,7 +6,9 @@
  * survived code review, and would survive it again.
  *
  * Requires a real Postgres — the suite drives account state through `psql`
- * to simulate what an operator does (promote, deactivate, expire).
+ * to simulate what an operator does (promote, deactivate, expire). That work
+ * needs operator rights, so when the server runs under a restricted role set
+ * ADMIN_DATABASE_URL to an owning connection; it defaults to DATABASE_URL.
  *
  * The suite is not hermetic: it adds rows to whatever database it is pointed
  * at and does not clean them up, so point it at a scratch database. Where a
@@ -20,7 +22,34 @@
  *     pnpm --filter @workspace/api-server run dev &
  *   API_URL=http://127.0.0.1:8099/api pnpm --filter @workspace/api-server run test:integration
  */
+import { execSync } from "node:child_process";
+
 const B = process.env.API_URL ?? "http://127.0.0.1:8099/api";
+
+/**
+ * Fixture manipulation runs as an operator, never as the application.
+ *
+ * The server connects with a role that is deliberately unable to TRUNCATE, to
+ * ALTER a table, or to bypass row-level security. That restriction is the
+ * whole point of the RLS work, so the suite must not borrow the application's
+ * credentials to promote a user or reset a counter — doing so would both fail
+ * and quietly prove nothing about what the application role can reach.
+ *
+ * Point ADMIN_DATABASE_URL at an owning (or superuser) connection. It falls
+ * back to DATABASE_URL, which is correct for the single-role setups where the
+ * application is already the table owner.
+ */
+const ADMIN_URL = process.env.ADMIN_DATABASE_URL ?? process.env.DATABASE_URL;
+
+/** Run a statement as the operator, discarding its output. */
+function sqlExec(sql) {
+  execSync(`psql "${ADMIN_URL}" -c "${sql}"`, { stdio: "ignore" });
+}
+
+/** Run a query as the operator and return the single scalar it produced. */
+function sqlValue(sql) {
+  return execSync(`psql -t -A "${ADMIN_URL}" -c "${sql}"`).toString().trim();
+}
 
 let pass = 0, fail = 0;
 const results = [];
@@ -235,33 +264,29 @@ for (const [path, id] of [["customers", aCust.id], ["vendors", aVend.id],
 const adminEmail = `admin${uniq}@example.test`;
 {
   // Promote Alice directly in the database, as an operator would.
-  const { execSync } = await import("node:child_process");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${alice.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${alice.userId}`);
   // Alice's token still says role=user, but the row now says admin.
   const r = await call("GET", "/admin/stats", { token: alice.token });
   check("F-07", "promotion takes effect on the existing token", r.status === 200, `status ${r.status}`);
 
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='user' WHERE id=${alice.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='user' WHERE id=${alice.userId}`);
   const r2 = await call("GET", "/admin/stats", { token: alice.token });
   check("F-07", "demotion takes effect immediately (was 7 days)", r2.status === 403, `status ${r2.status}`);
 }
 {
-  const { execSync } = await import("node:child_process");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET is_active=false WHERE id=${bob.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET is_active=false WHERE id=${bob.userId}`);
   const r = await call("GET", "/customers", { token: bob.token });
   check("F-07", "deactivated account loses access immediately", r.status === 403, `status ${r.status}`);
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET is_active=true WHERE id=${bob.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET is_active=true WHERE id=${bob.userId}`);
 }
 {
-  const { execSync } = await import("node:child_process");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET subscription_end='2020-01-01' WHERE id=${bob.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET subscription_end='2020-01-01' WHERE id=${bob.userId}`);
   const r = await call("GET", "/customers", { token: bob.token });
   check("F-07", "expired subscription blocks API access", r.status === 403, `status ${r.status}`);
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET subscription_end='2030-01-01' WHERE id=${bob.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET subscription_end='2030-01-01' WHERE id=${bob.userId}`);
 }
 {
-  const { execSync } = await import("node:child_process");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "DELETE FROM users WHERE email='${adminEmail}'"`, { stdio: "ignore" });
+  sqlExec(`DELETE FROM users WHERE email='${adminEmail}'`);
   const r = await call("GET", "/customers", { token: "not.a.token" });
   check("F-07", "garbage token rejected", r.status === 401);
 }
@@ -284,15 +309,14 @@ const adminEmail = `admin${uniq}@example.test`;
   const r = await call("POST", "/auth/login", { body: { email: victim, password: "correct-horse-battery-staple" } });
   check("F-06", "lockout holds against the correct password", r.status === 429, `status ${r.status}`);
 
-  const { execSync } = await import("node:child_process");
-  const rows = execSync(`psql -t -A "${process.env.DATABASE_URL}" -c "SELECT count(*) FROM login_attempts WHERE key LIKE 'email:%'"`).toString().trim();
+  const rows = sqlValue(`SELECT count(*) FROM login_attempts WHERE key LIKE 'email:%'`);
   check("F-06", "lockout state is in the database, not process memory", Number(rows) > 0, `${rows} rows`);
 
   // Those deliberate failures also tripped the per-IP counter, and every
   // request in this suite comes from the same loopback address — so without
   // this the suite locks itself out of every subsequent login. Clearing it is
   // the test cleaning up after itself, not a workaround for a bug.
-  execSync(`psql "${process.env.DATABASE_URL}" -c "TRUNCATE login_attempts"`, { stdio: "ignore" });
+  sqlExec(`TRUNCATE login_attempts`);
 }
 
 // === regression: the happy paths still work ================================
@@ -434,14 +458,13 @@ const adminEmail = `admin${uniq}@example.test`;
 
 // === F-13: admin accountability ============================================
 {
-  const { execSync } = await import("node:child_process");
-  const q = (sql) => execSync(`psql -t -A "${process.env.DATABASE_URL}" -c "${sql}"`).toString().trim();
+  const q = sqlValue;
 
   // Promote alice so she can exercise the admin routes, and make a second
   // admin so the last-admin guard is not tripped by the setup itself.
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${alice.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${alice.userId}`);
   const spare = await register("spare");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${spare.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${spare.userId}`);
 
   const NEW_PASSWORD = "a-brand-new-passphrase-99";
   const jar = newJar();
@@ -507,7 +530,7 @@ const adminEmail = `admin${uniq}@example.test`;
     `WHERE role='admin' AND is_active AND deleted_at IS NULL AND id <> ${alice.userId}`,
   );
   if (others) {
-    execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='user' WHERE id IN (${others})"`, { stdio: "ignore" });
+    sqlExec(`UPDATE users SET role='user' WHERE id IN (${others})`);
   }
   check("F-13", "precondition: alice is the only active administrator",
     q(`SELECT count(*) FROM users WHERE role='admin' AND is_active AND deleted_at IS NULL`) === "1");
@@ -523,7 +546,7 @@ const adminEmail = `admin${uniq}@example.test`;
   check("F-13", "...nor deactivated", lastAdminOff.status === 409, `status ${lastAdminOff.status}`);
 
   if (others) {
-    execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id IN (${others})"`, { stdio: "ignore" });
+    sqlExec(`UPDATE users SET role='admin' WHERE id IN (${others})`);
   }
 
   // Soft delete keeps the tenant's records rather than orphaning them.
@@ -544,8 +567,7 @@ const adminEmail = `admin${uniq}@example.test`;
 
 // === invoice numbering and transactions ====================================
 {
-  const { execSync } = await import("node:child_process");
-  const q = (sql) => execSync(`psql -t -A "${process.env.DATABASE_URL}" -c "${sql}"`).toString().trim();
+  const q = sqlValue;
 
   const biz = await register("numbering");
   const mk = (date) => call("POST", "/invoices", {
@@ -598,8 +620,8 @@ const adminEmail = `admin${uniq}@example.test`;
 
   // NOT VALID: enforce on new writes only. A previous run of this suite leaves
   // a FAILME row behind, and without it the constraint refuses to be created.
-  execSync(`psql "${process.env.DATABASE_URL}" -c "ALTER TABLE purchases DROP CONSTRAINT IF EXISTS tmp_reject_failme"`, { stdio: "ignore" });
-  execSync(`psql "${process.env.DATABASE_URL}" -c "ALTER TABLE purchases ADD CONSTRAINT tmp_reject_failme CHECK (invoice_number NOT LIKE 'FAILME%') NOT VALID"`, { stdio: "ignore" });
+  sqlExec(`ALTER TABLE purchases DROP CONSTRAINT IF EXISTS tmp_reject_failme`);
+  sqlExec(`ALTER TABLE purchases ADD CONSTRAINT tmp_reject_failme CHECK (invoice_number NOT LIKE 'FAILME%') NOT VALID`);
   try {
     const before = countProducts();
     const bad = await call("POST", "/purchases", {
@@ -614,7 +636,7 @@ const adminEmail = `admin${uniq}@example.test`;
     check("transactions", "the ghost product was not left behind",
       q(`SELECT count(*) FROM products WHERE business_id=${bizId} AND name='Ghost Product'`) === "0");
   } finally {
-    execSync(`psql "${process.env.DATABASE_URL}" -c "ALTER TABLE purchases DROP CONSTRAINT tmp_reject_failme"`, { stdio: "ignore" });
+    sqlExec(`ALTER TABLE purchases DROP CONSTRAINT tmp_reject_failme`);
   }
 
   // ...and the same bill succeeds once the constraint is gone, proving the
@@ -783,10 +805,9 @@ const adminEmail = `admin${uniq}@example.test`;
       && Number.isFinite(m.purchases) && Number.isFinite(m.gst)));
 
   // Admin stats: seeded above, so only structural invariants are safe to assert.
-  const { execSync } = await import("node:child_process");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${biz.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${biz.userId}`);
   const ad = (await call("GET", "/admin/stats", T)).data;
-  const dbUsers = Number(execSync(`psql -t -A "${process.env.DATABASE_URL}" -c "SELECT count(*) FROM users WHERE role <> 'admin' AND deleted_at IS NULL"`).toString().trim());
+  const dbUsers = Number(sqlValue(`SELECT count(*) FROM users WHERE role <> 'admin' AND deleted_at IS NULL`));
   check("aggregates", "admin totalUsers counts non-admin, non-deleted users",
     ad.totalUsers === dbUsers, `${ad.totalUsers} vs ${dbUsers}`);
   check("aggregates", "admin active + inactive accounts for every counted user",
@@ -795,7 +816,7 @@ const adminEmail = `admin${uniq}@example.test`;
   check("aggregates", "admin recentUsers is capped at 10 and newest first",
     ad.recentUsers.length <= 10 &&
     ad.recentUsers.every((u, i, a) => i === 0 || new Date(a[i - 1].createdAt) >= new Date(u.createdAt)));
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='user' WHERE id=${biz.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='user' WHERE id=${biz.userId}`);
 }
 
 
@@ -837,8 +858,7 @@ const adminEmail = `admin${uniq}@example.test`;
   // An admin reset revokes the target's sessions.
   const target = await register("resettarget");
   const admin = await register("resetadmin");
-  const { execSync } = await import("node:child_process");
-  execSync(`psql "${process.env.DATABASE_URL}" -c "UPDATE users SET role='admin' WHERE id=${admin.userId}"`, { stdio: "ignore" });
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${admin.userId}`);
   const ajar = newJar();
   await call("GET", "/healthz", { jar: ajar });
   await call("POST", "/auth/login", { jar: ajar, body: { email: admin.email, password: PW } });

@@ -3,6 +3,7 @@ import { db, usersTable, businessesTable } from "@workspace/db";
 import { eq, ilike, or, and, count, isNull } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
 import { mapUser } from "../lib/serialise";
+import { systemScope } from "../middleware/tenant-scope";
 import { hashPassword } from "../lib/password";
 import { validatePassword } from "../lib/password-policy";
 import { recordAudit, actorFrom } from "../lib/audit";
@@ -16,6 +17,14 @@ import {
 } from "../schemas";
 
 const router = Router();
+
+/**
+ * Every route here is already gated by `requireAdmin` and reads across all
+ * tenants by design — platform dashboards, user administration. Suspending the
+ * policies is therefore explicit and router-wide rather than sprinkled per
+ * query, and it means these handlers are trusting `requireAdmin` alone.
+ */
+router.use(systemScope);
 
 /**
  * Handlers in this router run after `requireAuth`, so

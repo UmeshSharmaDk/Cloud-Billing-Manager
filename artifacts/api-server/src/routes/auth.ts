@@ -14,6 +14,7 @@ import { validateBody } from "../middleware/validate";
 import { LoginBody, RegisterBody, ChangePasswordBody } from "../schemas";
 import { validatePassword } from "../lib/password-policy";
 import type { AuthedRequest } from "../lib/http";
+import { openTenantScope, systemScope } from "../middleware/tenant-scope";
 import {
   authIpLimiter,
   anyLocked,
@@ -155,7 +156,10 @@ export function requireBusiness(req: any, res: any, next: any) {
   const businessId = req.user?.businessId ?? null;
   if (!businessId) return res.status(400).json({ error: "No business" });
   req.businessId = businessId;
-  next();
+  // Resolving the tenant and pinning it to the database session are the same
+  // decision, so they happen in the same place. No route opts in, and none can
+  // forget to.
+  openTenantScope(req, res, next, businessId);
 }
 
 router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, res) => {
@@ -221,7 +225,7 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   });
 });
 
-router.post("/register", authIpLimiter, validateBody(RegisterBody), async (req: Req, res) => {
+router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope, async (req: Req, res) => {
   const { name, email, password, businessName, gstin } = req.body;
   const normalisedEmail = email.toLowerCase();
 
