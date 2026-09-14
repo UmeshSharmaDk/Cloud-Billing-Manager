@@ -4,6 +4,7 @@ import { eq, ilike, and, count, gte, lte, desc, sql } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
+import { resolveSupplyType } from "../lib/gst";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 
@@ -179,12 +180,14 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
     resolvedCustomerGstin = customer.gstin ?? null;
   }
 
-  // Auto-detect interstate based on business state code vs placeOfSupply
+  // CGST+SGST or IGST, decided by the seller's state against the place of
+  // supply. See `lib/gst.ts`: this used to treat a business with no state code
+  // as being in state "", which made every local sale look inter-state.
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
-  const bizStateCode = business?.stateCode ?? "";
-  const isInterstate = placeOfSupply ? (placeOfSupply.trim() !== bizStateCode.trim()) : false;
+  const supply = resolveSupplyType(business, placeOfSupply);
+  if (!supply.ok) return res.status(400).json({ error: supply.error });
 
-  const gstCalc = calcGst(items, isInterstate);
+  const gstCalc = calcGst(items, supply.isInterstate);
 
   // One transaction. Previously the invoice was inserted and then stock was
   // deducted in a loop of separate statements, so a failure part-way left an
@@ -197,7 +200,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
       businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
       customerId: resolvedCustomerId, customerName: resolvedCustomerName,
       customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
-      isInterstate, notes, items: gstCalc.items,
+      isInterstate: supply.isInterstate, notes, items: gstCalc.items,
       subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst),
       sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst),
       totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal),
@@ -238,15 +241,40 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
 
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), async (req: Req, res) => {
   const businessId = req.businessId;
-  const { type, customerId, invoiceDate, dueDate, placeOfSupply, isInterstate, notes, items } = req.body;
+  // `isInterstate` is deliberately not read from the body. It decides whether
+  // the customer may claim IGST or CGST+SGST credit, so it is the server's to
+  // derive from the place of supply — a client that could assert it could
+  // mis-state the tax head on an invoice that still totals correctly.
+  const { type, customerId, invoiceDate, dueDate, placeOfSupply, notes, items } = req.body;
+
+  // Read before writing: the effective place of supply may be one this request
+  // is not changing, and a 404 should not be discovered after building updates.
+  const [existing] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+    .limit(1);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  const effectivePlace = placeOfSupply !== undefined ? placeOfSupply : existing.placeOfSupply;
+  const supply = resolveSupplyType(business, effectivePlace);
+  if (!supply.ok) return res.status(400).json({ error: supply.error });
+
   const updates: any = {};
   if (type) updates.type = type;
   if (dueDate !== undefined) updates.dueDate = dueDate;
   if (placeOfSupply !== undefined) updates.placeOfSupply = placeOfSupply;
   if (notes !== undefined) updates.notes = notes;
-  if (items) {
-    const gstCalc = calcGst(items, isInterstate ?? false);
-    Object.assign(updates, { items: gstCalc.items, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: isInterstate ?? false });
+
+  // Recompute when the lines change, and also when the supply type does —
+  // moving the place of supply across a state line changes which tax applies to
+  // lines nobody edited, and leaving the stored split alone would keep charging
+  // the old one.
+  const supplyTypeChanged = supply.isInterstate !== existing.isInterstate;
+  const linesToPrice = items ?? (supplyTypeChanged ? (existing.items as any[]) : null);
+
+  if (linesToPrice) {
+    const gstCalc = calcGst(linesToPrice, supply.isInterstate);
+    Object.assign(updates, { items: gstCalc.items, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: supply.isInterstate });
     if (customerId) {
       const [customer] = await db.select().from(customersTable)
         .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
@@ -258,6 +286,9 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     }
     if (invoiceDate) updates.invoiceDate = invoiceDate;
   }
+  // A request that changes nothing is not an error, but `set({})` is invalid SQL.
+  if (Object.keys(updates).length === 0) return res.json(mapInvoice(existing));
+
   const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).returning();
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));

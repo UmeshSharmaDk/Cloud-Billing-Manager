@@ -252,6 +252,91 @@ CGST + SGST never loses or invents a paisa. The suite also records that the old 
 *fails* the same invariant, so the regression cannot quietly return. End to end, GSTR-1's taxable
 value, tax components and rate-wise breakdown all reconcile against the invoices they are built from.
 
+### The wrong tax on the invoice — fixed
+
+Found while adding the row-level security tests, and worse than the float drift because the
+arithmetic was never wrong — the *tax head* was. Charging IGST where CGST + SGST is due produces an
+invoice whose total is correct to the paisa, so nothing on the document looks off. It surfaces at
+filing: the customer claims input credit under a head they are not entitled to, GSTR-1 and GSTR-3B
+disagree with the counterparty's return, and unwinding it needs a credit note and a revised return.
+
+The supply type was decided like this:
+
+```ts
+const bizStateCode = business?.stateCode ?? "";
+const isInterstate = placeOfSupply ? placeOfSupply.trim() !== bizStateCode.trim() : false;
+```
+
+`businesses.state_code` is nullable and **registration never sets it**, so every business started
+with `null`, and `null ?? ""` compares unequal to every real state code. The result was IGST on every
+invoice that named a place of supply — including purely local sales — for every business that had not
+found and filled in the field by hand. Nothing prompted them to.
+
+Against five realistic cases, the old expression charged the wrong tax on three:
+
+| Case | Correct | Old behaviour |
+| --- | --- | --- |
+| Freshly registered business, local sale in 29 | CGST + SGST | **IGST** |
+| GSTIN registered in 27, no state code, local sale in 27 | CGST + SGST | **IGST** |
+| State code `07`, place of supply `7` | CGST + SGST | **IGST** |
+| State code 29, genuine inter-state sale to 27 | IGST | IGST |
+| State code 29, local sale in 29 | CGST + SGST | CGST + SGST |
+
+`lib/gst.ts` now resolves it in three steps. The seller's state comes from `state_code` when set;
+otherwise from the **GSTIN**, whose first two characters *are* the state of registration — that is
+authoritative rather than a guess, and it settles the common case, since a GST product's businesses
+nearly all have a GSTIN even when they never filled in the separate field. Codes are normalised
+before comparison, so `7` and `07` are one state. And when neither source yields a state, it
+**refuses the invoice** with a message naming the fix, rather than guessing: either guess writes a
+legally wrong document that the total does not reveal, and the same "fail loudly rather than silently
+fall back" already applies to the cross-tenant lookups.
+
+Two further problems in the update path, found while fixing the first:
+
+- **`isInterstate` was read from the request body.** A client could assert the tax head directly,
+  producing an invoice that totals correctly and credits the wrong tax. It is now derived server-side
+  and the body value ignored.
+- **Editing any line silently re-taxed the invoice.** `calcGst(items, isInterstate ?? false)` meant a
+  legitimate inter-state invoice became CGST + SGST the moment someone edited a quantity without
+  resending the flag. Conversely, changing the place of supply *without* resending items left the old
+  split in place, because totals were only recomputed when items were present. Both now follow the
+  derived supply type, and a change of supply type re-prices the stored lines.
+
+Covered by 38 unit checks and 8 integration checks, including the regression itself and the
+client-asserted flag.
+
+**Still open, and deliberately not widened into here:** `purchases.ts` calls
+`calcPurchaseTotals(items)` and never passes `isInterstate`, so every recorded purchase is split as
+CGST + SGST. An inter-state purchase therefore books input credit under the wrong head — the same
+class of bug on the buy side. Purchases carry no place-of-supply field at all, so fixing it is a
+schema and API change rather than a corrected expression, and it wants its own change.
+
+### Two ways the server could be killed from outside — fixed
+
+Both found by stopping Postgres underneath a running server while testing the row-level security
+work. Neither is exploitable as a privilege escalation; both are availability, and both were a single
+event away from taking the whole process down.
+
+**An idle connection error crashed the process.** `pg.Pool` emits `error` for a connection sitting
+idle in the pool when the database goes away — a restart, a failover, `pg_terminate_backend`, a
+firewall dropping an idle socket. That is an EventEmitter `error` event, and with no listener attached
+Node treats it as unhandled and terminates. No listener was attached. A routine database restart took
+the API server down with it, and whichever request happened to be in flight was never the cause. The
+pool already discards the broken connection and reconnects on the next query, so the fix is to
+observe the event and say what happened.
+
+**The tenant scope could reject with nobody listening.** The middleware held a promise that rejected
+on a 5xx, to roll the request's transaction back. On the normal path the scope callback awaits it, so
+the rejection is handled. But when `transaction()` fails *before* running its callback — the database
+was already unreachable — the callback never runs, nothing awaits that promise, and it rejects alone
+when the error handler writes its 500. Unhandled rejection, process gone. So a database blip during a
+request killed the server rather than returning a 500. It now resolves with a boolean and the
+rollback is thrown at the await site, which cannot produce an unobserved rejection.
+
+Verified by killing Postgres in both orders — while connections sat idle, and with a request arriving
+after it was already down. The server logs, returns `500`, and keeps serving. Before the fixes each
+case terminated the process.
+
 ### Follow-up after Phase 3
 
 **A regression Phase 3 introduced, now fixed.** Step-up confirmation was gated on the `role` field
@@ -972,5 +1057,8 @@ self-review substitutes for.*
 ### Ongoing
 
 - Multi-factor authentication for all admin accounts.
+- Inter-state purchases. `calcPurchaseTotals` never receives `isInterstate`, so every purchase is
+  booked as CGST + SGST and an inter-state one claims input credit under the wrong head. Purchases
+  have no place-of-supply field, so this is a schema and API change, not a corrected expression.
 - A data-retention and backup policy matching GST record-keeping obligations, with restores tested.
 - Alerting on failed-login bursts, admin actions, and 5xx rates.

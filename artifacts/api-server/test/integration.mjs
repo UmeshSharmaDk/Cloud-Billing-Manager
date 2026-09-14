@@ -364,6 +364,94 @@ const adminEmail = `admin${uniq}@example.test`;
 }
 
 
+// === supply type: CGST+SGST vs IGST ========================================
+//
+// The wrong head of tax on an invoice whose total is right. Invisible on the
+// document, and expensive at filing time: the customer claims credit they are
+// not entitled to and the return has to be amended.
+{
+  const tax = await register("tax");
+
+  // The regression. `businesses.state_code` is nullable and registration never
+  // sets it, so the old comparison put every business in state "" — unequal to
+  // every real state code, so every invoice naming a place of supply was taxed
+  // as inter-state. Strip the GSTIN too, so there is nothing left to derive
+  // the seller's state from.
+  const [bizId] = [sqlValue(`SELECT id FROM businesses WHERE user_id = ${tax.userId}`)];
+  sqlExec(`UPDATE businesses SET state_code = NULL, gstin = NULL WHERE id = ${bizId}`);
+
+  const blind = await call("POST", "/invoices", { token: tax.token,
+    body: { invoiceDate: "2026-08-06", customerName: "Local Buyer", placeOfSupply: "29",
+            items: [{ description: "w", quantity: 2, unitPrice: 100, gstRate: 18 }] } });
+  check("supply-type", "no seller state: refuses instead of silently charging IGST",
+    blind.status === 400, `status ${blind.status} ${JSON.stringify(blind.data)}`);
+  check("supply-type", "and the message says to set the business state code",
+    /business state code/i.test(blind.data?.error ?? ""), blind.data?.error ?? "");
+
+  // A GSTIN alone settles it: its first two characters are the state of
+  // registration. This is the common case — most businesses never fill in the
+  // separate state code field.
+  sqlExec(`UPDATE businesses SET gstin = '29AAAAA0000A1Z5' WHERE id = ${bizId}`);
+
+  const viaGstin = await call("POST", "/invoices", { token: tax.token,
+    body: { invoiceDate: "2026-08-06", customerName: "Local Buyer", placeOfSupply: "29",
+            items: [{ description: "w", quantity: 2, unitPrice: 100, gstRate: 18 }] } });
+  const g = viaGstin.data?.invoice;
+  check("supply-type", "GSTIN state 29 + place 29 is intra-state (CGST+SGST)",
+    viaGstin.status === 201 && g?.cgst === 18 && g?.sgst === 18 && g?.igst === 0,
+    `status ${viaGstin.status} cgst ${g?.cgst} sgst ${g?.sgst} igst ${g?.igst}`);
+
+  const across = (await call("POST", "/invoices", { token: tax.token,
+    body: { invoiceDate: "2026-08-06", customerName: "Far Buyer", placeOfSupply: "27",
+            items: [{ description: "w", quantity: 2, unitPrice: 100, gstRate: 18 }] } })).data?.invoice;
+  check("supply-type", "GSTIN state 29 + place 27 is inter-state (IGST)",
+    across?.igst === 36 && across?.cgst === 0 && across?.sgst === 0,
+    `cgst ${across?.cgst} igst ${across?.igst}`);
+
+  // "7" and "07" are the same state. Compared as raw strings they were not.
+  sqlExec(`UPDATE businesses SET state_code = '07' WHERE id = ${bizId}`);
+  const padded = (await call("POST", "/invoices", { token: tax.token,
+    body: { invoiceDate: "2026-08-06", customerName: "Delhi Buyer", placeOfSupply: "7",
+            items: [{ description: "w", quantity: 2, unitPrice: 100, gstRate: 18 }] } })).data?.invoice;
+  check("supply-type", "place '7' matches state '07' (intra-state)",
+    padded?.cgst === 18 && padded?.igst === 0,
+    `cgst ${padded?.cgst} igst ${padded?.igst}`);
+
+  // A place of supply that is not a state code at all used to compare unequal
+  // and read as inter-state.
+  const junk = await call("POST", "/invoices", { token: tax.token,
+    body: { invoiceDate: "2026-08-06", customerName: "Nowhere", placeOfSupply: "ZZ",
+            items: [{ description: "w", quantity: 2, unitPrice: 100, gstRate: 18 }] } });
+  check("supply-type", "an invalid place of supply is rejected, not read as inter-state",
+    junk.status === 400, `status ${junk.status}`);
+
+  // The server derives the tax head; a client cannot assert it. The invoice
+  // below is intra-state by its place of supply, and says otherwise in the body.
+  sqlExec(`UPDATE businesses SET state_code = '29' WHERE id = ${bizId}`);
+  const target = (await call("POST", "/invoices", { token: tax.token,
+    body: { invoiceDate: "2026-08-07", customerName: "Local Buyer", placeOfSupply: "29",
+            items: [{ description: "w", quantity: 1, unitPrice: 100, gstRate: 18 }] } })).data?.invoice;
+
+  const claimed = await call("PATCH", `/invoices/${target.id}`, { token: tax.token,
+    body: { isInterstate: true,
+            items: [{ description: "w", quantity: 1, unitPrice: 100, gstRate: 18 }] } });
+  const c = claimed.data;
+  check("supply-type", "a client-asserted isInterstate is ignored on update",
+    c?.isInterstate === false && c?.cgst === 9 && c?.sgst === 9 && c?.igst === 0,
+    `isInterstate ${c?.isInterstate} cgst ${c?.cgst} igst ${c?.igst}`);
+
+  // Moving the place of supply across a state line has to re-split the tax on
+  // lines nobody edited. Previously the totals were only recomputed when items
+  // were resent, so the stored split kept charging the old tax.
+  const moved = await call("PATCH", `/invoices/${target.id}`, { token: tax.token,
+    body: { placeOfSupply: "27" } });
+  const m = moved.data;
+  check("supply-type", "changing the place of supply re-splits tax without resending items",
+    m?.isInterstate === true && m?.igst === 18 && m?.cgst === 0 && m?.sgst === 0,
+    `isInterstate ${m?.isInterstate} cgst ${m?.cgst} igst ${m?.igst}`);
+}
+
+
 // === F-09: cookie session, CSRF, security headers ==========================
 {
   const jar = newJar();

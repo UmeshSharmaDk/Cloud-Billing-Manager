@@ -27,16 +27,20 @@ class RollbackOnServerError extends Error {
 }
 
 /**
- * Resolves when the response has been written, or rejects when it was a 5xx so
- * the surrounding transaction rolls back rather than committing a half-done
- * request.
+ * Resolves when the response has been written, reporting whether it failed.
+ *
+ * Deliberately never rejects. It used to reject on a 5xx to trigger the
+ * rollback, which was fine on the path where the callback awaits it — but if
+ * `transaction()` fails before ever running the callback (the database went
+ * away mid-request, say), nothing is awaiting this promise when the error
+ * handler writes its 500. That rejection then had no handler, and an unhandled
+ * rejection takes the process down: a connection blip on one request killed the
+ * server for every request. Reporting the failure as a value and throwing at
+ * the await site keeps the rollback behaviour with no unobservable rejection.
  */
-function responseSettled(res: Response): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const settle = () => {
-      if (res.statusCode >= 500) reject(new RollbackOnServerError());
-      else resolve();
-    };
+function responseFailed(res: Response): Promise<boolean> {
+  return new Promise((resolve) => {
+    const settle = () => resolve(res.statusCode >= 500);
     res.once("finish", settle);
     res.once("close", settle);
   });
@@ -64,10 +68,10 @@ export function openTenantScope(
   next: NextFunction,
   businessId: number,
 ): void {
-  const settled = responseSettled(res);
+  const failed = responseFailed(res);
   void runInTenantScope(rootDb, businessId, async () => {
     next();
-    await settled;
+    if (await failed) throw new RollbackOnServerError();
   }).catch((err) => handleScopeFailure(err, req, res, next));
 }
 
@@ -81,9 +85,9 @@ export function openTenantScope(
  * is applied per-router rather than being available by default.
  */
 export function systemScope(req: Request, res: Response, next: NextFunction): void {
-  const settled = responseSettled(res);
+  const failed = responseFailed(res);
   void runInSystemScope(rootDb, async () => {
     next();
-    await settled;
+    if (await failed) throw new RollbackOnServerError();
   }).catch((err) => handleScopeFailure(err, req, res, next));
 }
