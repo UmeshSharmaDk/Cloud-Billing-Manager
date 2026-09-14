@@ -21,7 +21,7 @@ globalThis.fetch = (async (url: any, init?: any) => {
 let PASSWORD = "";
 
 const { isBreachedPassword, validatePassword } =
-  await import("/home/user/Cloud-Billing-Manager/artifacts/api-server/src/lib/password-policy.ts");
+  await import("../src/lib/password-policy.ts");
 
 let pass = 0, fail = 0;
 const check = (name: string, cond: boolean) => {

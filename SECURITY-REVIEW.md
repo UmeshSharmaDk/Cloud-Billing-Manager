@@ -9,6 +9,13 @@ scan was performed — absence of a finding here is not evidence of absence.
 
 ---
 
+> **A note on this document.** It describes each finding without reproducing the
+> credential or secret involved. An earlier draft quoted them verbatim, which
+> made the report itself a fresh copy of the thing it was reporting — one more
+> place to scan, rotate and leak from. The values are in the repository's history
+> regardless, and must be treated as compromised and rotated; see
+> **Operator actions that code cannot perform**.
+
 ## Verdict
 
 **Not safe to expose to the internet.**
@@ -617,7 +624,7 @@ of the three does not help.
 **CWE-321 · Hardcoded cryptographic key** · `artifacts/api-server/src/routes/auth.ts:9`
 
 ```ts
-const JWT_SECRET = process.env.SESSION_SECRET ?? "gst-platform-secret-2024";
+const JWT_SECRET = process.env.SESSION_SECRET ?? "<a literal fallback secret>";
 ```
 
 If `SESSION_SECRET` is missing, unset, or empty at boot, the server silently falls back to a secret
@@ -664,7 +671,7 @@ in the codebase, it just was not applied here. Then:
 ```tsx
 <p>Demo Credentials (click to fill):</p>
 <button onClick={() => { setEmail("demo@acmeindia.in");     setPassword("Demo@123"); }}>…
-<button onClick={() => { setEmail("admin@gstplatform.in"); setPassword("Admin@123"); }}>…
+<button onClick={() => { setEmail("<admin address>"); setPassword("<admin password>"); }}>…
 ```
 
 The second button fills credentials for the **platform administrator** — the account that manages
@@ -692,18 +699,18 @@ harvested by automated scanners within hours of a deployment going live.
 
 ```ts
 function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password + "gst_salt_v1").digest("hex");
+  return crypto.createHash("sha256").update(password + "<one global salt>").digest("hex");
 }
 ```
 
 The README describes this as "bcrypt-style SHA-256 hashing." It is not bcrypt-style in any respect:
-SHA-256 is a fast general-purpose digest with no work factor, and `"gst_salt_v1"` is a constant shared
+SHA-256 is a fast general-purpose digest with no work factor, and the salt is a single constant shared
 by every user — a pepper, not a salt.
 
 **Why it matters.** Measured on the review machine, single-threaded:
 
 ```
-sha256('Admin@123' + 'gst_salt_v1') = 6580c619…9cd2853b
+sha256(<the published admin password> + <the global salt>) = 6580c619…9cd2853b
 Same input -> same digest every time (no per-user salt): true
 Single-threaded guesses/sec: ~599,510
 ```
@@ -713,7 +720,7 @@ Two consequences follow from the shared salt specifically:
 - **One rainbow table breaks the whole database.** The salt is known and constant, so an attacker
   precomputes once and cracks every user at lookup speed.
 - **Identical passwords produce identical hashes**, so a dump reveals which accounts share a password
-  — including which match the published `Admin@123`.
+  — including which match the password that was published on the login page.
 
 Users reuse passwords, so a dump here becomes a credential-stuffing corpus against their banking and
 GST portal logins.
