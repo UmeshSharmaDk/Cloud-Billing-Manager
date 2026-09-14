@@ -18,7 +18,7 @@
 
 import rateLimit from "express-rate-limit";
 import { db, loginAttemptsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 
 /** Failures tolerated inside the window before an account starts locking. */
 const FAILURE_THRESHOLD = 10;
@@ -154,6 +154,36 @@ export async function recordFailures(keys: string[]): Promise<void> {
       }
     }),
   );
+}
+
+/**
+ * Delete counters that can no longer affect anyone.
+ *
+ * The key is the address the *caller* supplied, so every failed login for an
+ * address that does not exist creates a row — and `clearFailures` only runs on
+ * a successful login for that exact address, which by definition never happens
+ * for one. A run through a stolen credential list therefore left a row per
+ * address, permanently, and every later lockout lookup paid for the bloat.
+ *
+ * A row is safe to delete once its window has passed and it holds no live lock:
+ * the same condition under which `recordFailures` would reset the counter to 1
+ * anyway, so pruning changes no behaviour.
+ */
+export async function pruneLoginAttempts(): Promise<number> {
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - WINDOW_MS);
+
+  const deleted = await db
+    .delete(loginAttemptsTable)
+    .where(
+      and(
+        lt(loginAttemptsTable.firstFailureAt, windowStart),
+        or(isNull(loginAttemptsTable.lockedUntil), lt(loginAttemptsTable.lockedUntil, now)),
+      ),
+    )
+    .returning({ key: loginAttemptsTable.key });
+
+  return deleted.length;
 }
 
 /** Clear counters after a successful authentication. */

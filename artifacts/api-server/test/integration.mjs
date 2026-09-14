@@ -520,6 +520,325 @@ const adminEmail = `admin${uniq}@example.test`;
 }
 
 
+// === review: step-up is rate-limited by the account lockout ================
+//
+// `recordFailures([userKey(id)])` was written by three call sites and read by
+// none, so the password confirmation guarding role changes and password resets
+// could be guessed at unlimited rate behind a stolen session — each attempt
+// also costing a 19 MiB Argon2 hash.
+{
+  const su = await register("stepup");
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${su.userId}`);
+  const T = { token: su.token };
+
+  const victim = await register("stepupvictim");
+
+  // Below the threshold the wrong password is simply refused.
+  const first = await call("POST", `/users/${victim.userId}/reset-password`,
+    { ...T, body: { newPassword: "AnotherStrongPass9!", confirmPassword: "wrong-password-1" } });
+  check("step-up", "a wrong confirmation is refused", first.status === 403, `status ${first.status}`);
+
+  // Past it the account locks, exactly as the login path does.
+  let locked = null;
+  for (let i = 0; i < 14 && !locked; i++) {
+    const r = await call("POST", `/users/${victim.userId}/reset-password`,
+      { ...T, body: { newPassword: "AnotherStrongPass9!", confirmPassword: `wrong-${i}` } });
+    if (r.status === 429) locked = r;
+  }
+  check("step-up", "repeated wrong confirmations lock the account", Boolean(locked),
+    locked ? "" : "never locked after 15 attempts");
+  check("step-up", "the lockout carries Retry-After",
+    Boolean(locked?.headers.get("retry-after")), String(locked?.headers.get("retry-after")));
+
+  // And the lock holds even against the correct password — otherwise it would
+  // only be slowing down someone who already knows it.
+  const correct = await call("POST", `/users/${victim.userId}/reset-password`,
+    { ...T, body: { newPassword: "AnotherStrongPass9!", confirmPassword: PASSWORD } });
+  check("step-up", "the lockout holds against the correct password", correct.status === 429,
+    `status ${correct.status}`);
+
+  sqlExec(`DELETE FROM login_attempts WHERE key = 'user:${su.userId}'`);
+  sqlExec(`UPDATE users SET role='user' WHERE id=${su.userId}`);
+}
+
+// === review: change-password is rate-limited too ===========================
+{
+  const cp = await register("changepw");
+  const T = { token: cp.token };
+
+  let locked = null;
+  for (let i = 0; i < 15 && !locked; i++) {
+    const r = await call("POST", "/auth/change-password",
+      { ...T, body: { currentPassword: `wrong-${i}`, newPassword: "BrandNewStrongPass9!" } });
+    if (r.status === 429) locked = r;
+  }
+  check("step-up", "change-password locks after repeated wrong attempts", Boolean(locked));
+  const correct = await call("POST", "/auth/change-password",
+    { ...T, body: { currentPassword: PASSWORD, newPassword: "BrandNewStrongPass9!" } });
+  check("step-up", "and holds against the correct current password", correct.status === 429,
+    `status ${correct.status}`);
+  sqlExec(`DELETE FROM login_attempts WHERE key = 'user:${cp.userId}'`);
+}
+
+// === review: creating an admin needs the same confirmation as promoting one =
+{
+  const mk = await register("mkadmin");
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${mk.userId}`);
+  const T = { token: mk.token };
+  const stamp = Date.now();
+
+  const noConfirm = await call("POST", "/users", { ...T,
+    body: { name: "Sneaky", email: `sneaky${stamp}@example.test`,
+            password: "AttackerChosen9!x", role: "admin" } });
+  check("admin-create", "creating an admin without confirmation is refused",
+    noConfirm.status === 403, `status ${noConfirm.status}`);
+
+  const confirmed = await call("POST", "/users", { ...T,
+    body: { name: "Legit", email: `legit${stamp}@example.test`,
+            password: "OperatorChosen9!x", role: "admin", confirmPassword: PASSWORD } });
+  check("admin-create", "and permitted with it", confirmed.status === 201, `status ${confirmed.status}`);
+
+  // A non-admin account is not a privilege grant and needs no confirmation.
+  const plain = await call("POST", "/users", { ...T,
+    body: { name: "Plain", email: `plain${stamp}@example.test`,
+            password: "OrdinaryUser9!xy", role: "user" } });
+  check("admin-create", "an ordinary account still needs no confirmation",
+    plain.status === 201, `status ${plain.status}`);
+
+  const dup = await call("POST", "/users", { ...T,
+    body: { name: "Dup", email: `plain${stamp}@example.test`,
+            password: "OrdinaryUser9!xy", role: "user" } });
+  check("admin-create", "a duplicate address is a 409, not a 500", dup.status === 409,
+    `status ${dup.status}`);
+
+  sqlExec(`UPDATE users SET role='user' WHERE id=${mk.userId}`);
+}
+
+// === review: signing out revokes the token, not just the cookie ============
+{
+  const so = await register("signout");
+  const bearer = so.token;
+
+  const before = await call("GET", "/customers?page=1&limit=10", { token: bearer });
+  check("logout", "the token works before signing out", before.status === 200, `status ${before.status}`);
+
+  const out = await call("POST", "/auth/logout", { token: bearer });
+  check("logout", "logout succeeds", out.status === 200, `status ${out.status}`);
+
+  // The whole point: a copy of the token taken before sign-out must not work
+  // after it. It used to stay valid for the rest of its seven days.
+  const after = await call("GET", "/customers?page=1&limit=10", { token: bearer });
+  check("logout", "the same token is rejected after signing out", after.status === 401,
+    `status ${after.status}`);
+
+  // Other sessions are untouched — this is sign-out, not sign-out-everywhere.
+  const other = await call("POST", "/auth/login", { body: { email: so.email, password: PASSWORD } });
+  const otherToken = other.data?.token;
+  const stillIn = await call("GET", "/customers?page=1&limit=10", { token: otherToken });
+  check("logout", "a different session still works", stillIn.status === 200, `status ${stillIn.status}`);
+}
+
+// === review: a payment cannot reference another tenant's records ===========
+{
+  const own = await register("payown");
+  const other = await register("payother");
+
+  const otherInv = (await call("POST", "/invoices", { token: other.token,
+    body: { invoiceDate: "2026-08-05", customerName: "Theirs", placeOfSupply: "27",
+            items: [{ description: "x", quantity: 1, unitPrice: 10, gstRate: 18 }] } })).data.invoice;
+  const otherCust = (await call("POST", "/customers", { token: other.token,
+    body: { name: "Their Customer" } })).data;
+
+  const base = { type: "received", amount: 1, date: "2026-01-01", mode: "cash" };
+
+  const crossInvoice = await call("POST", "/payments", { token: own.token,
+    body: { ...base, invoiceId: otherInv.id } });
+  check("payment-refs", "a payment naming another tenant's invoice is refused",
+    crossInvoice.status === 400, `status ${crossInvoice.status}`);
+
+  const crossCustomer = await call("POST", "/payments", { token: own.token,
+    body: { ...base, customerId: otherCust.id } });
+  check("payment-refs", "and another tenant's customer", crossCustomer.status === 400,
+    `status ${crossCustomer.status}`);
+
+  const missing = await call("POST", "/payments", { token: own.token,
+    body: { ...base, vendorId: 99999999 } });
+  check("payment-refs", "and a vendor that does not exist", missing.status === 400,
+    `status ${missing.status}`);
+
+  // Its own records are still accepted.
+  const mine = (await call("POST", "/customers", { token: own.token, body: { name: "Mine" } })).data;
+  const ok = await call("POST", "/payments", { token: own.token, body: { ...base, customerId: mine.id } });
+  check("payment-refs", "its own customer is accepted", ok.status === 201, `status ${ok.status}`);
+}
+
+// === review: a failed audit write must not undo the action =================
+//
+// The admin routers run the whole request in one transaction, so a failed
+// INSERT does not merely throw — it aborts that transaction, and Postgres turns
+// the eventual COMMIT into a ROLLBACK. Catching the error let the handler return
+// 200 while the change it had just made was discarded.
+{
+  const au = await register("auditfail");
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${au.userId}`);
+  const target = await register("audittarget");
+
+  sqlExec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS tmp_reject_audit`);
+  sqlExec(`ALTER TABLE audit_log ADD CONSTRAINT tmp_reject_audit CHECK (actor_email NOT LIKE 'auditfail%') NOT VALID`);
+
+  try {
+    const r = await call("PATCH", `/users/${target.userId}`,
+      { token: au.token, body: { name: "Renamed Under Audit Failure" } });
+    check("audit", "the action still succeeds when its audit write fails",
+      r.status === 200, `status ${r.status} ${JSON.stringify(r.data)}`);
+
+    const stored = sqlValue(`SELECT name FROM users WHERE id=${target.userId}`);
+    check("audit", "and the change is actually committed, not silently rolled back",
+      stored === "Renamed Under Audit Failure", `stored "${stored}"`);
+  } finally {
+    sqlExec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS tmp_reject_audit`);
+    sqlExec(`UPDATE users SET role='user' WHERE id=${au.userId}`);
+  }
+}
+
+// === review: one definition of low stock ===================================
+{
+  const ls = await register("lowstock");
+  const T = { token: ls.token };
+  const bizId = sqlValue(`SELECT id FROM businesses WHERE user_id = ${ls.userId}`);
+
+  // The case that broke it: a product with no threshold, which is every product
+  // created from a purchase bill. `0 <= NULL` is NULL, so the products list
+  // silently omitted it while the dashboard counted it.
+  await call("POST", "/products", { ...T, body: { name: "No Threshold", unit: "Nos", sellingPrice: 10 } });
+  sqlExec(`UPDATE products SET stock_quantity = 0, low_stock_threshold = NULL
+           WHERE business_id = ${bizId} AND name = 'No Threshold'`);
+  await call("POST", "/products", { ...T,
+    body: { name: "Plenty", unit: "Nos", sellingPrice: 10, stockQuantity: 500, lowStockThreshold: 5 } });
+
+  const list = (await call("GET", "/products?lowStock=true&page=1&limit=50", T)).data;
+  const listed = (list.products ?? list).map((p) => p.name);
+  const stats = (await call("GET", "/dashboard/stats", T)).data;
+  const lowList = (await call("GET", "/dashboard/low-stock", T)).data;
+  const stock = (await call("GET", "/reports/stock", T)).data;
+
+  check("low-stock", "a product with no threshold appears in the filtered list",
+    listed.includes("No Threshold"), listed.join(", ") || "(none)");
+  check("low-stock", "the three surfaces agree on the count",
+    stats.lowStockCount === listed.length && lowList.length === listed.length &&
+      stock.lowStockProducts === listed.length,
+    `list ${listed.length} stats ${stats.lowStockCount} lowList ${lowList.length} report ${stock.lowStockProducts}`);
+  check("low-stock", "a well-stocked product is in none of them",
+    !listed.includes("Plenty"), listed.join(", "));
+}
+
+// === review: top-products is aggregated, and names its products ============
+{
+  const tp = await register("topprod");
+  const T = { token: tp.token };
+  const mk = (name, qty, price) => call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27",
+            items: [{ description: name, quantity: qty, unitPrice: price, gstRate: 18 }] } });
+
+  await mk("Big Seller", 10, 1000);
+  await mk("Small Seller", 1, 10);
+
+  const top = (await call("GET", "/dashboard/top-products", T)).data;
+  check("top-products", "ranks by revenue",
+    Array.isArray(top) && top[0]?.productName === "Big Seller",
+    JSON.stringify(top?.slice(0, 2)));
+  // The old code read `item.productName`, a field nothing writes, so every name
+  // came back undefined and walk-in lines all collided on one key.
+  check("top-products", "products are named, not undefined",
+    top.every((p) => typeof p.productName === "string" && p.productName.length > 0),
+    JSON.stringify(top.map((p) => p.productName)));
+  check("top-products", "returns at most five", top.length <= 5, String(top.length));
+}
+
+// === review: stock movements reverse ======================================
+{
+  const st = await register("stockmove");
+  const T = { token: st.token };
+  const bizId = sqlValue(`SELECT id FROM businesses WHERE user_id = ${st.userId}`);
+  const stockOf = (name) =>
+    Number(sqlValue(`SELECT stock_quantity FROM products WHERE business_id=${bizId} AND name='${name}'`));
+
+  const prod = (await call("POST", "/products", { ...T,
+    body: { name: "Movable", unit: "Nos", sellingPrice: 100, gstRate: 18, stockQuantity: 100 } })).data;
+
+  const inv = (await call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27",
+            items: [{ productId: prod.id, description: "Movable", quantity: 10, unitPrice: 100, gstRate: 18 }] } })).data.invoice;
+  check("stock", "selling 10 of 100 leaves 90", stockOf("Movable") === 90, String(stockOf("Movable")));
+
+  await call("PATCH", `/invoices/${inv.id}`, { ...T,
+    body: { items: [{ productId: prod.id, description: "Movable", quantity: 1, unitPrice: 100, gstRate: 18 }] } });
+  check("stock", "editing the sale down to 1 leaves 99", stockOf("Movable") === 99, String(stockOf("Movable")));
+
+  await call("DELETE", `/invoices/${inv.id}`, T);
+  check("stock", "deleting the invoice restores the goods", stockOf("Movable") === 100, String(stockOf("Movable")));
+
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "SV", gstin: "27SVSVS0000V1Z5" } })).data;
+  const bill = (await call("POST", "/purchases", { ...T,
+    body: { vendorId: vend.id, billDate: "2026-08-05",
+            items: [{ description: "Movable", quantity: 50, unitPrice: 10, gstRate: 18 }] } })).data;
+  check("stock", "receiving 50 leaves 150", stockOf("Movable") === 150, String(stockOf("Movable")));
+
+  await call("PATCH", `/purchases/${bill.id}`, { ...T,
+    body: { items: [{ description: "Movable", quantity: 50, unitPrice: 10, gstRate: 18 }] } });
+  check("stock", "re-saving the same bill does not double-count", stockOf("Movable") === 150,
+    String(stockOf("Movable")));
+
+  await call("DELETE", `/purchases/${bill.id}`, T);
+  check("stock", "deleting the bill removes the goods again", stockOf("Movable") === 100,
+    String(stockOf("Movable")));
+}
+
+// === review: marking an invoice paid settles it and records the payment ====
+{
+  const pd = await register("paid");
+  const T = { token: pd.token };
+
+  const inv = (await call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27",
+            items: [{ description: "x", quantity: 1, unitPrice: 1000, gstRate: 18 }] } })).data.invoice;
+
+  const paid = (await call("PATCH", `/invoices/${inv.id}/status`, { ...T,
+    body: { paymentStatus: "paid" } })).data;
+  check("payments", "marking paid settles the balance",
+    paid.status === "paid" && paid.paidAmount === paid.grandTotal && paid.balanceDue === 0,
+    `paid ${paid.paidAmount} of ${paid.grandTotal}, due ${paid.balanceDue}`);
+
+  const list = (await call("GET", "/payments?page=1&limit=10", T)).data;
+  const row = list.payments?.[0];
+  check("payments", "a receipt is recorded for it", list.payments?.length === 1, String(list.payments?.length));
+  // The page reads these exact names; it used to read paymentType/paymentDate/
+  // paymentMethod/reference, none of which the API has ever returned.
+  check("payments", "and carries the fields the page reads",
+    row?.type === "received" && typeof row?.date === "string" && typeof row?.mode === "string"
+      && row?.invoiceId === inv.id && row?.amount === paid.grandTotal,
+    JSON.stringify(row));
+}
+
+// === review: reports summarise the whole range, and cap the rows ===========
+{
+  const rp = await register("reports");
+  const T = { token: rp.token };
+  for (let i = 1; i <= 3; i++) {
+    await call("POST", "/invoices", { ...T,
+      body: { invoiceDate: `2026-08-0${i}`, customerName: "C", placeOfSupply: "27",
+              items: [{ description: "x", quantity: 1, unitPrice: 100, gstRate: 18 }] } });
+  }
+  const sales = (await call("GET", "/reports/sales?fromDate=2026-08-01&toDate=2026-08-31", T)).data;
+  check("reports", "the count covers the whole range", sales.invoiceCount === 3,
+    String(sales.invoiceCount));
+  check("reports", "totals are computed in SQL over the range",
+    Math.abs(sales.totalSales - 354) < 0.005, String(sales.totalSales));
+  check("reports", "a small result is not marked truncated", sales.truncated === false,
+    String(sales.truncated));
+}
+
+
 // === F-09: cookie session, CSRF, security headers ==========================
 {
   const jar = newJar();

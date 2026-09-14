@@ -6,7 +6,9 @@ import { validateBody, validateQuery, validateParams } from "../middleware/valid
 import { Decimal, dec, paise, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListPurchasesQuery, CreatePurchaseBody, UpdatePurchaseBody, IdParam } from "../schemas";
 import { resolveInwardSupplyType } from "../lib/gst";
+import { applyStockMovement, findLineProduct, STOCK_IN } from "../lib/stock";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { mapPurchase } from "../lib/serialise";
 
 const router = Router();
 
@@ -81,32 +83,43 @@ function calcPurchaseTotals(items: any[], isInterstate: boolean) {
  * that outside the transaction that records the bill meant a failure part-way
  * left stock and prices updated for a purchase that was never saved.
  */
+/**
+ * Point each line at a catalog product, creating one where the bill names
+ * something new, and refresh the details the bill is authoritative for.
+ *
+ * Deliberately does *not* move stock. It used to: the same call both resolved a
+ * product and added the line's quantity to it, so re-running it on an edit
+ * added those quantities a second time without reversing the first — saving the
+ * same bill twice left double the goods. Movement is now `applyStockMovement`,
+ * which the caller pairs with a reversal.
+ *
+ * New products are created at zero stock for the same reason; the movement that
+ * follows is what puts the goods in.
+ */
 async function resolveItemsToProducts(tx: any, businessId: number, items: any[]) {
   const catalog = await tx.select().from(productsTable).where(eq(productsTable.businessId, businessId));
   const resolved: any[] = [];
   for (const item of items) {
     const name = String(item.description ?? "").trim();
-    const qty = dec(item.quantity ?? 0);
     const unitPrice = dec(item.unitPrice ?? 0);
     const gstRate = dec(item.gstRate ?? 0);
-    let product = item.productId
-      ? catalog.find((p: any) => p.id === parseInt(item.productId))
-      : catalog.find((p: any) => p.name.toLowerCase().trim() === name.toLowerCase());
+    let product = findLineProduct(catalog, item);
 
     if (product) {
-      const newQty = dec(product.stockQuantity).plus(qty);
-      const updates: any = { stockQuantity: newQty.toFixed(3) };
+      const updates: any = {};
       if (unitPrice.greaterThan(0)) updates.purchasePrice = toColumn(unitPrice);
       if (item.gstRate !== undefined) updates.gstRate = gstRate.toFixed(2);
       if (item.hsnCode) updates.hsnCode = item.hsnCode;
       if (item.unit) updates.unit = item.unit;
-      const [updated] = await tx.update(productsTable).set(updates).where(eq(productsTable.id, product.id)).returning();
-      product = updated;
+      if (Object.keys(updates).length > 0) {
+        const [updated] = await tx.update(productsTable).set(updates).where(eq(productsTable.id, product.id)).returning();
+        product = updated;
+      }
     } else if (name) {
       const [created] = await tx.insert(productsTable).values({
         businessId, name, hsnCode: item.hsnCode || null, unit: item.unit || "Nos",
         purchasePrice: toColumn(unitPrice), sellingPrice: toColumn(unitPrice),
-        gstRate: gstRate.toFixed(2), stockQuantity: qty.toFixed(3),
+        gstRate: gstRate.toFixed(2), stockQuantity: "0",
       }).returning();
       product = created;
       catalog.push(product);
@@ -115,24 +128,6 @@ async function resolveItemsToProducts(tx: any, businessId: number, items: any[])
     resolved.push({ ...item, productId: product?.id ?? null });
   }
   return resolved;
-}
-
-function mapPurchase(p: any) {
-  return {
-    ...p,
-    // Expose as both billNumber/billDate (frontend convention) and invoiceNumber/invoiceDate (DB convention)
-    billNumber: p.invoiceNumber,
-    billDate: p.invoiceDate,
-    subtotal: toJson(p.subtotal),
-    cgst: toJson(p.cgst),
-    sgst: toJson(p.sgst),
-    igst: toJson(p.igst),
-    totalGst: toJson(p.totalGst),
-    grandTotal: toJson(p.grandTotal),
-    status: p.status ?? "unpaid",
-    paymentStatus: p.status ?? "unpaid",
-    items: Array.isArray(p.items) ? p.items : [],
-  };
 }
 
 router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery), async (req: Req, res) => {
@@ -187,6 +182,8 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody),
   // product's stock/price/GST if a match is found, or create a new catalog product otherwise.
   const purchase = await db.transaction(async (tx) => {
     const resolvedItems = await resolveItemsToProducts(tx, businessId, calc.items);
+    // Goods arrive. Separate from resolution above so an edit can reverse it.
+    await applyStockMovement(tx, productsTable, eq, businessId, resolvedItems, STOCK_IN);
 
     const [created] = await tx.insert(purchasesTable).values({
       businessId, vendorId: parseInt(vendorId),
@@ -266,11 +263,15 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   const purchase = await db.transaction(async (tx) => {
     if (items) {
       const calc = calcPurchaseTotals(items, supply.isInterstate);
-      assignTotals(calc, await resolveItemsToProducts(tx, businessId, calc.items));
+      const resolvedItems = await resolveItemsToProducts(tx, businessId, calc.items);
+      // Undo what this bill previously put into stock, then apply what it says
+      // now. Without the reversal, re-saving a bill for 10 units left 20.
+      await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_IN);
+      await applyStockMovement(tx, productsTable, eq, businessId, resolvedItems, STOCK_IN);
+      assignTotals(calc, resolvedItems);
     } else if (supply.isInterstate !== existing.isInterstate) {
-      // Moving the bill across a state line re-splits tax on lines nobody
-      // edited. Deliberately without `resolveItemsToProducts`: that adds each
-      // line's quantity to stock, and these are goods already received.
+      // Only the tax split changes here; the same goods were received, so stock
+      // is left exactly as it is.
       const calc = calcPurchaseTotals(existing.items as any[], supply.isInterstate);
       assignTotals(calc, calc.items);
     }
@@ -289,7 +290,18 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
 
 router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
-  await db.delete(purchasesTable).where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)));
+
+  // Deleting a bill un-receives its goods. Without this the stock it added
+  // stayed, so deleting a purchase left phantom inventory behind.
+  await db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(purchasesTable)
+      .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
+      .limit(1);
+    if (!existing) return;
+    await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_IN);
+    await tx.delete(purchasesTable)
+      .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)));
+  });
   return res.json({ success: true });
 });
 

@@ -152,6 +152,105 @@ inconsistently — is deleted. One admin surface.
   not shipping it, so it wants its own decision rather than a corner of a cleanup sweep.
 - **An external penetration test** remains the one step no amount of self-review substitutes for.
 
+## Full-codebase review — fifteen findings, all fixed
+
+A sweep of the whole repository rather than a diff: routes, middleware, libraries, the RLS layer, the
+shared client and the React frontend. Fifteen findings, every one reproduced before being fixed and
+covered by a test afterwards.
+
+### Security
+
+| | Finding | Why it mattered |
+| --- | --- | --- |
+| **S-1** | The per-account lockout was written and never read | `recordFailures([userKey(id)])` had three call sites; `anyLocked` was only ever called with `emailKey`. So the password confirmation guarding role changes and password resets could be guessed at unlimited rate behind a stolen session — and each attempt cost a 19 MiB Argon2 hash, which is a memory DoS for free. Both `verifyStepUp` and `/auth/change-password` now consult the lockout *before* hashing, so a locked-out attacker cannot even make the server spend the work. |
+| **S-2** | Creating an admin skipped step-up | Promoting an existing user demanded the admin's own password; `POST /api/users` with `role:"admin"` demanded nothing. A stolen session could not promote anyone but could mint a fresh administrator with a password of the attacker's choosing — an account that survives the real admin's `logout-all`. |
+| **S-3** | Signing out did not revoke anything | `/auth/logout` was unauthenticated and only cleared cookies, so the token stayed valid for the rest of its seven days and could be replayed as a bearer token. `tokenVersion` could not fix this alone: it is one counter per account, so bumping it would sign the person out of every device. Each token now carries a `jti` and sign-out records that one id in `revoked_tokens`. |
+| **S-4** | Payments stored cross-tenant references | `invoiceId`, `customerId` and `vendorId` went from the request body into the row unchecked. RLS does not catch it — the insert is into the caller's own tenant and satisfies the policy; it is the *value* of the column that points elsewhere. The same class as F-05, and now behind a shared `resolveTenantRef` so it is not hand-written an eighth time. |
+
+### Data integrity
+
+**A failed audit write silently undid the action it was recording.** The admin routers run the whole
+request in one transaction, so a failed `INSERT` does not merely throw — Postgres aborts the
+transaction, refuses every later statement with `25P02`, and turns the eventual COMMIT into a
+ROLLBACK. `recordAudit` caught the error and returned, the handler sent `200`, and the privileged
+change was discarded. Demonstrated at the SQL level (a committed row count of 0 where it should be 1)
+and then in the suite: with the fix reverted the rename returns 200 and the database still holds the
+old name. The insert now runs inside a savepoint, so a failure is contained to that one statement —
+which is what the module's own stated contract always claimed.
+
+**Stock only ever moved one way.** Raising an invoice deducted it; editing one rewrote the lines and
+touched nothing; deleting one left the deduction behind. Purchases were worse: editing a bill re-ran
+the catalog resolution, which *adds* each quantity, so re-saving a bill for 50 units left 100, and
+deleting it left the goods. Both are now reversible — every edit undoes what the document previously
+did and applies what it does now. That required separating catalog resolution from stock movement in
+`purchases.ts`, since the two were fused, and it is why re-saving added the quantities twice.
+
+*Deliberate behaviour change:* stock may now go negative. The old sale path pinned it at zero, which
+discarded the fact that more was sold than held — selling 10 from a stock of 5 left 0, so reversing
+would have invented 5 units. Exact reversal requires exact arithmetic, and −5 says something true.
+A floor is a display decision, not a storage one.
+
+**An invoice could be edited with no effect and report success.** `customerId` and `invoiceDate` were
+applied only inside the branch that re-prices lines, so `PATCH {"customerId": 7}` on its own returned
+`200` having changed nothing — and a date change silently failed to move an invoice into the financial
+year that drives GSTR-1 period selection.
+
+**Low stock meant three different things.** `/api/products?lowStock=true` used `stock <= threshold`
+with no COALESCE, so every product whose threshold was never set — which is every product created
+from a purchase bill — dropped out silently, because `0 <= NULL` is NULL rather than true. The
+dashboard used `< COALESCE(threshold, 5)` and the stock report `?? 5` in JavaScript. The badge said
+twelve needed reordering and the list the user opened to act on them showed three. One definition now,
+in `lib/low-stock.ts`, asserted across all three surfaces.
+
+**Monthly revenue mislabelled its own data.** The query window was built with UTC month arithmetic and
+the display keys with local-time arithmetic. On a server behind UTC the two disagree for the last
+hours of any month: with `now = 2026-10-01T03:00Z` in UTC−7 the window starts `2026-05-01` while the
+labels run April–September, so the April bar could only ever render zero.
+
+### Availability
+
+**The pool had no limits.** Default `max: 10`, `connectionTimeoutMillis: 0` — wait forever — and no
+statement timeout, while `openTenantScope` holds one transaction, and therefore one connection, for
+the whole of each request. Ten slow requests took every connection and the eleventh waited
+indefinitely, so the API stopped answering anything rather than failing what was actually slow. Now
+bounded, with server-side ceilings so a runaway query cannot hold its connection even if the client
+gives up.
+
+**Two tables grew without bound.** `login_attempts` gets a row per failed sign-in keyed by the address
+the *caller* supplied, and `clearFailures` only runs on a successful login for that exact address —
+which by definition never happens for one that does not exist. A run through a stolen credential list
+left a row per address, permanently. `revoked_tokens` would have done the same. Both are pruned every
+15 minutes by the same rule: a row goes once it can no longer change any decision, so pruning changes
+no behaviour, only cost.
+
+**Unbounded reads.** `/dashboard/top-products` selected every invoice the business had ever raised and
+walked their line items in JavaScript to produce five rows; the sales and purchases reports serialised
+every matched row. Top-products is now aggregated in SQL, and the reports compute their totals in SQL
+over the whole range while capping the row list, with a `truncated` flag — so the summary stays exact
+and the payload is bounded. Fixing it surfaced a second bug: the aggregation read `item.productName`,
+a field nothing writes, so every product came back unnamed and walk-in lines all collided on one key.
+
+### Quality
+
+**The duplicated serialisers had already diverged**, exactly as `lib/serialise.ts`'s own header warned
+they would: the reports copy of `mapInvoice` omitted `balanceDue`, so the same invoice had a different
+shape depending on which endpoint returned it — which is why the invoice detail page carries a
+`inv.balanceDue ?? Math.max(0, …)` fallback. `mapInvoice`, `mapPurchase` and `mapProduct` now live
+where `mapUser` already did.
+
+**The payments feature was dead end to end.** The page read `paymentDate`, `reference`,
+`paymentMethod` and `paymentType`; the API returns `date`, `referenceNumber`, `mode` and `type`. So
+both summary cards read ₹0 regardless of data and every row showed "-" and an invalid date. Nothing
+created payments either, and marking an invoice paid set the status without touching `paidAmount`, so
+an invoice showed "paid" alongside its full balance due. Marking paid now settles the invoice and
+records the receipt — which is what the page's empty state has always promised.
+
+### Verified
+
+248 integration checks (38 new), 81 unit, 17 RLS, workspace typecheck clean — all against a live
+Postgres under the `NOSUPERUSER NOBYPASSRLS` role. The savepoint fix was checked by reverting it: the
+suite then fails on exactly the silent-rollback assertion, with the request still returning 200.
+
 ## Row-level security — done
 
 F-05 was four query sites, out of roughly forty, that resolved a record by its primary key without a
@@ -1112,7 +1211,5 @@ self-review substitutes for.*
 ### Ongoing
 
 - Multi-factor authentication for all admin accounts.
-- Editing a purchase double-counts stock: the update path re-runs the catalog resolution, which adds
-  each line's quantity again without reversing the original. Reproduced; needs a reversal step.
 - A data-retention and backup policy matching GST record-keeping obligations, with restores tested.
 - Alerting on failed-login bursts, admin actions, and 5xx rates.

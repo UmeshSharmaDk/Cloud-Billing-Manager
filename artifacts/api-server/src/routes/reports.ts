@@ -1,13 +1,27 @@
 import { Router } from "express";
 import { db, invoicesTable, purchasesTable, productsTable } from "@workspace/db";
-import { eq, and, gte, lte } from "drizzle-orm";
+import { eq, and, gte, lte, count, desc, sum as sqlSum } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateQuery } from "../middleware/validate";
 import { MonthYearQuery, DateRangeQuery } from "../schemas";
 import { dec, paise, sum, sumBy, toJson } from "../lib/money";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { mapInvoice, mapPurchase } from "../lib/serialise";
+import { isLowStock } from "../lib/low-stock";
 
 const router = Router();
+
+/**
+ * Most rows a report will return in one response.
+ *
+ * These endpoints used to serialise every matched row — a 366-day sales report
+ * on an active business is a year of invoices in a single payload, built in
+ * memory and held there until it is written. The summary figures are what the
+ * page actually shows, and they are now computed in SQL over the *whole* range,
+ * so capping the row list costs nothing in accuracy. `truncated` tells a caller
+ * the list is a sample rather than the lot.
+ */
+const REPORT_ROW_CAP = 500;
 
 /**
  * Handlers in this router run after `requireAuth` and `requireBusiness`, so
@@ -34,23 +48,6 @@ function reportRange(q: { fromDate?: string; toDate?: string }): { from: string;
   return {
     from: q.fromDate ?? `${y}-${pad(m)}-01`,
     to: q.toDate ?? `${y}-${pad(m)}-${pad(lastDay)}`,
-  };
-}
-
-function mapInvoice(inv: any) {
-  return {
-    ...inv, subtotal: toJson(inv.subtotal), cgst: toJson(inv.cgst),
-    sgst: toJson(inv.sgst), igst: toJson(inv.igst), totalGst: toJson(inv.totalGst),
-    grandTotal: toJson(inv.grandTotal), roundOff: toJson(inv.roundOff),
-    paidAmount: toJson(inv.paidAmount), items: Array.isArray(inv.items) ? inv.items : [],
-  };
-}
-
-function mapPurchase(p: any) {
-  return {
-    ...p, subtotal: toJson(p.subtotal), cgst: toJson(p.cgst), sgst: toJson(p.sgst),
-    igst: toJson(p.igst), totalGst: toJson(p.totalGst), grandTotal: toJson(p.grandTotal),
-    items: Array.isArray(p.items) ? p.items : [],
   };
 }
 
@@ -172,11 +169,24 @@ router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery)
     gte(invoicesTable.invoiceDate, from),
     lte(invoicesTable.invoiceDate, to),
   ];
-  const invoices = await db.select().from(invoicesTable).where(and(...conditions));
-  const mapped = invoices.map(mapInvoice);
-  const totalSales = sumBy(mapped, (i) => i.grandTotal);
-  const totalGst = sumBy(mapped, (i) => i.totalGst);
-  return res.json({ totalSales: toJson(totalSales), totalGst: toJson(totalGst), netSales: toJson(totalSales.minus(totalGst)), invoiceCount: mapped.length, invoices: mapped });
+  // Totals over the whole range, from the database.
+  const [totals] = await db.select({
+    totalSales: sqlSum(invoicesTable.grandTotal),
+    totalGst: sqlSum(invoicesTable.totalGst),
+    invoiceCount: count(),
+  }).from(invoicesTable).where(and(...conditions));
+
+  const invoices = await db.select().from(invoicesTable).where(and(...conditions))
+    .orderBy(desc(invoicesTable.invoiceDate)).limit(REPORT_ROW_CAP);
+
+  const totalSales = dec(totals.totalSales ?? 0);
+  const totalGst = dec(totals.totalGst ?? 0);
+  const invoiceCount = Number(totals.invoiceCount);
+  return res.json({
+    totalSales: toJson(totalSales), totalGst: toJson(totalGst),
+    netSales: toJson(totalSales.minus(totalGst)), invoiceCount,
+    invoices: invoices.map(mapInvoice), truncated: invoiceCount > invoices.length,
+  });
 });
 
 router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQuery), async (req: Req, res) => {
@@ -187,11 +197,23 @@ router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQu
     gte(purchasesTable.invoiceDate, from),
     lte(purchasesTable.invoiceDate, to),
   ];
-  const purchases = await db.select().from(purchasesTable).where(and(...conditions));
-  const mapped = purchases.map(mapPurchase);
-  const totalPurchases = sumBy(mapped, (p) => p.grandTotal);
-  const totalGst = sumBy(mapped, (p) => p.totalGst);
-  return res.json({ totalPurchases: toJson(totalPurchases), totalGst: toJson(totalGst), netPurchases: toJson(totalPurchases.minus(totalGst)), purchaseCount: mapped.length, purchases: mapped });
+  const [totals] = await db.select({
+    totalPurchases: sqlSum(purchasesTable.grandTotal),
+    totalGst: sqlSum(purchasesTable.totalGst),
+    purchaseCount: count(),
+  }).from(purchasesTable).where(and(...conditions));
+
+  const purchases = await db.select().from(purchasesTable).where(and(...conditions))
+    .orderBy(desc(purchasesTable.invoiceDate)).limit(REPORT_ROW_CAP);
+
+  const totalPurchases = dec(totals.totalPurchases ?? 0);
+  const totalGst = dec(totals.totalGst ?? 0);
+  const purchaseCount = Number(totals.purchaseCount);
+  return res.json({
+    totalPurchases: toJson(totalPurchases), totalGst: toJson(totalGst),
+    netPurchases: toJson(totalPurchases.minus(totalGst)), purchaseCount,
+    purchases: purchases.map(mapPurchase), truncated: purchaseCount > purchases.length,
+  });
 });
 
 router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
@@ -261,10 +283,7 @@ router.get("/stock", requireAuth, requireBusiness, async (req: Req, res) => {
   }));
   const totalStockValue = mapped.reduce(
     (acc, p) => acc.plus(dec(p.sellingPrice ?? 0).times(dec(p.stockQuantity))), dec(0));
-  const lowStockProducts = mapped.filter(p => {
-    const threshold = p.lowStockThreshold ?? 5;
-    return p.stockQuantity < threshold;
-  }).length;
+  const lowStockProducts = mapped.filter(isLowStock).length;
   return res.json({ totalProducts: mapped.length, totalStockValue: toJson(totalStockValue), lowStockProducts, products: mapped });
 });
 

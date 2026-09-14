@@ -7,7 +7,7 @@ import { systemScope } from "../middleware/tenant-scope";
 import { hashPassword } from "../lib/password";
 import { validatePassword } from "../lib/password-policy";
 import { recordAudit, actorFrom } from "../lib/audit";
-import { requireStepUp, verifyStepUp } from "../middleware/step-up";
+import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import type { AuthedRequest, IdParams } from "../lib/http";
@@ -55,10 +55,30 @@ router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async 
 router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
+
+  // Creating an administrator is a privilege grant, so it is confirmed exactly
+  // as promoting one is. Without this the step-up on PATCH was trivially routed
+  // around: a stolen session could not promote an existing user, but could
+  // create a brand-new admin with a password of the attacker's choosing — and
+  // that account's sessions survive the real admin's `logout-all`.
+  if (role === "admin") {
+    const stepUp = await verifyStepUp(req);
+    if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+  }
+
   const policyFailure = await validatePassword(password);
   if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+
+  const normalisedEmail = String(email).toLowerCase();
+
+  // Checked rather than left to the unique index, which surfaced as a 500 and
+  // told the operator nothing.
+  const [taken] = await db.select({ id: usersTable.id }).from(usersTable)
+    .where(eq(usersTable.email, normalisedEmail)).limit(1);
+  if (taken) return res.status(409).json({ error: "That email address is already registered" });
+
   const [user] = await db.insert(usersTable).values({
-    name, email: String(email).toLowerCase(), passwordHash: await hashPassword(String(password)), role,
+    name, email: normalisedEmail, passwordHash: await hashPassword(String(password)), role,
     isActive: true, subscriptionStatus, subscriptionEnd,
   }).returning();
   await recordAudit({
@@ -100,7 +120,7 @@ router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validat
     // a privilege change and must not demand a password.
     if (role && role !== before.role) {
       const stepUp = await verifyStepUp(req);
-      if (!stepUp.ok) return res.status(stepUp.status ?? 403).json(stepUp.body);
+      if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
 
       const guard = await assertNotLastAdmin(before, role);
       if (guard) return res.status(409).json({ error: guard });

@@ -9,12 +9,28 @@
 
 import type { NextFunction, Request, Response } from "express";
 import { verifyPassword } from "../lib/password";
-import { recordFailures, userKey } from "./rate-limit";
+import { anyLocked, recordFailures, userKey } from "./rate-limit";
 
 export interface StepUpResult {
   ok: boolean;
-  status?: 401 | 403;
+  status?: 401 | 403 | 429;
   body?: { error: string; code?: string };
+  /** Seconds until the lockout lifts, for the `Retry-After` header. */
+  retryAfter?: number;
+}
+
+/**
+ * Send a failed step-up result.
+ *
+ * Every refusal goes through here so the `Retry-After` on a lockout cannot be
+ * forgotten at one of the four call sites — which is exactly how the lockout
+ * came to be recorded in three places and read in none.
+ */
+export function sendStepUpFailure(res: Response, result: StepUpResult): Response {
+  if (result.retryAfter !== undefined) {
+    res.setHeader("Retry-After", String(result.retryAfter));
+  }
+  return res.status(result.status ?? 403).json(result.body);
 }
 
 /**
@@ -30,6 +46,21 @@ export async function verifyStepUp(req: Request): Promise<StepUpResult> {
   const user = (req as Request & { user?: { id: number; passwordHash: string } }).user;
   if (!user) {
     return { ok: false, status: 401, body: { error: "Unauthorized" } };
+  }
+
+  // Consulted before anything else. `recordFailures` has always written a
+  // `user:<id>` counter here, but nothing ever read it, so this check was the
+  // missing half: a stolen session could guess the account's own password at
+  // unlimited rate. Checking first also means a locked-out attacker cannot make
+  // us spend a 19 MiB Argon2 verification per attempt.
+  const lockedUntil = await anyLocked([userKey(user.id)]);
+  if (lockedUntil) {
+    return {
+      ok: false,
+      status: 429,
+      retryAfter: Math.ceil((lockedUntil.getTime() - Date.now()) / 1000),
+      body: { error: "Too many failed attempts. Try again later." },
+    };
   }
 
   const body = req.body as Record<string, unknown> | undefined;
@@ -65,7 +96,7 @@ export async function requireStepUp(
 ): Promise<void> {
   const result = await verifyStepUp(req);
   if (!result.ok) {
-    res.status(result.status ?? 403).json(result.body);
+    sendStepUpFailure(res, result);
     return;
   }
   next();

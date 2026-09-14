@@ -6,6 +6,8 @@ import { dec, toColumn, toJson } from "../lib/money";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { ListProductsQuery, CreateProductBody, UpdateProductBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { mapProduct } from "../lib/serialise";
+import { lowStockSql } from "../lib/low-stock";
 
 const router = Router();
 
@@ -18,25 +20,14 @@ const router = Router();
 type Req = TenantRequest<any, any, IdParams>;
 
 
-function mapProduct(p: any) {
-  return {
-    ...p,
-    purchasePrice: p.purchasePrice ? toJson(p.purchasePrice) : null,
-    sellingPrice: p.sellingPrice ? toJson(p.sellingPrice) : null,
-    gstRate: Number(dec(p.gstRate).toFixed(2)),
-    stockQuantity: Number(dec(p.stockQuantity).toFixed(3)),
-    lowStockThreshold: p.lowStockThreshold ? Number(dec(p.lowStockThreshold).toFixed(3)) : null,
-  };
-}
-
 router.get("/", requireAuth, requireBusiness, validateQuery(ListProductsQuery), async (req: Req, res) => {
   const businessId = req.businessId;
   const { search, lowStock, page, limit } = req.validatedQuery;
   const conditions: any[] = [eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)];
   if (search) conditions.push(ilike(productsTable.name, `%${search}%`));
-  if (lowStock === "true") {
-    conditions.push(lte(sql`CAST(${productsTable.stockQuantity} AS NUMERIC)`, sql`CAST(${productsTable.lowStockThreshold} AS NUMERIC)`));
-  }
+  // Shared definition — this filter used to omit every product with no
+  // threshold set, because `0 <= NULL` is NULL, not true.
+  if (lowStock === "true") conditions.push(lowStockSql(productsTable));
   const products = await db.select().from(productsTable).where(and(...conditions))
     .limit(limit).offset((page - 1) * limit)
     .orderBy(productsTable.name);

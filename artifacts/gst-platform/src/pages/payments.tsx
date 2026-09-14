@@ -13,13 +13,13 @@ export default function PaymentsPage() {
   const payments: any[] = (data as any)?.payments || (Array.isArray(data) ? data : []);
 
   const filtered = payments.filter(p =>
-    p.reference?.toLowerCase().includes(search.toLowerCase()) ||
+    p.referenceNumber?.toLowerCase().includes(search.toLowerCase()) ||
     p.notes?.toLowerCase().includes(search.toLowerCase()) ||
-    p.paymentMethod?.toLowerCase().includes(search.toLowerCase())
+    p.mode?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const totalReceived = filtered.filter(p => p.paymentType === "received").reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-  const totalPaid = filtered.filter(p => p.paymentType === "paid").reduce((s, p) => s + parseFloat(p.amount || 0), 0);
+  const totalReceived = filtered.filter(p => p.type === "received").reduce((s, p) => s + parseFloat(p.amount || 0), 0);
+  const totalPaid = filtered.filter(p => p.type === "paid").reduce((s, p) => s + parseFloat(p.amount || 0), 0);
 
   return (
     <div className="space-y-4">
@@ -91,17 +91,17 @@ export default function PaymentsPage() {
               <tbody>
                 {filtered.map((p: any) => (
                   <tr key={p.id} className="border-b last:border-0 hover:bg-accent/40 transition-colors">
-                    <td className="py-3 px-4 text-muted-foreground">{formatDate(p.paymentDate)}</td>
-                    <td className="py-3 px-4 font-mono text-xs">{p.reference || "-"}</td>
-                    <td className="py-3 px-4 capitalize">{p.paymentMethod?.replace(/_/g, " ") || "-"}</td>
+                    <td className="py-3 px-4 text-muted-foreground">{formatDate(p.date)}</td>
+                    <td className="py-3 px-4 font-mono text-xs">{p.referenceNumber || "-"}</td>
+                    <td className="py-3 px-4 capitalize">{p.mode?.replace(/_/g, " ") || "-"}</td>
                     <td className="py-3 px-4">
-                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${p.paymentType === "received" ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-red-100 text-red-800 border-red-200"}`}>
-                        {p.paymentType === "received" ? "Received" : "Paid"}
+                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${p.type === "received" ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-red-100 text-red-800 border-red-200"}`}>
+                        {p.type === "received" ? "Received" : "Paid"}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-muted-foreground text-xs">{p.notes || "-"}</td>
-                    <td className={`py-3 px-4 text-right font-semibold ${p.paymentType === "received" ? "text-emerald-600" : "text-red-600"}`}>
-                      {p.paymentType === "received" ? "+" : "-"}{formatCurrency(p.amount)}
+                    <td className={`py-3 px-4 text-right font-semibold ${p.type === "received" ? "text-emerald-600" : "text-red-600"}`}>
+                      {p.type === "received" ? "+" : "-"}{formatCurrency(p.amount)}
                     </td>
                   </tr>
                 ))}

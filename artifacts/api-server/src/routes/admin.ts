@@ -7,7 +7,7 @@ import { systemScope } from "../middleware/tenant-scope";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
-import { requireStepUp, verifyStepUp } from "../middleware/step-up";
+import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
 import type { AuthedRequest, IdParams } from "../lib/http";
 
@@ -153,7 +153,7 @@ router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), v
     // a privilege change and must not demand a password.
     if (role && role !== before.role) {
       const stepUp = await verifyStepUp(req);
-      if (!stepUp.ok) return res.status(stepUp.status ?? 403).json(stepUp.body);
+      if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
 
       const guard = await assertNotLastAdmin(before, role);
       if (guard) return res.status(409).json({ error: guard });

@@ -132,6 +132,11 @@ export const CreateUserBody = z.object({
   email: z.string().email().max(320),
   password: newPassword,
   role: roleEnum,
+  // The caller's own password. Required only when `role` is "admin" — creating
+  // an administrator is a privilege grant and is confirmed like one. Validation
+  // strips unknown keys, so without this field declared the step-up check would
+  // never see it.
+  confirmPassword: z.string().max(1024).optional(),
   ...subscriptionShape,
 });
 
@@ -317,6 +322,9 @@ export const UpdateInvoiceStatusBody = z
     status: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
     paymentStatus: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
     paidAmount: money.optional(),
+    // How the money arrived, recorded on the payment this creates.
+    mode: z.string().max(50).optional(),
+    referenceNumber: z.string().max(200).optional(),
   })
   .refine(
     (b) =>

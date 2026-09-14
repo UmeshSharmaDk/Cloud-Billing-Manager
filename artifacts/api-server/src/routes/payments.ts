@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { db, paymentsTable } from "@workspace/db";
+import { db, paymentsTable, invoicesTable, customersTable, vendorsTable } from "@workspace/db";
 import { eq, and, count, desc } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { toColumn, toJson } from "../lib/money";
 import { validateBody, validateQuery } from "../middleware/validate";
 import { ListPaymentsQuery, CreatePaymentBody } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { resolveTenantRefs } from "../lib/tenant-refs";
 
 const router = Router();
 
@@ -38,9 +39,21 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), 
   const businessId = req.businessId;
   const { type, amount, date, mode, referenceNumber, invoiceId, customerId, vendorId, notes } = req.body;
   if (!type || !amount || !date || !mode) return res.status(400).json({ error: "Required fields missing" });
+
+  // Each of these named a row by id and was stored unchecked, so a payment
+  // could point at another tenant's invoice, customer or vendor. Zod proves
+  // they are positive integers; only a scoped lookup proves they are ours.
+  const refs = await resolveTenantRefs(businessId, {
+    invoiceId: { table: invoicesTable, value: invoiceId, label: "invoice" },
+    customerId: { table: customersTable, value: customerId, label: "customer" },
+    vendorId: { table: vendorsTable, value: vendorId, label: "vendor" },
+  });
+  if (!refs.ok) return res.status(400).json({ error: refs.error });
+
   const [payment] = await db.insert(paymentsTable).values({
     businessId, type, amount: toColumn(amount), date, mode,
-    referenceNumber, invoiceId, customerId, vendorId, notes,
+    referenceNumber, notes,
+    invoiceId: refs.ids["invoiceId"], customerId: refs.ids["customerId"], vendorId: refs.ids["vendorId"],
   }).returning();
   return res.status(201).json(mapPayment(payment));
 });

@@ -1,6 +1,7 @@
 import { Router } from "express";
-import { db, usersTable, businessesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import crypto from "node:crypto";
+import { db, usersTable, businessesTable, revokedTokensTable } from "@workspace/db";
+import { eq, lt } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
@@ -35,16 +36,33 @@ type Req = AuthedRequest<any, any, any>;
 
 const JWT_SECRET = config.jwtSecret;
 
+const TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+interface TokenPayload {
+  userId: number;
+  role: string;
+  v?: number;
+  /** This token's own id, so signing out can revoke it alone. */
+  jti?: string;
+  exp?: number;
+}
+
 function generateToken(userId: number, role: string, tokenVersion: number): string {
   // `v` is the account's session generation. Bumping the column invalidates
   // every token already issued, which is the only way to revoke a bearer token
   // held by a client with no cookie jar.
-  return jwt.sign({ userId, role, v: tokenVersion }, JWT_SECRET, { expiresIn: "7d" });
+  //
+  // `jti` identifies this one session. Ordinary sign-out records it in
+  // `revoked_tokens` rather than bumping `v`, so signing out on a phone does
+  // not sign the same person out on their laptop.
+  return jwt.sign({ userId, role, v: tokenVersion, jti: crypto.randomUUID() }, JWT_SECRET, {
+    expiresIn: TOKEN_TTL_SECONDS,
+  });
 }
 
-export function verifyToken(token: string): { userId: number; role: string; v?: number } | null {
+export function verifyToken(token: string): TokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as { userId: number; role: string; v?: number };
+    return jwt.verify(token, JWT_SECRET) as TokenPayload;
   } catch (err) {
     // An expired token is routine; anything else usually means the signing key
     // changed or the token was tampered with, and a bare `catch {}` hid the
@@ -54,6 +72,54 @@ export function verifyToken(token: string): { userId: number; role: string; v?: 
     }
     return null;
   }
+}
+
+/** Whether this token id has been signed out. */
+async function isTokenRevoked(jti: string): Promise<boolean> {
+  const [row] = await db
+    .select({ jti: revokedTokensTable.jti })
+    .from(revokedTokensTable)
+    .where(eq(revokedTokensTable.jti, jti))
+    .limit(1);
+  return Boolean(row);
+}
+
+/**
+ * Record a token as signed out until it would have expired anyway.
+ *
+ * Keyed on the token id, so it revokes one session and leaves the account's
+ * other devices alone. Storing the expiry is what lets the row be pruned: a
+ * revocation stops mattering once the token it names is expired.
+ */
+async function revokeToken(payload: TokenPayload): Promise<void> {
+  if (!payload.jti) return;
+  const expiresAt = payload.exp
+    ? new Date(payload.exp * 1000)
+    : new Date(Date.now() + TOKEN_TTL_SECONDS * 1000);
+  try {
+    await db
+      .insert(revokedTokensTable)
+      .values({ jti: payload.jti, expiresAt })
+      .onConflictDoNothing();
+  } catch (err) {
+    // A sign-out that cannot be recorded must still clear the cookie, but the
+    // token stays live until it expires — that is worth a loud line.
+    logger.error({ err }, "Could not record a token revocation");
+  }
+}
+
+/**
+ * Drop revocations for tokens that have expired on their own.
+ *
+ * Without this the table would grow by one row per sign-out forever. With it,
+ * it holds only the sign-outs of the last seven days.
+ */
+export async function pruneRevokedTokens(): Promise<number> {
+  const deleted = await db
+    .delete(revokedTokensTable)
+    .where(lt(revokedTokensTable.expiresAt, new Date()))
+    .returning({ jti: revokedTokensTable.jti });
+  return deleted.length;
 }
 
 const PLAN_EXPIRED_MESSAGE =
@@ -127,6 +193,14 @@ export async function requireAuth(req: any, res: any, next: any) {
   // before this column existed carry no `v`; treat them as generation 0 so an
   // existing session is not broken by the upgrade itself.
   if ((payload.v ?? 0) !== user.tokenVersion) {
+    return res.status(401).json({ error: "Session expired. Please sign in again." });
+  }
+
+  // This exact session was signed out. Clearing the cookie only removed the
+  // browser's copy; a token captured beforehand — from the login response body,
+  // a proxy log, a shared machine — stayed valid for the rest of its seven days
+  // and could simply be replayed as a bearer token.
+  if (payload.jti && (await isTokenRevoked(payload.jti))) {
     return res.status(401).json({ error: "Session expired. Please sign in again." });
   }
 
@@ -299,6 +373,17 @@ router.post(
   async (req: Req, res) => {
     const { currentPassword, newPassword } = req.body;
 
+    // Same guard as step-up and for the same reason: this endpoint verifies a
+    // password behind a session, so a stolen session could otherwise guess the
+    // account's own password at unlimited rate, each attempt costing a 19 MiB
+    // Argon2 hash. The `user:<id>` counter below has always been written here;
+    // this is the read that makes it mean something.
+    const lockedUntil = await anyLocked([userKey(req.user.id)]);
+    if (lockedUntil) {
+      res.setHeader("Retry-After", String(Math.ceil((lockedUntil.getTime() - Date.now()) / 1000)));
+      return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+    }
+
     const { valid } = await verifyPassword(req.user.passwordHash, currentPassword);
     if (!valid) {
       await recordFailures([userKey(req.user.id)]);
@@ -334,7 +419,17 @@ router.post(
   },
 );
 
-router.post("/logout", (_req, res) => {
+/**
+ * Sign out this device.
+ *
+ * Authenticated on purpose: it used to take a bare request and only clear
+ * cookies, which left the token itself valid for the rest of its seven days.
+ * Anyone holding a copy could replay it after the user had signed out.
+ */
+router.post("/logout", requireAuth, async (req: Req, res) => {
+  const token = readToken(req);
+  const payload = token ? verifyToken(token) : null;
+  if (payload) await revokeToken(payload);
   clearSessionCookies(res);
   return res.json({ success: true });
 });

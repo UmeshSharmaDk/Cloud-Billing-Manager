@@ -4,6 +4,7 @@ import { eq, and, gte, lte, ne, sql, desc, count, sum as sqlSum } from "drizzle-
 import { requireAuth, requireBusiness } from "./auth";
 import { dec, sum, sumBy, toJson } from "../lib/money";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { lowStockSql } from "../lib/low-stock";
 
 const router = Router();
 
@@ -55,7 +56,7 @@ router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => {
       count: count(),
       // The threshold defaults to 5 when unset, matching what the JavaScript did.
       lowStock: sql<number>`count(*) FILTER (
-        WHERE ${productsTable.stockQuantity} < COALESCE(${productsTable.lowStockThreshold}, 5)
+        WHERE ${lowStockSql(productsTable)}
       )`,
     }).from(productsTable)
       .where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true))),
@@ -123,12 +124,19 @@ router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, re
   const purByMonth = new Map(purRows.map((r) => [r.month, r]));
 
   // Months with no activity still need a row, so the series is continuous.
+  //
+  // Built in UTC, like `windowStart` above. These used local-time month
+  // arithmetic while the query window used UTC, so on a server behind UTC the
+  // two disagreed for the last hours of any month: the labels named a month the
+  // `gte(invoiceDate, from)` filter had excluded, and the earliest bar rendered
+  // zero for a month that had sales. Invoice dates are plain calendar dates with
+  // no zone of their own, so UTC is the only frame that does not invent one.
   const months = [];
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     months.push({
-      month: d.toLocaleString("en-IN", { month: "short", year: "numeric" }),
+      month: d.toLocaleString("en-IN", { month: "short", year: "numeric", timeZone: "UTC" }),
       sales: dec(invByMonth.get(key)?.sales ?? 0).toDecimalPlaces(0).toNumber(),
       purchases: dec(purByMonth.get(key)?.purchases ?? 0).toDecimalPlaces(0).toNumber(),
       gst: dec(invByMonth.get(key)?.gst ?? 0).toDecimalPlaces(0).toNumber(),
@@ -137,24 +145,45 @@ router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, re
   return res.json(months);
 });
 
+/**
+ * The five best-selling products.
+ *
+ * Aggregated in the database. This used to `SELECT *` every invoice the
+ * business had ever raised and walk their line items in JavaScript to produce
+ * five rows — time and heap grew with the tenant's whole history, and a large
+ * one could exhaust memory just by someone opening the dashboard. The work is
+ * the same shape; doing it in Postgres means five rows cross the wire instead
+ * of a year of invoices.
+ *
+ * The name also comes from `description`, which is what the stored line items
+ * actually carry. The old code read `item.productName`, a field nothing writes,
+ * so every walk-in line keyed on `undefined` and the name came back empty.
+ */
 router.get("/top-products", requireAuth, requireBusiness, async (req: Req, res) => {
   const businessId = req.businessId;
-  const invoices = await db.select().from(invoicesTable).where(eq(invoicesTable.businessId, businessId));
-  const productMap: Record<string, { productId: number; productName: string; totalQuantity: ReturnType<typeof dec>; totalRevenue: ReturnType<typeof dec> }> = {};
-  for (const inv of invoices) {
-    const items = Array.isArray(inv.items) ? inv.items : [];
-    for (const item of items) {
-      const key = item.productId ? String(item.productId) : item.productName;
-      if (!productMap[key]) productMap[key] = { productId: item.productId ?? 0, productName: item.productName, totalQuantity: dec(0), totalRevenue: dec(0) };
-      productMap[key].totalQuantity = productMap[key].totalQuantity.plus(dec(item.quantity ?? 0));
-      productMap[key].totalRevenue = productMap[key].totalRevenue.plus(dec(item.totalAmount ?? 0));
-    }
-  }
-  const sorted = Object.values(productMap)
-    .sort((a, b) => b.totalRevenue.comparedTo(a.totalRevenue))
-    .slice(0, 5)
-    .map((p) => ({ ...p, totalQuantity: Number(p.totalQuantity.toFixed(3)), totalRevenue: toJson(p.totalRevenue) }));
-  return res.json(sorted);
+
+  const rows = await db.execute(sql`
+    SELECT
+      COALESCE((item->>'productId')::int, 0) AS product_id,
+      COALESCE(item->>'description', item->>'productName', '') AS product_name,
+      SUM(COALESCE((item->>'quantity')::numeric, 0)) AS total_quantity,
+      SUM(COALESCE((item->>'totalAmount')::numeric, 0)) AS total_revenue
+    FROM ${invoicesTable}
+    CROSS JOIN LATERAL jsonb_array_elements(${invoicesTable.items}) AS item
+    WHERE ${invoicesTable.businessId} = ${businessId}
+      AND jsonb_typeof(${invoicesTable.items}) = 'array'
+    GROUP BY 1, 2
+    ORDER BY total_revenue DESC
+    LIMIT 5
+  `);
+
+  const list = ((rows as any).rows ?? rows) as Array<Record<string, unknown>>;
+  return res.json(list.map((r) => ({
+    productId: Number(r["product_id"] ?? 0),
+    productName: String(r["product_name"] ?? ""),
+    totalQuantity: Number(dec(r["total_quantity"] as any).toFixed(3)),
+    totalRevenue: toJson(dec(r["total_revenue"] as any)),
+  })));
 });
 
 router.get("/gst-summary", requireAuth, requireBusiness, async (req: Req, res) => {
@@ -190,7 +219,7 @@ router.get("/low-stock", requireAuth, requireBusiness, async (req: Req, res) => 
     .where(and(
       eq(productsTable.businessId, businessId),
       eq(productsTable.isActive, true),
-      sql`${productsTable.stockQuantity} < COALESCE(${productsTable.lowStockThreshold}, 5)`,
+      lowStockSql(productsTable),
     ))
     .orderBy(productsTable.name)
     .limit(100);

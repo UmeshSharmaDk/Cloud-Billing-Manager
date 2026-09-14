@@ -1,12 +1,14 @@
 import { Router } from "express";
-import { db, invoicesTable, businessesTable, customersTable, productsTable, invoiceCountersTable } from "@workspace/db";
+import { db, invoicesTable, businessesTable, customersTable, productsTable, invoiceCountersTable, paymentsTable } from "@workspace/db";
 import { eq, ilike, and, count, gte, lte, desc, sql } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { resolveSupplyType } from "../lib/gst";
+import { applyStockMovement, STOCK_OUT } from "../lib/stock";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { mapInvoice } from "../lib/serialise";
 
 const router = Router();
 
@@ -71,25 +73,6 @@ function calcGst(items: any[], isInterstate: boolean) {
     grandTotal: grandTotal.toNumber(),
     roundOff: toJson(roundOff),
     items: processed,
-  };
-}
-
-function mapInvoice(inv: any) {
-  const grandTotal = dec(inv.grandTotal);
-  const paidAmount = dec(inv.paidAmount);
-  const balanceDue = grandTotal.minus(paidAmount);
-  return {
-    ...inv,
-    subtotal: toJson(inv.subtotal),
-    cgst: toJson(inv.cgst),
-    sgst: toJson(inv.sgst),
-    igst: toJson(inv.igst),
-    totalGst: toJson(inv.totalGst),
-    grandTotal: toJson(grandTotal),
-    roundOff: toJson(inv.roundOff),
-    paidAmount: toJson(paidAmount),
-    balanceDue: toJson(balanceDue.isNegative() ? new Decimal(0) : balanceDue),
-    items: Array.isArray(inv.items) ? inv.items : [],
   };
 }
 
@@ -207,24 +190,9 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
       roundOff: toColumn(gstCalc.roundOff), paidAmount: "0.00",
     }).returning();
 
-    // Deduct stock for each sold item.
-    const allProducts = await tx.select().from(productsTable).where(eq(productsTable.businessId, businessId));
-    for (const item of gstCalc.items) {
-      const qty = dec(item.quantity ?? 0);
-      if (qty.lessThanOrEqualTo(0)) continue;
-      let product = null;
-      if (item.productId) {
-        product = allProducts.find((p: any) => p.id === item.productId) ?? null;
-      }
-      if (!product && item.description) {
-        product = allProducts.find((p: any) => p.name.toLowerCase() === String(item.description).toLowerCase()) ?? null;
-      }
-      if (product) {
-        const remaining = dec(product.stockQuantity).minus(qty);
-        const newQty = remaining.isNegative() ? new Decimal(0) : remaining;
-        await tx.update(productsTable).set({ stockQuantity: newQty.toFixed(3) }).where(eq(productsTable.id, product.id));
-      }
-    }
+    // Goods leave on a sale. Routed through the shared helper so an edit or a
+    // delete can reverse exactly this movement.
+    await applyStockMovement(tx, productsTable, eq, businessId, gstCalc.items, STOCK_OUT);
 
     return created;
   });
@@ -265,6 +233,22 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   if (placeOfSupply !== undefined) updates.placeOfSupply = placeOfSupply;
   if (notes !== undefined) updates.notes = notes;
 
+  // Changing the customer or the date is applied whether or not the lines are
+  // being resent. Both used to sit inside the recompute branch below, so
+  // `PATCH {"customerId": 7}` on its own returned 200 having changed nothing —
+  // and a date change silently failed to move the invoice into the financial
+  // year that drives GSTR-1 period selection.
+  if (customerId) {
+    const [customer] = await db.select().from(customersTable)
+      .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
+      .limit(1);
+    if (!customer) return res.status(400).json({ error: "Unknown customer" });
+    updates.customerId = customer.id;
+    updates.customerName = customer.name;
+    updates.customerGstin = customer.gstin ?? null;
+  }
+  if (invoiceDate) updates.invoiceDate = invoiceDate;
+
   // Recompute when the lines change, and also when the supply type does —
   // moving the place of supply across a state line changes which tax applies to
   // lines nobody edited, and leaving the stored split alone would keep charging
@@ -275,40 +259,102 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   if (linesToPrice) {
     const gstCalc = calcGst(linesToPrice, supply.isInterstate);
     Object.assign(updates, { items: gstCalc.items, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: supply.isInterstate });
-    if (customerId) {
-      const [customer] = await db.select().from(customersTable)
-        .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
-        .limit(1);
-      if (!customer) return res.status(400).json({ error: "Unknown customer" });
-      updates.customerId = customer.id;
-      updates.customerName = customer.name;
-      updates.customerGstin = customer.gstin ?? null;
-    }
-    if (invoiceDate) updates.invoiceDate = invoiceDate;
   }
+
   // A request that changes nothing is not an error, but `set({})` is invalid SQL.
   if (Object.keys(updates).length === 0) return res.json(mapInvoice(existing));
 
-  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).returning();
+  const invoice = await db.transaction(async (tx) => {
+    // Only a change of lines moves goods. A re-split for a changed place of
+    // supply rewrites the same quantities, so reversing and reapplying it would
+    // net to nothing — but doing neither keeps the stored movement honest.
+    if (items) {
+      await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_OUT);
+      await applyStockMovement(tx, productsTable, eq, businessId, updates.items, STOCK_OUT);
+    }
+
+    const [updated] = await tx.update(invoicesTable).set(updates)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .returning();
+    return updated;
+  });
+
   if (!invoice) return res.status(404).json({ error: "Not found" });
   return res.json(mapInvoice(invoice));
 });
 
 router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
-  await db.delete(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)));
+
+  // Deleting an invoice un-sells its goods. Without this the stock it deducted
+  // stayed deducted, so a create/delete cycle walked inventory down with no
+  // sales on the books and the low-stock reports followed it.
+  await db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(invoicesTable)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .limit(1);
+    if (!existing) return;
+    await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_OUT);
+    await tx.delete(invoicesTable)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)));
+  });
   return res.json({ success: true });
 });
 
 router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: Req, res) => {
   const businessId = req.businessId;
-  const { paymentStatus, status, paidAmount } = req.body;
+  const { paymentStatus, status, paidAmount, mode, referenceNumber } = req.body;
   const newStatus = paymentStatus ?? status;
+
+  const [existing] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+    .limit(1);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
   const updates: any = {};
   if (newStatus) updates.status = newStatus;
-  if (paidAmount !== undefined) updates.paidAmount = toColumn(paidAmount);
-  const [invoice] = await db.update(invoicesTable).set(updates).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).returning();
-  if (!invoice) return res.status(404).json({ error: "Not found" });
+
+  // Marking an invoice paid used to set the status and nothing else, so the
+  // invoice showed "paid" with its full balance still due — `paidAmount` stayed
+  // at zero and `balanceDue` is derived from it. Settle the money alongside the
+  // status unless the caller states an amount itself.
+  const previouslyPaid = dec(existing.paidAmount);
+  let settled = previouslyPaid;
+  if (paidAmount !== undefined) {
+    settled = dec(paidAmount);
+  } else if (newStatus === "paid") {
+    settled = dec(existing.grandTotal);
+  } else if (newStatus === "unpaid" || newStatus === "cancelled") {
+    settled = dec(0);
+  }
+  if (!settled.equals(previouslyPaid)) updates.paidAmount = toColumn(settled);
+
+  const invoice = await db.transaction(async (tx) => {
+    const [updated] = await tx.update(invoicesTable).set(updates)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .returning();
+
+    // Record the receipt, so the Payments page reflects what actually happened.
+    // Its empty state has always promised that "payments are recorded when you
+    // mark invoices as paid"; nothing wrote one, so the page was always empty.
+    const received = settled.minus(previouslyPaid);
+    if (received.greaterThan(0)) {
+      await tx.insert(paymentsTable).values({
+        businessId,
+        type: "received",
+        amount: toColumn(received),
+        date: new Date().toISOString().slice(0, 10),
+        mode: mode ?? "cash",
+        referenceNumber: referenceNumber ?? null,
+        invoiceId: updated.id,
+        customerId: updated.customerId ?? null,
+        notes: `Invoice ${updated.invoiceNumber}`,
+      });
+    }
+
+    return updated;
+  });
+
   return res.json(mapInvoice(invoice));
 });
 
