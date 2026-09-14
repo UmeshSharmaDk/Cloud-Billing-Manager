@@ -128,3 +128,53 @@ export function resolveSupplyType(
 
   return { ok: true, isInterstate: seller !== place };
 }
+
+/**
+ * Decide the supply type for a purchase.
+ *
+ * An inward supply is the mirror of an outward one, and the inputs differ. For
+ * a sale the seller is us and the destination varies per invoice, so the place
+ * of supply has to be stated. For a purchase the supplier is the vendor and the
+ * destination is our own place of business, so the comparison is the vendor's
+ * state against ours — both of which are already recorded. Nothing new needs to
+ * be asked of the user, which is why this takes no place of supply.
+ *
+ * The vendor's state comes from their state code, then their GSTIN, then the
+ * GSTIN copied onto the bill itself — that last one covers a bill recorded
+ * before the vendor record was completed.
+ *
+ * `hasGst` is what keeps this from blocking legitimate bookkeeping. A purchase
+ * from an unregistered supplier carries no GST at all, so every split is zero
+ * and the question is moot; refusing it would stop a business recording a bill
+ * it has actually received. When there *is* tax on the bill the split decides
+ * which head the input credit is claimed under, and guessing is the bug this
+ * exists to prevent — so that case refuses.
+ */
+export function resolveInwardSupplyType(
+  business: { stateCode?: string | null; gstin?: string | null } | null | undefined,
+  vendor: { stateCode?: string | null; gstin?: string | null } | null | undefined,
+  billGstin: string | null | undefined,
+  hasGst: boolean,
+): SupplyType {
+  const buyer = businessStateCode(business);
+  const supplier = businessStateCode(vendor) ?? stateCodeFromGstin(billGstin);
+
+  if (buyer === null || supplier === null) {
+    // No tax to misfile, so nothing to get wrong.
+    if (!hasGst) return { ok: true, isInterstate: false };
+
+    return {
+      ok: false,
+      error:
+        buyer === null
+          ? "Set your business state code or GSTIN before recording a bill that " +
+            "carries GST. Without it there is no way to tell whether the input " +
+            "credit is IGST or CGST + SGST."
+          : "This vendor has no state code or GSTIN, so the input credit on this " +
+            "bill cannot be attributed to IGST or to CGST + SGST. Add the vendor's " +
+            "GSTIN and record the bill again.",
+    };
+  }
+
+  return { ok: true, isInterstate: buyer !== supplier };
+}

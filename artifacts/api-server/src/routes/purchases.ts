@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { db, purchasesTable, vendorsTable, productsTable } from "@workspace/db";
+import { db, purchasesTable, vendorsTable, productsTable, businessesTable } from "@workspace/db";
 import { eq, ilike, and, count, gte, lte, desc } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListPurchasesQuery, CreatePurchaseBody, UpdatePurchaseBody, IdParam } from "../schemas";
+import { resolveInwardSupplyType } from "../lib/gst";
 import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
@@ -18,7 +19,12 @@ const router = Router();
 type Req = TenantRequest<any, any, IdParams>;
 
 
-function calcPurchaseTotals(items: any[], isInterstate = false) {
+/** True if any line on the bill carries GST, so the split actually matters. */
+function billHasGst(items: any[]): boolean {
+  return items.some((item) => dec(item?.gstRate ?? 0).greaterThan(0));
+}
+
+function calcPurchaseTotals(items: any[], isInterstate: boolean) {
   // Same rule as sales: round at the line, then sum the rounded values, so the
   // bill's totals are the exact sum of its items. Input tax credit is claimed
   // from these figures, so a paisa of drift is a paisa of wrong credit.
@@ -168,7 +174,14 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody),
     .limit(1);
   if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
 
-  const calc = calcPurchaseTotals(items);
+  // Which head the input credit falls under. This used to be left at the
+  // default of `false`, so every bill was recorded as CGST + SGST and an
+  // inter-state purchase claimed credit under heads it was not entitled to.
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  const supply = resolveInwardSupplyType(business, vendor, vendor.gstin, billHasGst(items));
+  if (!supply.ok) return res.status(400).json({ error: supply.error });
+
+  const calc = calcPurchaseTotals(items, supply.isInterstate);
 
   // Resolve each line item to a product by name (case-insensitive match) — update existing
   // product's stock/price/GST if a match is found, or create a new catalog product otherwise.
@@ -179,6 +192,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody),
       businessId, vendorId: parseInt(vendorId),
       vendorName: vendor.name, vendorGstin: vendor.gstin ?? null,
       invoiceNumber: invoiceNumber ?? `PUR-${Date.now()}`, invoiceDate, notes,
+      isInterstate: supply.isInterstate,
       items: resolvedItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst),
       sgst: toColumn(calc.sgst), igst: toColumn(calc.igst),
       totalGst: toColumn(calc.totalGst), grandTotal: toColumn(calc.grandTotal),
@@ -200,6 +214,14 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { vendorId, billNumber, billDate, invoiceNumber: rawNum, invoiceDate: rawDate, dueDate, notes, items, paymentStatus } = req.body;
+
+  // Read before writing: the supply type may depend on a vendor or on lines
+  // this request is not changing.
+  const [existing] = await db.select().from(purchasesTable)
+    .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
+    .limit(1);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
   const updates: any = {};
   const invoiceNumber = billNumber ?? rawNum;
   const invoiceDate = billDate ?? rawDate;
@@ -208,23 +230,54 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   if (dueDate !== undefined) updates.dueDate = dueDate;
   if (notes !== undefined) updates.notes = notes;
   if (paymentStatus) updates.status = paymentStatus;
-  const applyItems = async (tx: any) => {
-    if (!items) return;
-    const calc = calcPurchaseTotals(items);
-    const resolvedItems = await resolveItemsToProducts(tx, businessId, calc.items);
-    Object.assign(updates, { items: resolvedItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst), sgst: toColumn(calc.sgst), igst: toColumn(calc.igst), totalGst: toColumn(calc.totalGst), grandTotal: toColumn(calc.grandTotal) });
-  };
+
+  // The vendor decides the supply type, so the one that matters is the vendor
+  // this bill will have once the update lands — the new one, or the existing.
+  let vendor;
   if (vendorId) {
-    const [vendor] = await db.select().from(vendorsTable)
+    [vendor] = await db.select().from(vendorsTable)
       .where(and(eq(vendorsTable.id, vendorId), eq(vendorsTable.businessId, businessId)))
       .limit(1);
     if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
     updates.vendorId = vendor.id;
     updates.vendorName = vendor.name;
     updates.vendorGstin = vendor.gstin ?? null;
+  } else {
+    [vendor] = await db.select().from(vendorsTable)
+      .where(and(eq(vendorsTable.id, existing.vendorId), eq(vendorsTable.businessId, businessId)))
+      .limit(1);
   }
+
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+  const lines = (items ?? existing.items) as any[];
+  const supply = resolveInwardSupplyType(
+    business, vendor, vendor?.gstin ?? existing.vendorGstin, billHasGst(lines),
+  );
+  if (!supply.ok) return res.status(400).json({ error: supply.error });
+
+  const assignTotals = (calc: ReturnType<typeof calcPurchaseTotals>, lineItems: any[]) => {
+    Object.assign(updates, {
+      items: lineItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst),
+      sgst: toColumn(calc.sgst), igst: toColumn(calc.igst), totalGst: toColumn(calc.totalGst),
+      grandTotal: toColumn(calc.grandTotal), isInterstate: supply.isInterstate,
+    });
+  };
+
   const purchase = await db.transaction(async (tx) => {
-    await applyItems(tx);
+    if (items) {
+      const calc = calcPurchaseTotals(items, supply.isInterstate);
+      assignTotals(calc, await resolveItemsToProducts(tx, businessId, calc.items));
+    } else if (supply.isInterstate !== existing.isInterstate) {
+      // Moving the bill across a state line re-splits tax on lines nobody
+      // edited. Deliberately without `resolveItemsToProducts`: that adds each
+      // line's quantity to stock, and these are goods already received.
+      const calc = calcPurchaseTotals(existing.items as any[], supply.isInterstate);
+      assignTotals(calc, calc.items);
+    }
+
+    // A request that changes nothing is not an error, but `set({})` is invalid SQL.
+    if (Object.keys(updates).length === 0) return existing;
+
     const [updated] = await tx.update(purchasesTable).set(updates)
       .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
       .returning();

@@ -14,6 +14,7 @@ import {
   stateCodeFromGstin,
   businessStateCode,
   resolveSupplyType,
+  resolveInwardSupplyType,
 } from "../src/lib/gst.ts";
 
 let pass = 0, fail = 0;
@@ -112,6 +113,54 @@ console.log("\nan unusable place of supply is rejected, not read as inter-state"
 for (const bad of ["MH", "00", "45"]) {
   const r = resolveSupplyType(mh, bad);
   check(`"${bad}" is rejected`, !r.ok, r.ok ? `isInterstate=${r.isInterstate}` : "");
+}
+
+console.log("\ninward supply (purchases): the vendor's state against ours");
+{
+  // A purchase is the mirror of a sale: the supplier is the vendor and the
+  // destination is our own premises, so no place of supply is needed.
+  const us = { stateCode: "29", gstin: null };
+
+  {
+    const r = resolveInwardSupplyType(us, { stateCode: "29", gstin: null }, null, true);
+    check("a vendor in our state is intra-state (CGST+SGST credit)", r.ok && r.isInterstate === false);
+  }
+  {
+    const r = resolveInwardSupplyType(us, { stateCode: "27", gstin: null }, null, true);
+    check("a vendor in another state is inter-state (IGST credit)", r.ok && r.isInterstate === true);
+  }
+  {
+    const r = resolveInwardSupplyType(us, { stateCode: null, gstin: "27AAAAA0000A1Z5" }, null, true);
+    check("the vendor's GSTIN settles it when their state code is blank",
+      r.ok && r.isInterstate === true);
+  }
+  {
+    // A bill recorded before the vendor record was completed still carries the
+    // supplier's GSTIN on the document itself.
+    const r = resolveInwardSupplyType(us, { stateCode: null, gstin: null }, "27AAAAA0000A1Z5", true);
+    check("the GSTIN copied onto the bill is the last resort", r.ok && r.isInterstate === true);
+  }
+
+  console.log("\n  ...and what it refuses");
+  {
+    const r = resolveInwardSupplyType(us, { stateCode: null, gstin: null }, null, true);
+    check("an untraceable vendor on a bill carrying GST is refused", !r.ok);
+    check("and the message names the vendor's GSTIN as the fix",
+      !r.ok && /vendor's GSTIN/i.test(r.error), !r.ok ? r.error : "");
+  }
+  {
+    const r = resolveInwardSupplyType({ stateCode: null, gstin: null }, { stateCode: "27", gstin: null }, null, true);
+    check("our own missing state code is refused too", !r.ok);
+    check("and that message names the business state code",
+      !r.ok && /business state code/i.test(r.error), !r.ok ? r.error : "");
+  }
+  {
+    // An unregistered supplier charges no GST, so every split is zero and there
+    // is nothing to misfile. Refusing here would block legitimate bookkeeping.
+    const r = resolveInwardSupplyType(us, { stateCode: null, gstin: null }, null, false);
+    check("a bill with no GST is recorded without a state, not refused",
+      r.ok && r.isInterstate === false);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

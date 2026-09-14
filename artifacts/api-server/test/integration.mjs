@@ -452,6 +452,74 @@ const adminEmail = `admin${uniq}@example.test`;
 }
 
 
+// === inward supply: which head the input credit falls under ================
+//
+// The mirror of the invoice bug, on the buy side. `calcPurchaseTotals(items)`
+// was called without `isInterstate`, so every bill was booked as CGST + SGST
+// whatever state the supplier was in.
+{
+  const buy = await register("buy");
+  const buyBiz = sqlValue(`SELECT id FROM businesses WHERE user_id = ${buy.userId}`);
+  sqlExec(`UPDATE businesses SET state_code = '29' WHERE id = ${buyBiz}`);
+  const T = { token: buy.token };
+
+  const local = (await call("POST", "/vendors", { ...T,
+    body: { name: "Local Supplier", gstin: "29LLLLL0000L1Z5" } })).data;
+  const distant = (await call("POST", "/vendors", { ...T,
+    body: { name: "Distant Supplier", gstin: "27DDDDD0000D1Z5" } })).data;
+  const untraceable = (await call("POST", "/vendors", { ...T, body: { name: "No GSTIN Supplier" } })).data;
+
+  const bill = (vendorId, gstRate = 18) => call("POST", "/purchases", { ...T,
+    body: { vendorId, billDate: "2026-08-05",
+            items: [{ description: "raw", quantity: 10, unitPrice: 100, gstRate }] } });
+
+  const near = (a, b) => Math.abs(a - b) < 0.005;
+
+  const same = (await bill(local.id)).data;
+  check("inward-supply", "a supplier in our state books CGST+SGST credit",
+    same.isInterstate === false && near(same.cgst, 90) && near(same.sgst, 90) && near(same.igst, 0),
+    `cgst ${same.cgst} sgst ${same.sgst} igst ${same.igst}`);
+
+  const across = (await bill(distant.id)).data;
+  check("inward-supply", "a supplier in another state books IGST credit",
+    across.isInterstate === true && near(across.igst, 180) && near(across.cgst, 0) && near(across.sgst, 0),
+    `cgst ${across.cgst} sgst ${across.sgst} igst ${across.igst}`);
+
+  // The totals are identical either way, which is exactly why this went
+  // unnoticed: only the head differs.
+  check("inward-supply", "both bills total the same — only the head differs",
+    near(same.grandTotal, across.grandTotal) && near(same.totalGst, across.totalGst),
+    `${same.grandTotal} vs ${across.grandTotal}`);
+
+  const blind = await bill(untraceable.id);
+  check("inward-supply", "a GST-bearing bill from an untraceable supplier is refused",
+    blind.status === 400, `status ${blind.status}`);
+  check("inward-supply", "and the message names the vendor's GSTIN as the fix",
+    /vendor's GSTIN/i.test(blind.data?.error ?? ""), blind.data?.error ?? "");
+
+  // An unregistered supplier charges no GST, so there is no credit to misfile
+  // and nothing to refuse. Blocking this would stop a real bill being recorded.
+  const exempt = await bill(untraceable.id, 0);
+  check("inward-supply", "a bill with no GST from the same supplier is recorded",
+    exempt.status === 201 && near(exempt.data?.totalGst, 0),
+    `status ${exempt.status} gst ${exempt.data?.totalGst}`);
+
+  // Re-pointing a bill at a supplier in another state has to re-split the
+  // credit on lines nobody edited...
+  const moved = await call("PATCH", `/purchases/${same.id}`, { ...T, body: { vendorId: distant.id } });
+  check("inward-supply", "changing the supplier re-splits the credit without resending items",
+    moved.data?.isInterstate === true && near(moved.data?.igst, 180) && near(moved.data?.cgst, 0),
+    `isInterstate ${moved.data?.isInterstate} cgst ${moved.data?.cgst} igst ${moved.data?.igst}`);
+
+  // ...without re-running the catalog resolution, which adds each line's
+  // quantity to stock. These are goods already received once.
+  const stockAfter = sqlValue(
+    `SELECT stock_quantity FROM products WHERE business_id = ${buyBiz} AND name = 'raw'`);
+  check("inward-supply", "re-splitting does not double-count stock",
+    near(Number(stockAfter), 30), `stock ${stockAfter} (3 bills of 10)`);
+}
+
+
 // === F-09: cookie session, CSRF, security headers ==========================
 {
   const jar = newJar();
@@ -702,7 +770,10 @@ const adminEmail = `admin${uniq}@example.test`;
   // then writes the bill. Force the second step to fail and the first must be
   // undone — previously it was not, so a failed bill still moved stock and
   // prices. A temporary CHECK constraint makes the failure deterministic.
-  const vendor = (await call("POST", "/vendors", { token: biz.token, body: { name: "T Vendor" } })).data;
+  // A GSTIN, because the bill below carries GST and the input credit has to be
+  // attributable to a state. 29 matches this business, so the bill is local.
+  const vendor = (await call("POST", "/vendors", { token: biz.token,
+    body: { name: "T Vendor", gstin: "29TTTTT0000T1Z5" } })).data;
   const bizId = q(`SELECT business_id FROM users WHERE id=${biz.userId}`);
   const countProducts = () => q(`SELECT count(*) FROM products WHERE business_id=${bizId}`);
 
@@ -828,9 +899,17 @@ const adminEmail = `admin${uniq}@example.test`;
   const i3 = (await mkInvoice("2026-08-07", 500, 3)).data.invoice;    // 1500 + 270 = 1770
   await call("PATCH", `/invoices/${i2.id}/status`, { ...T, body: { status: "paid" } });
 
-  const vendor = (await call("POST", "/vendors", { ...T, body: { name: "V" } })).data;
+  // This business is in 29; the vendor is in 27, so the bill is inter-state and
+  // its input credit is IGST. Every purchase used to be booked as CGST+SGST
+  // regardless of the supplier's state, which put the credit under the wrong
+  // head — and because the summary floors each head at zero, the misfiled
+  // credit was discarded rather than carried.
+  const vendor = (await call("POST", "/vendors", { ...T, body: { name: "V", gstin: "27VVVVV0000V1Z5" } })).data;
   const p1 = (await call("POST", "/purchases", { ...T, body: { vendorId: vendor.id, billDate: "2026-08-05",
     items: [{ description: "raw", quantity: 10, unitPrice: 100, gstRate: 18 } ] } })).data; // 1000 + 180
+  check("aggregates", "an inter-state bill books its input credit as IGST",
+    p1.isInterstate === true && p1.igst === 180 && p1.cgst === 0 && p1.sgst === 0,
+    `isInterstate ${p1.isInterstate} cgst ${p1.cgst} sgst ${p1.sgst} igst ${p1.igst}`);
 
   await call("POST", "/customers", { ...T, body: { name: "Cust A" } });
   await call("POST", "/customers", { ...T, body: { name: "Cust B" } });

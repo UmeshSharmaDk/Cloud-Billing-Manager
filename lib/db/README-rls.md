@@ -45,8 +45,15 @@ DATABASE_URL=$ADMIN_DATABASE_URL pnpm --filter @workspace/db run push
 DATABASE_URL=$ADMIN_DATABASE_URL pnpm --filter @workspace/db run rls:apply
 ```
 
-Run `rls:apply` after any migration that adds a tenant-scoped table, and add
-the table to `TENANT_TABLE_COLUMNS` in `src/rls.ts`.
+**Run `rls:apply` after every `push`, not just after adding a table.** A push
+that alters a tenant table drops its policies along the way, and the result is
+the dangerous state again — RLS apparently configured, actually inert. Adding a
+new tenant-scoped table additionally needs it listed in `TENANT_TABLE_COLUMNS`
+in `src/rls.ts`.
+
+The API server checks policy coverage at boot as well as the role, so a push
+that stripped them is reported rather than assumed away, and `test:rls` fails
+outright.
 
 ## Verifying
 

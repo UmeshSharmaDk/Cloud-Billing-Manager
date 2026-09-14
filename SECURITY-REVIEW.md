@@ -305,11 +305,7 @@ Two further problems in the update path, found while fixing the first:
 Covered by 38 unit checks and 8 integration checks, including the regression itself and the
 client-asserted flag.
 
-**Still open, and deliberately not widened into here:** `purchases.ts` calls
-`calcPurchaseTotals(items)` and never passes `isInterstate`, so every recorded purchase is split as
-CGST + SGST. An inter-state purchase therefore books input credit under the wrong head — the same
-class of bug on the buy side. Purchases carry no place-of-supply field at all, so fixing it is a
-schema and API change rather than a corrected expression, and it wants its own change.
+The same bug on the buy side is fixed too — see below.
 
 ### Two ways the server could be killed from outside — fixed
 
@@ -336,6 +332,65 @@ rollback is thrown at the await site, which cannot produce an unobserved rejecti
 Verified by killing Postgres in both orders — while connections sat idle, and with a request arriving
 after it was already down. The server logs, returns `500`, and keeps serving. Before the fixes each
 case terminated the process.
+
+### The wrong tax on the bill — fixed
+
+The mirror of the invoice bug, on the buy side, and it moves real money rather than just a label.
+
+```ts
+const calc = calcPurchaseTotals(items);   // isInterstate defaults to false
+```
+
+Every purchase was booked as CGST + SGST whatever state the supplier was in, so an inter-state bill
+claimed its input credit under two heads it was not entitled to and left the IGST head empty.
+
+That matters because `reports.ts` nets input against output **head by head**, and floors each at zero:
+
+```ts
+const netCgst = atLeastZero(outwardCgst.minus(inputCgst));
+const netSgst = atLeastZero(outwardSgst.minus(inputSgst));
+const netIgst = atLeastZero(outwardIgst.minus(inputIgst));
+```
+
+IGST credit misfiled as CGST + SGST inflates two heads that then floor at zero — the excess is
+**silently discarded** — while the IGST liability it should have offset stands unreduced. The
+business over-reports what it owes. As with the sales bug the invoice total is untouched, so nothing
+looks wrong until the return is compared against GSTR-2B.
+
+**No new user input was needed.** My earlier note said this required a place-of-supply field and
+therefore a schema and API change; that was wrong. A sale needs one because the destination varies
+per invoice, but for a purchase the supplier is the vendor and the destination is our own premises,
+so the comparison is the vendor's state against ours — both already recorded. `resolveInwardSupplyType`
+reads the vendor's state code, then their GSTIN, then the GSTIN copied onto the bill itself. The only
+schema change is a `purchases.is_interstate` column to store the decision, matching `invoices`.
+
+Where it refuses is narrower than on the sales side, deliberately. A purchase from an **unregistered**
+supplier carries no GST at all, so every split is zero and there is nothing to misfile — refusing
+would stop a business recording a bill it has genuinely received. So a bill with no GST is accepted
+with no state known, and only a bill that *carries* GST from a supplier whose state cannot be
+established is refused. That case is not obscure pedantry: input credit cannot be claimed without the
+supplier's GSTIN, so such a bill is incomplete data that would fail reconciliation anyway.
+
+The update path recomputes when the lines change and when the supplier moves the bill across a state
+line. The second case re-splits the stored lines **without** re-running the catalog resolution, which
+adds each line's quantity to stock — these are goods already received, and counting them twice to fix
+a tax head would be a poor trade. There is a check for exactly that.
+
+### Two things found while doing it
+
+**`drizzle-kit push` drops row-level security policies.** Altering a tenant table takes its policies
+with it, leaving RLS apparently configured and actually inert — the same false-assurance state the
+dedicated role exists to avoid. `test:rls` caught it immediately (14 of 17 checks failed), and the
+boot-time report covers it too, since it checks policy coverage and not only the connecting role. CI
+already orders `push` before `rls:apply`. The README previously said to re-apply "after any migration
+that adds a tenant-scoped table"; that was too narrow and now says after every push.
+
+**Editing a purchase double-counts stock.** Pre-existing, unrelated to tax, and not fixed here.
+`resolveItemsToProducts` adds each line's quantity to the catalog, and the update path re-runs it on
+every edit without reversing the original — so re-saving a bill for 10 units leaves 20 in stock.
+Reproduced directly: create a bill for 10, PATCH it with the same items, stock reads 20. Fixing it
+means reversing the previous items before applying the new ones, which is its own change with its own
+tests; it is listed under Ongoing.
 
 ### Follow-up after Phase 3
 
@@ -1057,8 +1112,7 @@ self-review substitutes for.*
 ### Ongoing
 
 - Multi-factor authentication for all admin accounts.
-- Inter-state purchases. `calcPurchaseTotals` never receives `isInterstate`, so every purchase is
-  booked as CGST + SGST and an inter-state one claims input credit under the wrong head. Purchases
-  have no place-of-supply field, so this is a schema and API change, not a corrected expression.
+- Editing a purchase double-counts stock: the update path re-runs the catalog resolution, which adds
+  each line's quantity again without reversing the original. Reproduced; needs a reversal step.
 - A data-retention and backup policy matching GST record-keeping obligations, with restores tested.
 - Alerting on failed-login bursts, admin actions, and 5xx rates.
