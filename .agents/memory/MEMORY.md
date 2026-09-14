@@ -1,1 +1,2 @@
 - [PDF bill import parsing](pdf-purchase-import.md) — client-side pdfjs-dist heuristic line-item extraction for GST Pro purchase bills; no server upload needed.
+- [Preview API authentication](preview-api-auth.md) — cookie-authenticated preview APIs need an explicit origin allowlist and a fully synchronized development schema.
