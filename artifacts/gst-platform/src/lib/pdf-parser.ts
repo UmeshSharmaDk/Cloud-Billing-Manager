@@ -1,5 +1,8 @@
 import * as pdfjsLib from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import * as mammoth from "mammoth";
+import { createWorker } from "tesseract.js";
+import * as XLSX from "xlsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -17,9 +20,10 @@ export interface ParsedPdfResult {
   warnings: string[];
   rawText: string;
   detected: { billNumber?: string; billDate?: string; vendorName?: string };
+  source?: "text-pdf" | "scanned-pdf" | "image" | "word" | "spreadsheet" | "text";
 }
 
-async function extractText(file: File): Promise<string> {
+async function extractPdfText(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const lines: string[] = [];
@@ -43,6 +47,58 @@ async function extractText(file: File): Promise<string> {
     }
   }
   return lines.filter(Boolean).join("\n");
+}
+
+async function renderPdfPages(file: File): Promise<HTMLCanvasElement[]> {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const canvases: HTMLCanvasElement[] = [];
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale = Math.min(2.5, Math.max(1.5, 1800 / baseViewport.width));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext("2d");
+    if (!context) continue;
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
+    canvases.push(canvas);
+  }
+
+  return canvases;
+}
+
+async function extractOcrText(images: Array<File | HTMLCanvasElement>): Promise<string> {
+  const worker = await createWorker("eng");
+  try {
+    const pages: string[] = [];
+    for (const image of images) {
+      const result = await worker.recognize(image);
+      if (result.data.text.trim()) pages.push(result.data.text.trim());
+    }
+    return pages.join("\n");
+  } finally {
+    await worker.terminate();
+  }
+}
+
+async function extractWordText(file: File): Promise<string> {
+  const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+  return result.value;
+}
+
+async function extractSpreadsheetText(file: File): Promise<string> {
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+  return workbook.SheetNames
+    .map(name => {
+      const sheet = workbook.Sheets[name];
+      return XLSX.utils.sheet_to_csv(sheet, { FS: "\t", blankrows: false });
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 const NUM_RE = /-?\d[\d,]*\.?\d*/g;
@@ -125,7 +181,9 @@ function extractTableItems(lines: string[]): { items: ParsedPdfItem[]; warnings:
 
   for (const rawRow of rows) {
     const cleanedRow = rawRow.replace(new RegExp(`\\b${CURRENCY_TOKEN_RE.source.replace(/^\^|\$$/g, "")}\\b`, "gi"), " ").replace(/\s+/g, " ").trim();
-    const tokens = cleanedRow.split(" ").filter(Boolean);
+    const tokens = /[,;\t|]/.test(cleanedRow)
+      ? cleanedRow.split(/[,;\t|]/).map(token => token.trim()).filter(Boolean)
+      : cleanedRow.split(" ").filter(Boolean);
     if (tokens.length === 0) continue;
 
     // A serial number (1-3 digit plain int) may lead the row; skip it when looking for the HSN token.
@@ -213,12 +271,15 @@ function extractLineItemsHeuristic(text: string): { items: ParsedPdfItem[]; warn
     if (skipPatterns.test(line.trim())) continue;
     if (line.length < 4) continue;
 
-    const nums = line.match(NUM_RE);
+    // OCR and spreadsheets often include a leading serial number before the description.
+    const row = line.replace(/^\s*\d{1,3}[.)-]?\s+/, "").trim();
+
+    const nums = row.match(NUM_RE);
     if (!nums || nums.length < 2) continue;
 
-    const firstNumIdx = line.search(NUM_RE);
+    const firstNumIdx = row.search(NUM_RE);
     if (firstNumIdx < 2) continue;
-    let description = line.slice(0, firstNumIdx).trim();
+    let description = row.slice(0, firstNumIdx).trim();
     description = description.replace(/^\d+[.)]\s*/, "");
     if (!description || description.length < 2) continue;
     if (/^[\d\s.,\-\/]+$/.test(description)) continue;
@@ -250,40 +311,60 @@ function extractLineItemsHeuristic(text: string): { items: ParsedPdfItem[]; warn
       [quantity, unitPrice] = [unitPrice, quantity];
     }
 
-    const gstMatch = line.match(/(\d{1,2})\s*%/);
+    const gstMatch = row.match(/(\d{1,2})\s*%/);
     const gstRate = gstMatch ? parseFloat(gstMatch[1]) : undefined;
 
     items.push({ description, quantity, unitPrice, hsnCode: hsnToken, gstRate });
   }
 
   if (items.length === 0) {
-    warnings.push("Could not automatically detect line items in this PDF. Please add them manually below, or try a text-based (not scanned/image) PDF.");
+    warnings.push("Could not automatically detect line items in this file. Please review the source or add the items manually below.");
   }
 
   return { items, warnings };
 }
 
-export async function parsePdfPurchaseBill(file: File, products: any[]): Promise<ParsedPdfResult> {
-  const rawText = await extractText(file);
-  if (!rawText.trim()) {
-    return {
-      items: [],
-      warnings: ["No extractable text found — this PDF may be a scanned image. Try a text-based PDF export instead."],
-      rawText: "",
-      detected: {},
-    };
-  }
+function getExtension(file: File): string {
+  return file.name.toLowerCase().split(".").pop() || "";
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif"].includes(getExtension(file));
+}
+
+function isWordFile(file: File): boolean {
+  return ["doc", "docx"].includes(getExtension(file)) ||
+    file.type === "application/msword" ||
+    file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
+function isSpreadsheetFile(file: File): boolean {
+  return ["xls", "xlsx", "xlsm", "csv"].includes(getExtension(file)) ||
+    file.type.includes("spreadsheet") ||
+    file.type === "application/vnd.ms-excel" ||
+    file.type === "text/csv";
+}
+
+function annotateResult(
+  rawText: string,
+  products: any[],
+  source: ParsedPdfResult["source"],
+  initialWarnings: string[] = [],
+): ParsedPdfResult {
+  const warnings = [...initialWarnings];
   const detected = detectHeader(rawText);
   const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
 
-  let { items, warnings } = extractTableItems(lines);
+  let { items, warnings: tableWarnings } = extractTableItems(lines);
+  warnings.push(...tableWarnings);
   if (items.length === 0) {
-    ({ items, warnings } = extractLineItemsHeuristic(rawText));
+    const heuristic = extractLineItemsHeuristic(rawText);
+    items = heuristic.items;
+    warnings.push(...heuristic.warnings);
   }
 
-  // Annotate items that already exist in the catalog (by exact name match) so the
-  // caller can inform the user that saving will update that product rather than
-  // create a new one — matching happens by name, not by manual linking.
+  // Annotate items that already exist in the catalog so the caller can inform
+  // the user whether saving will update or create a product.
   for (const item of items) {
     const matched = products.find(p => p.name.toLowerCase().trim() === item.description.toLowerCase().trim());
     if (matched) {
@@ -293,5 +374,86 @@ export async function parsePdfPurchaseBill(file: File, products: any[]): Promise
     }
   }
 
-  return { items, warnings, rawText, detected };
+  return { items, warnings, rawText, detected, source };
 }
+
+export async function parsePurchaseBill(file: File, products: any[]): Promise<ParsedPdfResult> {
+  const extension = getExtension(file);
+
+  if (file.type === "application/pdf" || extension === "pdf") {
+    const text = await extractPdfText(file);
+    if (text.trim()) return annotateResult(text, products, "text-pdf");
+
+    const scannedPages = await renderPdfPages(file);
+    if (scannedPages.length === 0) {
+      return {
+        items: [],
+        warnings: ["This PDF could not be rendered for OCR. Please try another file or add the items manually below."],
+        rawText: "",
+        detected: {},
+        source: "scanned-pdf",
+      };
+    }
+    const ocrText = await extractOcrText(scannedPages);
+    if (!ocrText.trim()) {
+      return {
+        items: [],
+        warnings: ["No text could be recognised in this scanned PDF. Please check the image quality or add the items manually below."],
+        rawText: "",
+        detected: {},
+        source: "scanned-pdf",
+      };
+    }
+    return annotateResult(ocrText, products, "scanned-pdf", [
+      "This scanned PDF was read with OCR. Please review every extracted field before saving.",
+    ]);
+  }
+
+  if (isImageFile(file)) {
+    const text = await extractOcrText([file]);
+    if (!text.trim()) {
+      return {
+        items: [],
+        warnings: ["No text could be recognised in this image. Please use a clearer image or add the items manually below."],
+        rawText: "",
+        detected: {},
+        source: "image",
+      };
+    }
+    return annotateResult(text, products, "image", [
+      "This image was read with OCR. Please review every extracted field before saving.",
+    ]);
+  }
+
+  if (isWordFile(file)) {
+    if (extension === "doc") {
+      return {
+        items: [],
+        warnings: ["Legacy .doc files are not supported yet. Save the document as .docx or PDF and import it again."],
+        rawText: "",
+        detected: {},
+        source: "word",
+      };
+    }
+    const text = await extractWordText(file);
+    return annotateResult(text, products, "word", [
+      "This Word document was converted to text. Please review the extracted fields before saving.",
+    ]);
+  }
+
+  if (isSpreadsheetFile(file)) {
+    const text = await extractSpreadsheetText(file);
+    return annotateResult(text, products, "spreadsheet", [
+      "Spreadsheet rows were converted into bill line items. Please review the extracted fields before saving.",
+    ]);
+  }
+
+  if (file.type === "text/plain" || extension === "txt") {
+    return annotateResult(await file.text(), products, "text");
+  }
+
+  throw new Error("Unsupported file type");
+}
+
+// Kept as a compatibility alias for any existing callers.
+export const parsePdfPurchaseBill = parsePurchaseBill;

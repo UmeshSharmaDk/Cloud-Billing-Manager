@@ -57,6 +57,7 @@
     "framer-motion": "catalog:",
     "input-otp": "^1.4.2",
     "lucide-react": "catalog:",
+    "mammoth": "^1.9.0",
     "next-themes": "^0.4.6",
     "react": "catalog:",
     "react-day-picker": "^9.11.1",
@@ -72,7 +73,9 @@
     "vaul": "^1.1.2",
     "vite": "catalog:",
     "pdfjs-dist": "^6.1.200",
+    "tesseract.js": "^6.0.1",
     "wouter": "^3.3.5",
+    "xlsx": "^0.18.5",
     "zod": "catalog:"
   }
 }
