@@ -1,10 +1,11 @@
 /**
  * Periodic deletion of rows that have stopped mattering.
  *
- * Two tables grow from traffic the server does not control: `login_attempts`
- * gets a row per failed sign-in keyed by the address the caller supplied, and
- * `revoked_tokens` gets one per sign-out. Neither had anything deleting it, so
- * both grew without bound — a run through a stolen credential list could leave
+ * Three tables grow from traffic the server does not control: `login_attempts`
+ * gets a row per failed sign-in keyed by the address the caller supplied,
+ * `revoked_tokens` gets one per sign-out, and `pending_registrations` gets one
+ * per signup nobody ever confirmed. None had anything deleting it, so they grew
+ * without bound — a run through a stolen credential list could leave
  * millions of `login_attempts` rows that every subsequent lockout lookup then
  * paid for.
  *
@@ -14,18 +15,23 @@
  */
 
 import { pruneLoginAttempts } from "../middleware/rate-limit";
-import { pruneRevokedTokens } from "../routes/auth";
+import { pruneRevokedTokens, prunePendingRegistrations } from "../routes/auth";
 import { logger } from "./logger";
 
 /** Often enough to stay small, rare enough to be invisible. */
 const INTERVAL_MS = 15 * 60 * 1000;
 
-export async function sweepOnce(): Promise<{ loginAttempts: number; revokedTokens: number }> {
-  const [loginAttempts, revokedTokens] = await Promise.all([
+export async function sweepOnce(): Promise<{
+  loginAttempts: number;
+  revokedTokens: number;
+  pendingRegistrations: number;
+}> {
+  const [loginAttempts, revokedTokens, pendingRegistrations] = await Promise.all([
     pruneLoginAttempts(),
     pruneRevokedTokens(),
+    prunePendingRegistrations(),
   ]);
-  return { loginAttempts, revokedTokens };
+  return { loginAttempts, revokedTokens, pendingRegistrations };
 }
 
 /**
@@ -35,9 +41,9 @@ export async function sweepOnce(): Promise<{ loginAttempts: number; revokedToken
 export function startHousekeeping(): NodeJS.Timeout {
   const run = () => {
     void sweepOnce()
-      .then(({ loginAttempts, revokedTokens }) => {
-        if (loginAttempts > 0 || revokedTokens > 0) {
-          logger.info({ loginAttempts, revokedTokens }, "Pruned expired rows");
+      .then((pruned) => {
+        if (Object.values(pruned).some((n) => n > 0)) {
+          logger.info(pruned, "Pruned expired rows");
         }
       })
       // Never fatal: a failed sweep costs disk, not correctness, and the next

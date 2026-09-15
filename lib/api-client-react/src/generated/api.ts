@@ -77,6 +77,7 @@ import type {
   PurchaseUpdate,
   PurchasesReport,
   RegisterInput,
+  RegistrationAccepted,
   ResetPasswordInput,
   SalesReport,
   StockReport,
@@ -89,7 +90,8 @@ import type {
   Vendor,
   VendorInput,
   VendorListResponse,
-  VendorUpdate
+  VendorUpdate,
+  VerifyRegistrationInput
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -335,9 +337,9 @@ export const getRegisterUrl = () => {
 /**
  * @summary Register new business user
  */
-export const register = async (registerInput: RegisterInput, options?: RequestInit): Promise<AuthResponse> => {
+export const register = async (registerInput: RegisterInput, options?: RequestInit): Promise<RegistrationAccepted> => {
 
-  return customFetch<AuthResponse>(getRegisterUrl(),
+  return customFetch<RegistrationAccepted>(getRegisterUrl(),
   {
     ...options,
     method: 'POST',
@@ -393,6 +395,77 @@ export const useRegister = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getRegisterMutationOptions(options));
+    }
+
+export const getVerifyRegistrationUrl = () => {
+
+
+
+
+  return `/api/auth/verify-registration`
+}
+
+/**
+ * @summary Finish a registration with the token from the verification email
+ */
+export const verifyRegistration = async (verifyRegistrationInput: VerifyRegistrationInput, options?: RequestInit): Promise<AuthResponse> => {
+
+  return customFetch<AuthResponse>(getVerifyRegistrationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      verifyRegistrationInput,)
+  }
+);}
+
+
+
+
+export const getVerifyRegistrationMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyRegistration>>, TError,{data: BodyType<VerifyRegistrationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof verifyRegistration>>, TError,{data: BodyType<VerifyRegistrationInput>}, TContext> => {
+
+const mutationKey = ['verifyRegistration'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof verifyRegistration>>, {data: BodyType<VerifyRegistrationInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  verifyRegistration(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type VerifyRegistrationMutationResult = NonNullable<Awaited<ReturnType<typeof verifyRegistration>>>
+    export type VerifyRegistrationMutationBody = BodyType<VerifyRegistrationInput>
+    export type VerifyRegistrationMutationError = ErrorType<void>
+
+    /**
+ * @summary Finish a registration with the token from the verification email
+ */
+export const useVerifyRegistration = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyRegistration>>, TError,{data: BodyType<VerifyRegistrationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof verifyRegistration>>,
+        TError,
+        {data: BodyType<VerifyRegistrationInput>},
+        TContext
+      > => {
+      return useMutation(getVerifyRegistrationMutationOptions(options));
     }
 
 export const getGetMeUrl = () => {

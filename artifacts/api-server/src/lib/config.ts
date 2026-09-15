@@ -100,6 +100,83 @@ if (sameSite === "none" && isDevelopment) {
   );
 }
 
+/**
+ * Where verification mail is sent from, and how.
+ *
+ * Registration cannot be non-enumerable without email: the HTTP response has to
+ * be identical whether or not the address is taken, so the difference has to
+ * travel out of band. That makes a mail transport a hard requirement rather
+ * than a nice-to-have, and it is validated here like the signing secret —
+ * production refuses to boot without one.
+ *
+ * Development falls back to writing the message to the log, which is what makes
+ * local work and the test suite possible without a mail server. That fallback
+ * is explicitly gated on NODE_ENV=development, and `isDevelopment` above treats
+ * anything else as production, so it cannot reach a live deployment by omission.
+ */
+function mailTransport():
+  | { kind: "smtp"; url: string; from: string }
+  | { kind: "file"; path: string; from: string }
+  | { kind: "log"; from: string } {
+  const url = process.env["SMTP_URL"]?.trim();
+  const outbox = process.env["MAIL_OUTBOX_PATH"]?.trim();
+  const from = process.env["MAIL_FROM"]?.trim();
+
+  if (url && outbox) {
+    throw new Error(
+      "Set either SMTP_URL or MAIL_OUTBOX_PATH, not both — which one wins would " +
+        "otherwise decide whether registration mail is delivered or written to disk.",
+    );
+  }
+
+  // Writes each message to a file instead of sending it. This exists so the
+  // integration suite can read a verification link without a mail server, and
+  // so it can do that while the server otherwise runs exactly as production
+  // does. It is chosen only by setting a path explicitly — never by omission —
+  // so no deployment gets it by forgetting to configure something.
+  if (outbox) {
+    return { kind: "file", path: outbox, from: from ?? "GST Platform <no-reply@localhost>" };
+  }
+
+  if (url) {
+    if (!from) {
+      throw new Error(
+        "MAIL_FROM is required when SMTP_URL is set. " +
+          'Set it to the address mail is sent from, e.g. "GST Platform <no-reply@example.com>".',
+      );
+    }
+    return { kind: "smtp", url, from };
+  }
+
+  if (!isDevelopment) {
+    throw new Error(
+      "SMTP_URL environment variable is required but was not provided. " +
+        "Registration confirms nothing over HTTP — whether an address is already " +
+        "registered is settled by email — so the server cannot accept signups " +
+        'without a mail transport. Set SMTP_URL (e.g. "smtps://user:pass@smtp.example.com:465") ' +
+        "and MAIL_FROM. See F-14 in SECURITY-REVIEW.md.",
+    );
+  }
+
+  return { kind: "log", from: from ?? "GST Platform <no-reply@localhost>" };
+}
+
+/**
+ * Base URL the verification link points at — the app the person is using, not
+ * this API. Defaults to the first allowed origin, which is correct for the
+ * single-origin deployments this project has; set it explicitly otherwise.
+ */
+function appBaseUrl(origins: readonly string[]): string {
+  const raw = process.env["APP_BASE_URL"]?.trim();
+  const value = raw && raw !== "" ? raw : origins[0]!;
+  if (!/^https?:\/\/[^/]+$/.test(value.replace(/\/$/, ""))) {
+    throw new Error(
+      `APP_BASE_URL must be a scheme://host URL with no path (got "${value}").`,
+    );
+  }
+  return value.replace(/\/$/, "");
+}
+
 export const config = {
   /** Signing key for session tokens. No default — see the note above. */
   jwtSecret: requiredSecret("SESSION_SECRET"),
@@ -114,4 +191,10 @@ export const config = {
     /** Never send the session cookie over plain HTTP outside local development. */
     secure: !isDevelopment || sameSite === "none",
   },
+
+  /** Mail transport for registration verification. Required in production. */
+  mail: mailTransport(),
+
+  /** Where the verification link sends people. */
+  appBaseUrl: appBaseUrl(requiredOrigins("ALLOWED_ORIGINS")),
 } as const;

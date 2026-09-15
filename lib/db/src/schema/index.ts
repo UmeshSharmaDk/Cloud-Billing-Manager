@@ -10,4 +10,5 @@ export * from "./eway-bills";
 export * from "./login-attempts";
 export * from "./audit-log";
 export * from "./revoked-tokens";
+export * from "./pending-registrations";
 export * from "./invoice-counters";

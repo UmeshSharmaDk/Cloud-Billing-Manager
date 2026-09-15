@@ -1,7 +1,7 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { db, usersTable, businessesTable, revokedTokensTable } from "@workspace/db";
-import { eq, lt } from "drizzle-orm";
+import { db, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable } from "@workspace/db";
+import { eq, and, lt, gt } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
@@ -12,8 +12,9 @@ import {
   spendVerificationTime,
 } from "../lib/password";
 import { validateBody } from "../middleware/validate";
-import { LoginBody, RegisterBody, ChangePasswordBody } from "../schemas";
+import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody } from "../schemas";
 import { validatePassword } from "../lib/password-policy";
+import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
 import { openTenantScope, systemScope } from "../middleware/tenant-scope";
 import {
@@ -299,47 +300,155 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   });
 });
 
+/** How long a verification link stays usable. */
+const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Tokens are stored hashed; only the emailed copy is usable. */
+const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+
+/**
+ * The one response registration ever gives.
+ *
+ * Built once and returned from every path — taken address, free address, even a
+ * mail failure — because the moment two paths differ in status, body or shape,
+ * the endpoint is an oracle again.
+ */
+const REGISTRATION_ACCEPTED = {
+  message:
+    "If that address can be registered, we have sent it a link to finish setting up the account.",
+} as const;
+
+/**
+ * Registration.
+ *
+ * This used to answer `400 "Email already registered"` for a taken address and
+ * `201` with a session for a free one, which let anyone test an address for an
+ * account at the cost of one request. It now answers `202` with the same body
+ * either way and settles the difference by email: a link for an address that is
+ * free, and a "someone tried to register you" note for one that is not.
+ *
+ * The cost is that signing up no longer signs you in — it cannot, because a
+ * session in the response would be exactly the difference we are removing.
+ *
+ * Both paths do the same work, in the same order, including the Argon2 hash.
+ * Skipping the hash when the address is taken would replace the oracle we
+ * closed with a slower one: ~50 ms of missing latency is as good an answer as
+ * a 400.
+ */
 router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope, async (req: Req, res) => {
   const { name, email, password, businessName, gstin } = req.body;
   const normalisedEmail = email.toLowerCase();
 
+  // A weak password is refused before anything else and is not an enumeration
+  // signal: the answer depends only on the password the caller just chose, not
+  // on anything the server knows about the address.
   const policyFailure = await validatePassword(password);
   if (policyFailure) return res.status(400).json({ error: policyFailure.message });
 
-  const existing = await db.select().from(usersTable).where(eq(usersTable.email, normalisedEmail)).limit(1);
-  if (existing.length > 0) {
-    // Charge this against the lockout counters. The response still reveals
-    // that the address is taken — closing that needs an email round trip this
-    // product has no provider for (see F-14 in SECURITY-REVIEW.md) — but bulk
-    // enumeration now runs into the same backoff as password guessing.
+  // Always hashed, even when it will be thrown away below.
+  const passwordHash = await hashPassword(password);
+
+  const [existing] = await db.select({ id: usersTable.id }).from(usersTable)
+    .where(eq(usersTable.email, normalisedEmail)).limit(1);
+
+  if (existing) {
+    // Still charged against the lockout counters, so bulk probing runs into the
+    // same backoff as password guessing even though it learns nothing.
     await recordFailures([emailKey(normalisedEmail)]);
-    return res.status(400).json({ error: "Email already registered" });
+    await sendQuietly(alreadyRegisteredMessage(normalisedEmail));
+    return res.status(202).json(REGISTRATION_ACCEPTED);
   }
 
-  const [user] = await db.insert(usersTable).values({
-    name, email: normalisedEmail, passwordHash: await hashPassword(password),
-    role: "user", isActive: true, subscriptionStatus: "trial",
-    subscriptionEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-  }).returning();
+  const token = crypto.randomBytes(32).toString("base64url");
+  await db.insert(pendingRegistrationsTable).values({
+    tokenHash: hashToken(token),
+    email: normalisedEmail,
+    name,
+    passwordHash,
+    businessName,
+    gstin: gstin ?? null,
+    expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
+  });
 
-  const [business] = await db.insert(businessesTable).values({
-    userId: user.id, name: businessName, gstin: gstin ?? null, invoicePrefix: "INV",
-  }).returning();
+  const link = `${config.appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
+  await sendQuietly(verificationMessage(normalisedEmail, name, link));
+  return res.status(202).json(REGISTRATION_ACCEPTED);
+});
 
-  await db.update(usersTable).set({ businessId: business.id }).where(eq(usersTable.id, user.id));
+/**
+ * Finish a registration by proving control of the mailbox.
+ *
+ * The account is created here rather than at submission, which is what stops
+ * someone reserving an address they do not own: until this runs, a pending row
+ * is just an intention. Several may exist for one address; the first to arrive
+ * wins and the rest are deleted with it.
+ */
+router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrationBody), systemScope, async (req: Req, res) => {
+  const { token } = req.body;
 
-  const token = generateToken(user.id, user.role, user.tokenVersion);
-  setSessionCookies(res, token);
+  const [pending] = await db.select().from(pendingRegistrationsTable)
+    .where(and(
+      eq(pendingRegistrationsTable.tokenHash, hashToken(token)),
+      gt(pendingRegistrationsTable.expiresAt, new Date()),
+    ))
+    .limit(1);
+
+  // One message for "no such token", "already used" and "expired": a caller
+  // holding a token learns whether it works, and nothing else.
+  if (!pending) {
+    return res.status(400).json({ error: "That link is invalid or has expired. Please register again." });
+  }
+
+  const created = await db.transaction(async (tx) => {
+    // Re-checked inside the transaction: two links for the same address could
+    // be redeemed at once, and the unique index is on the token, not the email.
+    const [taken] = await tx.select({ id: usersTable.id }).from(usersTable)
+      .where(eq(usersTable.email, pending.email)).limit(1);
+    if (taken) return null;
+
+    const [user] = await tx.insert(usersTable).values({
+      name: pending.name, email: pending.email, passwordHash: pending.passwordHash,
+      role: "user", isActive: true, subscriptionStatus: "trial",
+      subscriptionEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+    }).returning();
+
+    const [business] = await tx.insert(businessesTable).values({
+      userId: user.id, name: pending.businessName, gstin: pending.gstin, invoicePrefix: "INV",
+    }).returning();
+
+    const [linked] = await tx.update(usersTable).set({ businessId: business.id })
+      .where(eq(usersTable.id, user.id)).returning();
+
+    // Every pending registration for this address is spent, not just this one.
+    await tx.delete(pendingRegistrationsTable).where(eq(pendingRegistrationsTable.email, pending.email));
+
+    return { user: linked, business };
+  });
+
+  if (!created) {
+    return res.status(409).json({ error: "That address has already been registered. Please sign in." });
+  }
+
+  const session = generateToken(created.user.id, created.user.role, created.user.tokenVersion);
+  setSessionCookies(res, session);
   return res.status(201).json({
-    token,
+    token: session,
     user: {
-      id: user.id, name: user.name, email: user.email, role: user.role,
-      isActive: user.isActive, subscriptionStatus: user.subscriptionStatus,
-      subscriptionEnd: user.subscriptionEnd, businessId: business.id,
-      createdAt: user.createdAt,
+      id: created.user.id, name: created.user.name, email: created.user.email, role: created.user.role,
+      isActive: created.user.isActive, subscriptionStatus: created.user.subscriptionStatus,
+      subscriptionEnd: created.user.subscriptionEnd, businessId: created.business.id,
+      createdAt: created.user.createdAt,
     }
   });
 });
+
+/** Drop pending registrations whose links have expired. */
+export async function prunePendingRegistrations(): Promise<number> {
+  const deleted = await db.delete(pendingRegistrationsTable)
+    .where(lt(pendingRegistrationsTable.expiresAt, new Date()))
+    .returning({ id: pendingRegistrationsTable.id });
+  return deleted.length;
+}
 
 router.get("/me", requireAuth, async (req: Req, res) => {
   const user = req.user;

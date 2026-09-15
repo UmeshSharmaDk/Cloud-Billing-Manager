@@ -5,6 +5,20 @@
  * GST Billing & Inventory Management Platform API
  * OpenAPI spec version: 0.1.0
  */
+export interface RegistrationAccepted {
+  /** Deliberately identical for a free and a taken address. Anything that varied between the two would make this endpoint an oracle for which addresses have accounts. */
+  message: string;
+}
+
+export interface VerifyRegistrationInput {
+  /**
+     * The single-use token from the verification link.
+     * @minLength 1
+     * @maxLength 512
+     */
+  token: string;
+}
+
 export interface HealthStatus {
   status: string;
 }
