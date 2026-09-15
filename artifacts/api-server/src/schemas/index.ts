@@ -127,6 +127,11 @@ export const ListUsersQuery = z.object({
   status: z.enum(["active", "inactive"]).optional(),
 });
 
+/** The token from a verification link. Opaque to the client. */
+export const VerifyRegistrationBody = z.object({
+  token: z.string().min(1).max(512),
+});
+
 export const CreateUserBody = z.object({
   name: shortText(200),
   email: z.string().email().max(320),

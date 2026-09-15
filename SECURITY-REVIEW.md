@@ -67,7 +67,7 @@ verified** — 133 integration checks against a real Postgres plus 34 unit tests
 | F-09 | **Fixed** | The session is an `HttpOnly` cookie; no token is reachable from page script anywhere in the app. Double-submit CSRF on every cookie-authenticated write. Helmet adds a `default-src 'none'` CSP, HSTS, nosniff and `X-Frame-Options: DENY`. Logout is no longer a stub. |
 | F-12 | **Fixed** | 12-character minimum, common-password screening, and a Have I Been Pwned k-anonymity lookup that fails open. New self-service `POST /auth/change-password`. |
 | F-13 | **Fixed** | Append-only `audit_log`; step-up re-authentication for password resets and role changes; soft delete so tenant records are never orphaned; last-admin and self-action guards. |
-| F-14 | **Partly fixed** | The timing half closed in Phase 1. Registration still confirms a known address — closing that needs email delivery this product has no provider for. Enumeration now charges the account lockout, so bulk probing hits the same backoff as password guessing. |
+| F-14 | **Fixed** | Both halves. The timing half closed in Phase 1; registration now answers `202` with the same body whether or not the address is taken and settles the difference by email. Enumeration still charges the account lockout as well. |
 | L-01 | **Fixed** | `.env*` ignored, `.env.example` added, gitleaks in CI. |
 | L-03 | **Fixed** | `securitySchemes` declared (cookie + bearer), applied globally, with the three genuinely public operations marked `security: []`. |
 | L-04 | **Fixed** | `.github/workflows/security.yml`: `pnpm audit`, gitleaks, typecheck, and a grep that rejects the exact `process.env.X ?? "literal"` shape that caused F-01. |
@@ -153,11 +153,57 @@ inconsistently — is deleted. One admin surface.
 
 ### What is left, and why it is not code
 
-- **F-14's enumeration half** needs an email provider. Nothing about it is a coding problem.
 - **MFA for administrators** is a product feature — enrolment, QR provisioning, recovery codes, and
   a policy for what happens when someone loses their authenticator. Shipping it badly is worse than
   not shipping it, so it wants its own decision rather than a corner of a cleanup sweep.
 - **An external penetration test** remains the one step no amount of self-review substitutes for.
+
+## Registration no longer answers the question — fixed
+
+The last open half of F-14. Submitting an address returned `400 "Email already registered"` when it was
+taken and `201` with a session when it was free, so a single request tested whether anyone had an
+account. That is a customer list for the price of one HTTP call each.
+
+The fix is the one the original review named: **the same `202` either way**, with the difference sent
+to the mailbox instead — a verification link to an address that is free, a "someone tried to register
+you" note to one that is not. Both paths do the same work in the same order, Argon2 hash included,
+because skipping the hash on the taken path would replace the oracle with a slower one: 50 ms of
+missing latency answers the question just as well as a `400`. Measured over twelve requests each, the
+two paths differ by 0.5 ms.
+
+**The account is created when the link is opened, not when the form is submitted.** That ordering is
+what stops the obvious abuse of the new flow: if submitting created an inactive user, anyone could
+reserve an address they do not control and lock its owner out of ever signing up. A pending row is
+only an intention — several may exist for one address at once, and whoever proves control of the
+mailbox first gets the account while the rest are deleted with it.
+
+The token is stored as a SHA-256 hash. A backup, a log or a stray `SELECT` should not hand someone a
+live credential; the usable copy exists only in the email.
+
+### What this costs
+
+**Signing up no longer signs you in.** It cannot — a session on the free path is precisely the
+difference being removed. Registration ends on a "check your email" screen, and `/verify` is where the
+account is created and the session issued.
+
+**Email is now a hard dependency, and the server refuses to start without it in production.** That is
+a deliberate choice and it has to be made as part of the upgrade: set `SMTP_URL` and `MAIL_FROM` or the
+deployment will not boot. Falling back to the old behaviour with a warning was the alternative, and it
+was rejected for the same reason the row-level security work rejected a silent superuser — a system
+that looks fixed and is not is worse than one that is plainly broken.
+
+Development uses a log transport automatically. `MAIL_OUTBOX_PATH` writes messages to a file instead
+of sending them, which is how CI exercises the flow while running the server with `NODE_ENV=production`
+rather than a development variant of it. Neither is reachable by omission: absence still fails closed.
+
+### Verified
+
+Twenty-two integration checks, on top of the existing suite run end to end against the new two-step
+flow: identical status and byte-identical bodies for a free and a taken address; a link sent to one
+and a no-link notice to the other; no account and no pending row created for an address that already
+exists; the link creating the account and signing the person in; the link working exactly once; unknown,
+spent and expired tokens all refused in the same words; and two submissions racing for one address
+leaving exactly one account.
 
 ## Full-codebase review — fifteen findings, all fixed
 
@@ -555,6 +601,12 @@ default stays at 30 and the per-account lockout the suite actually asserts runs 
 threshold of 10.
 
 ### Operator actions that code cannot perform
+
+**Configure a mail transport before deploying.** The server refuses to start in production without
+`SMTP_URL` and `MAIL_FROM`. Registration settles whether an address is already taken by email rather
+than in the HTTP response, so a deployment with no mail transport cannot accept signups at all — and
+failing at boot with a message naming the variable is better than accepting registrations nobody can
+complete.
 
 1. **Set `SESSION_SECRET`** in the deployment environment (`openssl rand -base64 48`). The server will
    not start without it — this is deliberate, but it means the variable must be set *before* the next
@@ -1112,7 +1164,7 @@ audit record, no re-authentication, no notification, and no guard against acting
 
 ## F-14 — Registration confirms which email addresses have accounts
 
-**Status: partly fixed.** The timing half closed in Phase 1; the enumeration half needs email delivery — see the Phase 3 notes.
+**Status: fixed.** The timing half closed in Phase 1; the enumeration half is described below.
 
 **CWE-204 / CWE-208** · `auth.ts:75`, `auth.ts:52`
 

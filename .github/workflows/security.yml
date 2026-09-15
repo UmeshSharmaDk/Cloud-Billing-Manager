@@ -139,6 +139,13 @@ jobs:
       # would otherwise trip the per-IP limiter. The per-account lockout that
       # F-06 asserts still runs at its real threshold of 10.
       AUTH_RATE_LIMIT_MAX: "500"
+      # Registration is two steps now: the response cannot say whether an
+      # address is taken, so the outcome is emailed. The server writes mail to
+      # this file instead of sending it and the suite reads the verification
+      # link from there — which is what lets the suite run the server with
+      # NODE_ENV=production rather than a development variant of it.
+      MAIL_OUTBOX_PATH: /tmp/outbox.jsonl
+      MAIL_FROM: GST Platform <no-reply@example.test>
 
     steps:
       - uses: actions/checkout@v4

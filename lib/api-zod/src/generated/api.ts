@@ -72,6 +72,18 @@ export const RegisterBody = zod.object({
 
 
 /**
+ * @summary Finish a registration with the token from the verification email
+ */
+export const verifyRegistrationBodyTokenMax = 512;
+
+
+
+export const VerifyRegistrationBody = zod.object({
+  "token": zod.string().min(1).max(verifyRegistrationBodyTokenMax).describe('The single-use token from the verification link.')
+})
+
+
+/**
  * @summary Get current user
  */
 export const GetMeResponse = zod.object({

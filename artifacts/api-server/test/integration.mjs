@@ -23,6 +23,7 @@
  *   API_URL=http://127.0.0.1:8099/api pnpm --filter @workspace/api-server run test:integration
  */
 import { execSync } from "node:child_process";
+import fs from "node:fs";
 
 const B = process.env.API_URL ?? "http://127.0.0.1:8099/api";
 
@@ -108,17 +109,57 @@ async function call(method, path, { token, body, jar, csrf = true, origin } = {}
 const uniq = Date.now();
 const PASSWORD = "correct-horse-battery-staple";
 
+/**
+ * Where the server writes mail instead of sending it.
+ *
+ * Registration is two steps now — submit, then open the link — because the
+ * response to the submit must not say whether the address was already taken.
+ * The suite reads the link from here, which is also the only way to test the
+ * flow while running the server with NODE_ENV=production.
+ */
+const OUTBOX = process.env.MAIL_OUTBOX_PATH;
+
+/** Every message sent so far, oldest first. */
+function outbox() {
+  if (!OUTBOX) {
+    throw new Error(
+      "MAIL_OUTBOX_PATH must be set, and must match the value the server was started with: " +
+        "registration is completed by a link the server sends, and the suite reads it from there.",
+    );
+  }
+  if (!fs.existsSync(OUTBOX)) return [];
+  return fs.readFileSync(OUTBOX, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/** The newest verification link sent to this address, or null. */
+function verificationToken(email) {
+  for (const message of [...outbox()].reverse()) {
+    if (message.to !== email) continue;
+    const match = /verify\?token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
+    if (match) return match[1];
+  }
+  return null;
+}
+
 async function register(tag) {
   const email = `${tag}${uniq}@example.test`;
   const jar = newJar();
   // Prime the jar so the request carries a CSRF token, as a browser would.
   await call("GET", "/healthz", { jar });
-  const r = await call("POST", "/auth/register", {
+  const submitted = await call("POST", "/auth/register", {
     jar,
     body: { name: `${tag} Owner`, email, password: PASSWORD,
             businessName: `${tag} Traders`, gstin: "27AAAAA0000A1Z5" },
   });
-  if (r.status !== 201) throw new Error(`register ${tag} failed: ${r.status} ${JSON.stringify(r.data)}`);
+  if (submitted.status !== 202) {
+    throw new Error(`register ${tag} failed: ${submitted.status} ${JSON.stringify(submitted.data)}`);
+  }
+
+  const token = verificationToken(email);
+  if (!token) throw new Error(`no verification link was sent to ${email}`);
+
+  const r = await call("POST", "/auth/verify-registration", { jar, body: { token } });
+  if (r.status !== 201) throw new Error(`verify ${tag} failed: ${r.status} ${JSON.stringify(r.data)}`);
   return { email, token: r.data.token, userId: r.data.user.id, jar };
 }
 
@@ -836,6 +877,101 @@ const adminEmail = `admin${uniq}@example.test`;
     Math.abs(sales.totalSales - 354) < 0.005, String(sales.totalSales));
   check("reports", "a small result is not marked truncated", sales.truncated === false,
     String(sales.truncated));
+}
+
+
+// === F-14: registration tells you nothing about an address =================
+//
+// The endpoint used to answer 400 "Email already registered" for a taken
+// address and 201 with a session for a free one, so one request tested whether
+// anyone had an account. It now answers identically either way and settles the
+// difference by email.
+{
+  const stamp = Date.now();
+  const submit = (email) => call("POST", "/auth/register", {
+    body: { name: "Probe", email, password: PASSWORD,
+            businessName: "Probe Traders", gstin: "27AAAAA0000A1Z5" },
+  });
+
+  // An address nobody has registered.
+  const freeEmail = `f14free${stamp}@example.test`;
+  const free = await submit(freeEmail);
+
+  // The suite's own registered account, so this one certainly exists.
+  const taken = await submit(alice.email);
+
+  check("F-14", "a free address returns 202", free.status === 202, `status ${free.status}`);
+  check("F-14", "a taken address returns the same status", taken.status === free.status,
+    `free ${free.status} vs taken ${taken.status}`);
+  check("F-14", "and byte-identical bodies",
+    JSON.stringify(free.data) === JSON.stringify(taken.data),
+    `${JSON.stringify(free.data)} vs ${JSON.stringify(taken.data)}`);
+  check("F-14", "the body promises nothing either way",
+    !/already|exists|taken|registered account/i.test(free.data?.message ?? ""),
+    free.data?.message ?? "");
+
+  // The difference goes to the mailbox instead, and only to it.
+  const toFree = outbox().filter((m) => m.to === freeEmail);
+  const toTaken = outbox().filter((m) => m.to === alice.email);
+  check("F-14", "the free address is sent a link",
+    toFree.some((m) => /verify\?token=/.test(m.text ?? "")));
+  check("F-14", "the taken address is told someone tried, with no link",
+    toTaken.some((m) => /already has one/.test(m.text ?? "") && !/verify\?token=/.test(m.text ?? "")));
+
+  // Submitting does not create anything: otherwise anyone could reserve an
+  // address they do not control simply by naming it.
+  check("F-14", "submitting alone creates no account",
+    sqlValue(`SELECT count(*) FROM users WHERE email = '${freeEmail}'`) === "0");
+  check("F-14", "it creates a pending row instead",
+    sqlValue(`SELECT count(*) FROM pending_registrations WHERE email = '${freeEmail}'`) === "1");
+  check("F-14", "and no pending row for the address that already exists",
+    sqlValue(`SELECT count(*) FROM pending_registrations WHERE email = '${alice.email}'`) === "0");
+
+  // The link is what creates the account.
+  const token = verificationToken(freeEmail);
+  const verified = await call("POST", "/auth/verify-registration", { body: { token } });
+  check("F-14", "opening the link creates the account", verified.status === 201, `status ${verified.status}`);
+  check("F-14", "and signs the person in", Boolean(verified.data?.token));
+  check("F-14", "with the business it was submitted with",
+    verified.data?.user?.businessId > 0, String(verified.data?.user?.businessId));
+
+  const replay = await call("POST", "/auth/verify-registration", { body: { token } });
+  check("F-14", "the link works exactly once", replay.status === 400, `status ${replay.status}`);
+  check("F-14", "spent pending rows are cleared",
+    sqlValue(`SELECT count(*) FROM pending_registrations WHERE email = '${freeEmail}'`) === "0");
+
+  const forged = await call("POST", "/auth/verify-registration",
+    { body: { token: "not-a-real-token-at-all-0000000000" } });
+  check("F-14", "an unknown token is refused", forged.status === 400, `status ${forged.status}`);
+  check("F-14", "and is refused in the same words as a spent one",
+    forged.data?.error === replay.data?.error,
+    `"${forged.data?.error}" vs "${replay.data?.error}"`);
+
+  // Expiry is enforced on read, not only by the sweep.
+  const staleEmail = `f14stale${stamp}@example.test`;
+  await submit(staleEmail);
+  const staleToken = verificationToken(staleEmail);
+  sqlExec(`UPDATE pending_registrations SET expires_at = now() - interval '1 hour' WHERE email = '${staleEmail}'`);
+  const expired = await call("POST", "/auth/verify-registration", { body: { token: staleToken } });
+  check("F-14", "an expired link is refused", expired.status === 400, `status ${expired.status}`);
+  check("F-14", "and the account was never created",
+    sqlValue(`SELECT count(*) FROM users WHERE email = '${staleEmail}'`) === "0");
+
+  // Two people racing for one address: the first to prove the mailbox wins.
+  const raceEmail = `f14race${stamp}@example.test`;
+  await submit(raceEmail);
+  const firstToken = verificationToken(raceEmail);
+  await submit(raceEmail);
+  const secondToken = verificationToken(raceEmail);
+  check("F-14", "a second submission for the same address is accepted",
+    firstToken !== secondToken && Boolean(secondToken));
+  const winner = await call("POST", "/auth/verify-registration", { body: { token: secondToken } });
+  check("F-14", "the link that is opened creates the account", winner.status === 201, `status ${winner.status}`);
+  const loser = await call("POST", "/auth/verify-registration", { body: { token: firstToken } });
+  check("F-14", "the other link is spent with it, not left live",
+    loser.status === 400, `status ${loser.status}`);
+  check("F-14", "exactly one account exists for the address",
+    sqlValue(`SELECT count(*) FROM users WHERE email = '${raceEmail}'`) === "1");
 }
 
 

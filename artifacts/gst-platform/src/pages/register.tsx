@@ -1,26 +1,26 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { Shield } from "lucide-react";
+import { Shield, MailCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useRegister } from "@workspace/api-client-react";
-import { useAuth } from "@/context/AuthContext";
 
 export default function RegisterPage() {
   const [form, setForm] = useState({ name: "", email: "", password: "", businessName: "", gstin: "" });
-  const { login } = useAuth();
+  // Registration no longer returns a session. It cannot: a session on the
+  // "address was free" path is exactly the difference that let anyone test an
+  // address for an account. The outcome arrives by email instead, so the page
+  // ends on the same confirmation either way.
+  const [submitted, setSubmitted] = useState(false);
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
   const mutation = useRegister({
     mutation: {
-      onSuccess: (data: any) => {
-        login(data.user);
-        toast({ title: "Welcome!", description: "Your account has been created." });
-      },
+      onSuccess: () => setSubmitted(true),
       onError: (err: any) => {
         toast({ title: "Registration failed", description: err?.data?.error || "Please try again.", variant: "destructive" });
       },
@@ -31,6 +31,36 @@ export default function RegisterPage() {
     e.preventDefault();
     mutation.mutate({ data: form });
   };
+
+  if (submitted) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-primary/5 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <Card className="shadow-xl border-border/50">
+            <CardHeader className="pb-4 text-center">
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 text-primary mx-auto mb-3">
+                <MailCheck className="w-7 h-7" />
+              </div>
+              <CardTitle className="text-xl">Check your email</CardTitle>
+              <CardDescription>
+                If that address can be registered, we have sent it a link to finish setting up
+                the account. The link works once and expires in 24 hours.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-center">
+              <p className="text-sm text-muted-foreground mb-4">
+                Already have an account with this address? We have emailed you about that instead —
+                nothing has changed on it.
+              </p>
+              <Button variant="outline" className="w-full" onClick={() => setLocation("/login")}>
+                Back to sign in
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-primary/5 flex items-center justify-center p-4">
