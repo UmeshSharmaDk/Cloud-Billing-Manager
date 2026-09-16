@@ -600,6 +600,37 @@ deliberately fails dozens of logins from one address and would otherwise lock it
 default stays at 30 and the per-account lockout the suite actually asserts runs at its real
 threshold of 10.
 
+### A side effect can escape before its transaction commits
+
+Found when `main` went red after the F-14 merge, and worth writing down because
+the shape recurs.
+
+`openTenantScope` and `systemScope` hold one transaction for the whole request
+and commit it once the response has been *written*. While the only thing a
+caller learns is the response body, that is harmless — the commit lands well
+before the next request arrives, and 40 create-then-immediately-read cycles
+could not be made to fail.
+
+It stops being harmless the moment a request emits something that leaves the
+process. Registration sends an email, and mail does not wait for a commit: the
+person can open the link before the row it names is durable, and be told the
+link is invalid when it is not. Verification hands back a session the caller
+uses on its very next request, before the user row is durable — which showed up
+as that request being rejected with the credential the previous one had just
+issued. Both reproduced at roughly one run in five.
+
+Both now commit before they hand anything out, and the rule to carry forward is
+simple: **anything that escapes the request — an email, a webhook, a queued
+message, a credential — must be emitted after the state it refers to is
+committed, not merely after it is written.**
+
+The general property remains: a future endpoint that emits an external side
+effect inside the request transaction will have the same window. Making it
+impossible means committing before the response is flushed — buffering the
+response, committing, then writing — which is a change to a core middleware that
+nothing currently demands. It is recorded here rather than done on speculation,
+and it is the first thing to reach for if this shape appears again.
+
 ### Operator actions that code cannot perform
 
 **Configure a mail transport before deploying.** The server refuses to start in production without

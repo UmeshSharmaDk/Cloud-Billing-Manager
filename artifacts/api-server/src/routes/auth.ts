@@ -1,6 +1,6 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { db, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable } from "@workspace/db";
+import { db, rootDb, runInSystemScope, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable } from "@workspace/db";
 import { eq, and, lt, gt } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { logger } from "../lib/logger";
@@ -360,7 +360,22 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope,
   }
 
   const token = crypto.randomBytes(32).toString("base64url");
-  await db.insert(pendingRegistrationsTable).values({
+
+  // Written on `rootDb` — outside this request's transaction — on purpose.
+  //
+  // `systemScope` holds one transaction for the whole request and commits it
+  // only once the response has been written. An email is not a response: it
+  // leaves the process the moment it is sent, and the person it names can act
+  // on it before that commit lands. Sending a link to a row that is not yet
+  // durable produces exactly the failure it looks like — "that link is invalid
+  // or has expired" for a link that was valid and had not expired.
+  //
+  // It showed up as an intermittent CI failure before it could show up as a
+  // support ticket. Nothing else in the request needs this row, and the table
+  // carries no tenant policy, so committing it on its own connection costs
+  // nothing and removes the window entirely: the row is durable before the
+  // link that references it exists anywhere.
+  await rootDb.insert(pendingRegistrationsTable).values({
     tokenHash: hashToken(token),
     email: normalisedEmail,
     name,
@@ -383,10 +398,12 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope,
  * is just an intention. Several may exist for one address; the first to arrive
  * wins and the rest are deleted with it.
  */
-router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrationBody), systemScope, async (req: Req, res) => {
+router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrationBody), async (req: Req, res) => {
   const { token } = req.body;
 
-  const [pending] = await db.select().from(pendingRegistrationsTable)
+  // `rootDb` throughout: `pending_registrations` carries no tenant policy, and
+  // this route deliberately does not run inside the request-scoped transaction.
+  const [pending] = await rootDb.select().from(pendingRegistrationsTable)
     .where(and(
       eq(pendingRegistrationsTable.tokenHash, hashToken(token)),
       gt(pendingRegistrationsTable.expiresAt, new Date()),
@@ -399,7 +416,21 @@ router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrati
     return res.status(400).json({ error: "That link is invalid or has expired. Please register again." });
   }
 
-  const created = await db.transaction(async (tx) => {
+  // Its own system scope rather than the request's.
+  //
+  // `systemScope` as middleware holds one transaction until the *response has
+  // been written*, so an account created under it is not durable at the moment
+  // its session is handed back — and the caller uses that session on its very
+  // next request. That window is small and real: it showed up as the next
+  // request being rejected with the credential this one had just issued.
+  //
+  // Opening the scope here instead means the transaction commits when this
+  // callback returns, before anything is sent. It still needs to be a *system*
+  // scope rather than a bare transaction, because `businesses` carries a tenant
+  // policy and there is no tenant yet to scope to — the row being inserted is
+  // what creates one.
+  const created = await runInSystemScope(rootDb, async () => {
+    const tx = db;
     // Re-checked inside the transaction: two links for the same address could
     // be redeemed at once, and the unique index is on the token, not the email.
     const [taken] = await tx.select({ id: usersTable.id }).from(usersTable)
