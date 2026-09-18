@@ -537,12 +537,14 @@ boot-time report covers it too, since it checks policy coverage and not only the
 already orders `push` before `rls:apply`. The README previously said to re-apply "after any migration
 that adds a tenant-scoped table"; that was too narrow and now says after every push.
 
-**Editing a purchase double-counts stock.** Pre-existing, unrelated to tax, and not fixed here.
-`resolveItemsToProducts` adds each line's quantity to the catalog, and the update path re-runs it on
-every edit without reversing the original — so re-saving a bill for 10 units leaves 20 in stock.
-Reproduced directly: create a bill for 10, PATCH it with the same items, stock reads 20. Fixing it
-means reversing the previous items before applying the new ones, which is its own change with its own
-tests; it is listed under Ongoing.
+**Editing a purchase double-counted stock — since fixed.** Pre-existing and unrelated to tax, so it
+was carried rather than fixed alongside the tax work. `resolveItemsToProducts` added each line's
+quantity to the catalog, and the update path re-ran it on every edit without reversing the original —
+so re-saving a bill for 10 units left 20 in stock. Reproduced directly: create a bill for 10, PATCH it
+with the same items, stock reads 20. It was closed in the fifteen-finding sweep: movement now goes
+through `applyStockMovement`, and the update path reverses the stored items before applying the new
+ones (`purchases.ts:269-270`), as does delete (`purchases.ts:301`). Covered by the integration suite —
+re-saving a bill no longer double-counts, and deleting it removes the goods again.
 
 ### Follow-up after Phase 3
 
@@ -656,9 +658,20 @@ complete.
 6. **Run the database migration.** Phase 3 adds `audit_log` and `invoice_counters`, `deleted_at` and
    `token_version` columns on `users`, a `deleted_at`
    column on `users`, and a unique index on `(business_id, invoice_number)`. Apply with
-   `pnpm --filter @workspace/db run push`. The unique index will fail to build if duplicate invoice
-   numbers already exist — if it does, that is the old `COUNT(*) + 1` bug showing up in real data,
-   and those invoices need renumbering before the index can be created.
+   these three commands, as one step:
+
+   ```sh
+   pnpm --filter @workspace/db run push
+   pnpm --filter @workspace/db run rls:apply   # NOT optional — see below
+   pnpm --filter @workspace/db run test:rls    # confirms isolation is actually live
+   ```
+
+   `push` drops the row-level security policies on every table it alters (see "Two things found while
+   doing it"), leaving tenant isolation apparently configured and actually inert. Re-applying is
+   therefore part of the migration, not a follow-up task — skipping it is silent, and the only thing
+   that catches it is `test:rls`, which refuses to pass vacuously. The unique index will fail to build
+   if duplicate invoice numbers already exist — if it does, that is the old `COUNT(*) + 1` bug showing
+   up in real data, and those invoices need renumbering before the index can be created.
 
 ### Where the implementation deviates from the recommendations below
 
@@ -667,7 +680,8 @@ complete.
   so the algorithm is detected from the value and no column, migration or backfill is required.
 - **F-14's timing half came along with F-03.** Rewriting the login path made the constant-time
   comparison and the unknown-account decoy verification free to include, so both are done. The
-  enumeration half of F-14 (the `/register` response) is untouched and remains Phase 3.
+  enumeration half of F-14 (the `/register` response) was untouched at the time and is now closed too —
+  see "Registration no longer answers the question" above.
 - **A password length cap (1024 bytes) was added** to the three password entry points. Argon2 has no
   input limit of its own, so without a cap a multi-megabyte password is a cheap memory/CPU burn.
 
