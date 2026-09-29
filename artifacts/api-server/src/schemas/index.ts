@@ -20,6 +20,7 @@
  */
 
 import { z } from "zod";
+import { INVOICE_TYPES } from "../lib/tax-documents";
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -39,7 +40,6 @@ const dateString = z
  * 10^13 is a write error rather than a validation error; stop short of that.
  */
 const money = z.coerce.number().finite().min(0).max(1e12);
-const signedMoney = z.coerce.number().finite().min(-1e12).max(1e12);
 
 /** `numeric(15, 3)` stock column. */
 const quantity = z.coerce.number().finite().min(0).max(1e9);
@@ -92,10 +92,13 @@ export const LoginBody = z.object({
  */
 const newPassword = z.string().min(12).max(128);
 
+/**
+ * No password: it is chosen when the emailed link is opened, not when the form
+ * is submitted. See `pending-registrations.ts` for why.
+ */
 export const RegisterBody = z.object({
   name: shortText(200),
   email: z.string().email().max(320),
-  password: newPassword,
   businessName: shortText(200),
   gstin,
 });
@@ -127,9 +130,10 @@ export const ListUsersQuery = z.object({
   status: z.enum(["active", "inactive"]).optional(),
 });
 
-/** The token from a verification link. Opaque to the client. */
+/** The token from a verification link, and the password the person now chooses. */
 export const VerifyRegistrationBody = z.object({
   token: z.string().min(1).max(512),
+  password: newPassword,
 });
 
 export const CreateUserBody = z.object({
@@ -294,9 +298,16 @@ export const ListInvoicesQuery = z.object({
   toDate: dateString.optional(),
 });
 
+/**
+ * The kinds of invoice the reports know how to treat: a credit note subtracts,
+ * a proforma is not a tax document. A free-text type could say neither, so a
+ * "Credit Note" was added to the liability it exists to reduce.
+ */
+const invoiceType = z.enum(INVOICE_TYPES);
+
 export const CreateInvoiceBody = z
   .object({
-    type: shortText(50).optional(),
+    type: invoiceType.optional(),
     customerId: z.coerce.number().int().positive().optional(),
     customerName: shortText(200).optional(),
     customerGstin: gstin,
@@ -311,7 +322,7 @@ export const CreateInvoiceBody = z
   });
 
 export const UpdateInvoiceBody = z.object({
-  type: shortText(50).optional(),
+  type: invoiceType.optional(),
   customerId: z.coerce.number().int().positive().optional(),
   invoiceDate: dateString.optional(),
   dueDate: z.union([dateString, z.literal(""), z.null()]).optional(),
@@ -385,8 +396,10 @@ export const ListPaymentsQuery = z.object({
 });
 
 export const CreatePaymentBody = z.object({
-  type: shortText(20),
-  amount: signedMoney,
+  type: z.enum(["received", "paid", "in", "out"]),
+  // Strictly positive: direction is the `type`, not the sign. A negative amount
+  // let a "received" payment subtract, and zero recorded nothing.
+  amount: z.coerce.number().finite().positive().max(1e12),
   date: dateString,
   mode: shortText(30),
   referenceNumber: optionalText(100),
@@ -434,6 +447,19 @@ export const DateRangeQuery = z
 // E-way bills — absent from the OpenAPI spec, so defined only here.
 // ---------------------------------------------------------------------------
 
+/**
+ * Defaults to a full page rather than the usual 20: the page that lists these
+ * has no pager, and shrinking it silently would hide bills. The cap is what
+ * matters — the list used to be unbounded.
+ */
+export const ListEwayBillsQuery = z.object({
+  page: paginationShape.page,
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(MAX_PAGE_SIZE),
+});
+
+/** Most bytes of free-form line records one e-way bill may carry. */
+const MAX_EWAY_ITEMS_BYTES = 100_000;
+
 export const CreateEwayBillBody = z.object({
   supplyType: optionalText(5),
   subSupplyType: optionalText(5),
@@ -465,7 +491,15 @@ export const CreateEwayBillBody = z.object({
   sgstValue: money.nullish(),
   igstValue: money.nullish(),
   totalInvValue: money.nullish(),
-  items: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
+  // Count alone allowed ~1 MB per bill (the request limit) of arbitrary JSON,
+  // stored and later returned in full. Bound the size, not just the length.
+  items: z
+    .array(z.record(z.string(), z.unknown()))
+    .max(500)
+    .refine((items) => JSON.stringify(items).length <= MAX_EWAY_ITEMS_BYTES, {
+      message: `items may not exceed ${MAX_EWAY_ITEMS_BYTES} bytes`,
+    })
+    .default([]),
   invoiceId: z.coerce.number().int().positive().nullish(),
 });
 

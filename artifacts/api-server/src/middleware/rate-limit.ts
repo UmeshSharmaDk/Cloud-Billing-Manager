@@ -120,6 +120,44 @@ export const registerIpLimiter: ReturnType<typeof rateLimit> = rateLimit({
 /** Registrations that may name one address per window, from any source. */
 export const REGISTER_RECIPIENT_LIMIT = 5;
 
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer (got "${raw}").`);
+  }
+  return value;
+}
+
+/**
+ * Requests one business may make per minute, split into reads and writes.
+ *
+ * Nothing limited an authenticated caller. A registered tenant could script
+ * thousands of large writes — an e-way bill carries up to 500 free-form line
+ * records — and then list them, growing storage and response size without bound.
+ * The limit is per *business* rather than per address: one business is one
+ * tenant however many devices or offices it uses, and a botnet cannot multiply
+ * it by changing address. Writes are limited much harder than reads because
+ * they are what grows the database.
+ *
+ * Held in process memory, so it bounds each instance rather than the fleet; it
+ * is a ceiling against runaway or abusive clients, not a quota. The defaults are
+ * far above what a person clicking through the app reaches.
+ */
+const tenantWriteLimit = positiveIntFromEnv("TENANT_WRITE_RATE_LIMIT_MAX", 300);
+const tenantReadLimit = positiveIntFromEnv("TENANT_READ_RATE_LIMIT_MAX", 1200);
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const isRead = (req: { method: string }) => SAFE_METHODS.has(req.method);
+
+export const tenantApiLimiter: ReturnType<typeof rateLimit> = rateLimit({
+  windowMs: 60_000,
+  limit: (req) => (isRead(req) ? tenantReadLimit : tenantWriteLimit),
+  keyGenerator: (req) => `${(req as any).businessId}:${isRead(req) ? "read" : "write"}`,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many requests. Slow down and try again shortly." },
+});
+
 /**
  * Whether this subject is currently locked out, and until when.
  * A read failure returns `null` — the lockout must never become an outage.

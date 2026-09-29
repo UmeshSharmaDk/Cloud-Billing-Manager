@@ -2733,7 +2733,7 @@ export const updateInvoice = async (id: number,
 
 
 
-export const getUpdateInvoiceMutationOptions = <TError = ErrorType<unknown>,
+export const getUpdateInvoiceMutationOptions = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateInvoice>>, TError,{id: number;data: BodyType<InvoiceUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateInvoice>>, TError,{id: number;data: BodyType<InvoiceUpdate>}, TContext> => {
 
@@ -2762,12 +2762,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type UpdateInvoiceMutationResult = NonNullable<Awaited<ReturnType<typeof updateInvoice>>>
     export type UpdateInvoiceMutationBody = BodyType<InvoiceUpdate>
-    export type UpdateInvoiceMutationError = ErrorType<unknown>
+    export type UpdateInvoiceMutationError = ErrorType<void>
 
     /**
  * @summary Update invoice
  */
-export const useUpdateInvoice = <TError = ErrorType<unknown>,
+export const useUpdateInvoice = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateInvoice>>, TError,{id: number;data: BodyType<InvoiceUpdate>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateInvoice>>,
@@ -2787,11 +2787,12 @@ export const getDeleteInvoiceUrl = (id: number,) => {
 }
 
 /**
- * @summary Delete invoice
+ * An issued invoice is never deleted: its number comes from a gapless statutory series and removing it leaves a hole in the series. Cancel it with `PATCH /invoices/{id}/status` instead, which keeps the number, takes the invoice out of every total and returns its goods to stock.
+ * @summary Delete invoice (always refused; cancel it instead)
  */
-export const deleteInvoice = async (id: number, options?: RequestInit): Promise<void> => {
+export const deleteInvoice = async (id: number, options?: RequestInit): Promise<unknown> => {
 
-  return customFetch<void>(getDeleteInvoiceUrl(id),
+  return customFetch<unknown>(getDeleteInvoiceUrl(id),
   {
     ...options,
     method: 'DELETE'
@@ -2803,7 +2804,7 @@ export const deleteInvoice = async (id: number, options?: RequestInit): Promise<
 
 
 
-export const getDeleteInvoiceMutationOptions = <TError = ErrorType<unknown>,
+export const getDeleteInvoiceMutationOptions = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteInvoice>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof deleteInvoice>>, TError,{id: number}, TContext> => {
 
@@ -2832,12 +2833,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type DeleteInvoiceMutationResult = NonNullable<Awaited<ReturnType<typeof deleteInvoice>>>
 
-    export type DeleteInvoiceMutationError = ErrorType<unknown>
+    export type DeleteInvoiceMutationError = ErrorType<void>
 
     /**
- * @summary Delete invoice
+ * @summary Delete invoice (always refused; cancel it instead)
  */
-export const useDeleteInvoice = <TError = ErrorType<unknown>,
+export const useDeleteInvoice = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteInvoice>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof deleteInvoice>>,
@@ -2857,6 +2858,7 @@ export const getUpdateInvoiceStatusUrl = (id: number,) => {
 }
 
 /**
+ * Changes what has been paid on an invoice, or cancels it. The status is derived from the amount, not taken on trust: `paid` settles the balance, `unpaid` reverses whatever was paid, and `partial` needs `paidAmount`. Every change is recorded in the payments ledger, and lowering what was paid records a reversal rather than deleting the receipt. Cancelling reverses any receipts, returns the goods to stock and is final.
  * @summary Update invoice payment status
  */
 export const updateInvoiceStatus = async (id: number,
@@ -2875,7 +2877,7 @@ export const updateInvoiceStatus = async (id: number,
 
 
 
-export const getUpdateInvoiceStatusMutationOptions = <TError = ErrorType<unknown>,
+export const getUpdateInvoiceStatusMutationOptions = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateInvoiceStatus>>, TError,{id: number;data: BodyType<InvoiceStatusInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateInvoiceStatus>>, TError,{id: number;data: BodyType<InvoiceStatusInput>}, TContext> => {
 
@@ -2904,12 +2906,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type UpdateInvoiceStatusMutationResult = NonNullable<Awaited<ReturnType<typeof updateInvoiceStatus>>>
     export type UpdateInvoiceStatusMutationBody = BodyType<InvoiceStatusInput>
-    export type UpdateInvoiceStatusMutationError = ErrorType<unknown>
+    export type UpdateInvoiceStatusMutationError = ErrorType<void>
 
     /**
  * @summary Update invoice payment status
  */
-export const useUpdateInvoiceStatus = <TError = ErrorType<unknown>,
+export const useUpdateInvoiceStatus = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateInvoiceStatus>>, TError,{id: number;data: BodyType<InvoiceStatusInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateInvoiceStatus>>,
@@ -3387,6 +3389,7 @@ export const getCreatePaymentUrl = () => {
 }
 
 /**
+ * A received payment that names an `invoiceId` is applied to that invoice in the same transaction: the invoice's paid amount and status move with it. Money going out cannot name an invoice.
  * @summary Create payment entry
  */
 export const createPayment = async (paymentInput: PaymentInput, options?: RequestInit): Promise<Payment> => {
@@ -3404,7 +3407,7 @@ export const createPayment = async (paymentInput: PaymentInput, options?: Reques
 
 
 
-export const getCreatePaymentMutationOptions = <TError = ErrorType<unknown>,
+export const getCreatePaymentMutationOptions = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPayment>>, TError,{data: BodyType<PaymentInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createPayment>>, TError,{data: BodyType<PaymentInput>}, TContext> => {
 
@@ -3433,12 +3436,12 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CreatePaymentMutationResult = NonNullable<Awaited<ReturnType<typeof createPayment>>>
     export type CreatePaymentMutationBody = BodyType<PaymentInput>
-    export type CreatePaymentMutationError = ErrorType<unknown>
+    export type CreatePaymentMutationError = ErrorType<void>
 
     /**
  * @summary Create payment entry
  */
-export const useCreatePayment = <TError = ErrorType<unknown>,
+export const useCreatePayment = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPayment>>, TError,{data: BodyType<PaymentInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createPayment>>,

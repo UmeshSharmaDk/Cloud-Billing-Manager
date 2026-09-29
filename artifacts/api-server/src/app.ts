@@ -11,7 +11,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { config } from "./lib/config";
-import { csrfProtection, issueCsrfCookie } from "./middleware/csrf";
+import { csrfProtection, issueCsrfCookie, requireAllowedOrigin } from "./middleware/csrf";
 
 const app: Express = express();
 
@@ -89,8 +89,14 @@ app.use(
   }),
 );
 
+// Refused before the body is read, so a forged cross-site submission costs
+// nothing to reject.
+app.use(requireAllowedOrigin);
+
+// JSON only. A cross-site `<form>` can send `application/x-www-form-urlencoded`
+// without any CORS preflight, so accepting that encoding made every route
+// reachable by a plain HTML form; JSON forces a preflight the allowlist rejects.
 app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(cookieParser());
 
 // Order matters: a client must be able to obtain a token before it is checked.

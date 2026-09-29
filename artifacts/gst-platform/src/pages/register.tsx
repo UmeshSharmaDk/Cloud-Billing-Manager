@@ -9,7 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useRegister } from "@workspace/api-client-react";
 
 export default function RegisterPage() {
-  const [form, setForm] = useState({ name: "", email: "", password: "", businessName: "", gstin: "" });
+  const [form, setForm] = useState({ name: "", email: "", businessName: "", gstin: "" });
   // Registration no longer returns a session. It cannot: a session on the
   // "address was free" path is exactly the difference that let anyone test an
   // address for an account. The outcome arrives by email instead, so the page
@@ -87,11 +87,7 @@ export default function RegisterPage() {
               <div className="space-y-2">
                 <Label>Email address</Label>
                 <Input type="email" placeholder="you@company.com" value={form.email} onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))} required />
-              </div>
-              <div className="space-y-2">
-                <Label>Password</Label>
-                <Input type="password" placeholder="At least 12 characters" minLength={12} value={form.password} onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))} required />
-                <p className="text-xs text-muted-foreground">At least 12 characters, and not one that has appeared in a public breach.</p>
+                <p className="text-xs text-muted-foreground">We will email you a link to confirm this address and choose your password.</p>
               </div>
               <div className="space-y-2">
                 <Label>Business Name</Label>

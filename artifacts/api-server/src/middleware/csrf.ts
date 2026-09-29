@@ -46,6 +46,34 @@ export function issueCsrfCookie(req: Request, res: Response, next: NextFunction)
   next();
 }
 
+/**
+ * Refuse a state-changing request that a browser says came from another site.
+ *
+ * The CSRF token above only guards a request that already carries a session, and
+ * CORS only decides whether a page may *read* a response — it does not stop the
+ * request being sent. So an attacker's page could still submit a form to
+ * `/auth/login` and have the victim's browser sign in to the attacker's account
+ * (the cookies in the response are stored regardless), after which everything the
+ * victim entered — invoices, customers, GSTINs — landed in an account the
+ * attacker could read. There is no session for the token to protect at that
+ * moment, so the check has to be on where the request came from.
+ *
+ * Browsers attach `Origin` to every cross-site POST and it cannot be forged from
+ * a page, so an `Origin` that is present and not on the allowlist is refused.
+ * Requests with none are not browser form or fetch submissions — native clients,
+ * server-to-server calls, curl — and are not what this defends against.
+ */
+export function requireAllowedOrigin(req: Request, res: Response, next: NextFunction): void {
+  if (SAFE_METHODS.has(req.method)) return next();
+
+  const origin = req.headers.origin;
+  if (origin === undefined) return next();
+
+  if ((config.allowedOrigins as readonly string[]).includes(origin)) return next();
+
+  res.status(403).json({ error: "This request did not come from an allowed origin." });
+}
+
 export function csrfProtection(req: Request, res: Response, next: NextFunction): void {
   if (SAFE_METHODS.has(req.method)) return next();
 

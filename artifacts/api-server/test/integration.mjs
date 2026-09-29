@@ -103,6 +103,15 @@ async function call(method, path, { token, body, jar, csrf = true, origin, heade
   if (jar) absorb(jar, res);
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
+
+  // A request's transaction commits a moment after its response is written (see
+  // "A side effect can escape before its transaction commits" in
+  // SECURITY-REVIEW.md), so the very next request can arrive first and not see
+  // the row. Measured at about one create-then-use in 150. Real clients rarely
+  // hit it; a suite that fires the next call the instant the last returns hits
+  // it constantly, and would flake on a race that is not what it is testing.
+  if (!SAFE.has(method) && res.status < 400) await new Promise((r) => setTimeout(r, 20));
+
   return { status: res.status, data, headers: res.headers };
 }
 
@@ -148,7 +157,7 @@ async function register(tag) {
   await call("GET", "/healthz", { jar });
   const submitted = await call("POST", "/auth/register", {
     jar,
-    body: { name: `${tag} Owner`, email, password: PASSWORD,
+    body: { name: `${tag} Owner`, email,
             businessName: `${tag} Traders`, gstin: "27AAAAA0000A1Z5" },
   });
   if (submitted.status !== 202) {
@@ -158,7 +167,8 @@ async function register(tag) {
   const token = verificationToken(email);
   if (!token) throw new Error(`no verification link was sent to ${email}`);
 
-  const r = await call("POST", "/auth/verify-registration", { jar, body: { token } });
+  // The password is chosen here, by whoever holds the link — not at submission.
+  const r = await call("POST", "/auth/verify-registration", { jar, body: { token, password: PASSWORD } });
   if (r.status !== 201) throw new Error(`verify ${tag} failed: ${r.status} ${JSON.stringify(r.data)}`);
   return { email, token: r.data.token, userId: r.data.user.id, jar };
 }
@@ -816,8 +826,17 @@ const adminEmail = `admin${uniq}@example.test`;
     body: { items: [{ productId: prod.id, description: "Movable", quantity: 1, unitPrice: 100, gstRate: 18 }] } });
   check("stock", "editing the sale down to 1 leaves 99", stockOf("Movable") === 99, String(stockOf("Movable")));
 
-  await call("DELETE", `/invoices/${inv.id}`, T);
-  check("stock", "deleting the invoice restores the goods", stockOf("Movable") === 100, String(stockOf("Movable")));
+  // Invoices are cancelled, not deleted: the number stays on record and the
+  // goods come back.
+  const del = await call("DELETE", `/invoices/${inv.id}`, T);
+  check("stock", "an issued invoice cannot be deleted", del.status === 409, `status ${del.status}`);
+  check("stock", "and the refused delete moved no stock", stockOf("Movable") === 99, String(stockOf("Movable")));
+
+  await call("PATCH", `/invoices/${inv.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock", "cancelling the invoice restores the goods", stockOf("Movable") === 100, String(stockOf("Movable")));
+
+  await call("PATCH", `/invoices/${inv.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock", "a second cancel does not return the goods twice", stockOf("Movable") === 100, String(stockOf("Movable")));
 
   const vend = (await call("POST", "/vendors", { ...T, body: { name: "SV", gstin: "27SVSVS0000V1Z5" } })).data;
   const bill = (await call("POST", "/purchases", { ...T,
@@ -880,6 +899,259 @@ const adminEmail = `admin${uniq}@example.test`;
 }
 
 
+// === review: only tax documents count toward the figures that are filed ====
+//
+// Every report added up every invoice and bill in the range whatever its state,
+// so a cancelled invoice stayed in GSTR-1, a cancelled bill stayed in GSTR-3B as
+// input credit, and a credit note ADDED to the liability it exists to reduce.
+{
+  const td = await register("taxdocs");
+  const T = { token: td.token };
+  await call("PATCH", "/business", { ...T, body: { stateCode: "29" } });
+  const mk = (extra, unitPrice = 1000, date = "2026-08-10") => call("POST", "/invoices", {
+    ...T, body: { invoiceDate: date, customerName: "C", placeOfSupply: "29",
+      items: [{ description: "x", quantity: 1, unitPrice, gstRate: 18 }], ...extra },
+  });
+
+  const kept = (await mk({})).data.invoice;                          // 1000 + 180 = 1180
+  const cancelled = (await mk({})).data.invoice;                     // cancelled below
+  await mk({ type: "Proforma Invoice" });                            // not a supply
+  await mk({ type: "Credit Note" }, 200);                            // 200 + 36 = 236, subtracts
+  await call("PATCH", `/invoices/${cancelled.id}/status`, { ...T, body: { status: "cancelled" } });
+
+  const bad = await mk({ type: "Whatever I like" });
+  check("tax-docs", "an invoice type outside the known set is refused", bad.status === 400, `status ${bad.status}`);
+
+  const g1 = (await call("GET", "/reports/gstr1?month=8&year=2026", T)).data;
+  check("tax-docs", "GSTR-1 leaves out the cancelled invoice and the proforma",
+    g1.totalInvoices === 2, `${g1.totalInvoices} invoices`);
+  check("tax-docs", "and nets the credit note against the sale",
+    g1.totalTaxable === 800 && g1.totalCgst === 72 && g1.totalSgst === 72 && g1.totalAmount === 944,
+    `taxable ${g1.totalTaxable} cgst ${g1.totalCgst} sgst ${g1.totalSgst} total ${g1.totalAmount}`);
+
+  const g3 = (await call("GET", "/reports/gstr3b?month=8&year=2026", T)).data;
+  check("tax-docs", "GSTR-3B output tax is the same netted figure",
+    g3.outwardTaxable === 800 && g3.outwardCgst === 72 && g3.outwardSgst === 72,
+    `taxable ${g3.outwardTaxable} cgst ${g3.outwardCgst}`);
+
+  const sales = (await call("GET", "/reports/sales?fromDate=2026-08-01&toDate=2026-08-31", T)).data;
+  check("tax-docs", "the sales report agrees",
+    sales.totalSales === 944 && sales.totalGst === 144 && sales.invoiceCount === 2,
+    `sales ${sales.totalSales} gst ${sales.totalGst} count ${sales.invoiceCount}`);
+
+  const stats = (await call("GET", "/dashboard/stats", T)).data;
+  check("tax-docs", "and so does the dashboard",
+    stats.totalSales === 944 && stats.totalGstPayable === 144, `sales ${stats.totalSales} payable ${stats.totalGstPayable}`);
+  check("tax-docs", "what is outstanding is the sale alone — not a credit note, proforma or cancelled invoice",
+    stats.totalOutstanding === 1180, String(stats.totalOutstanding));
+
+  // Part-payment reduces what is outstanding; it used to be ignored entirely
+  // because only status 'unpaid' was counted.
+  await call("PATCH", `/invoices/${kept.id}/status`, { ...T, body: { paymentStatus: "partial", paidAmount: 400 } });
+  const afterPart = (await call("GET", "/dashboard/stats", T)).data;
+  check("tax-docs", "a part-payment reduces the outstanding balance",
+    afterPart.totalOutstanding === 780, String(afterPart.totalOutstanding));
+
+  // An HSN code is caller-supplied text; some spellings are members of
+  // Object.prototype, and used as object keys they broke the whole report.
+  await mk({ items: [
+    { description: "p", quantity: 1, unitPrice: 100, gstRate: 18, hsnCode: "constructor" },
+    { description: "q", quantity: 1, unitPrice: 100, gstRate: 18, hsnCode: "__proto__" },
+  ] }, 100, "2026-07-10");
+  const hsn = await call("GET", "/reports/hsn?month=7&year=2026", T);
+  check("tax-docs", "an HSN code named after an object member does not break the report",
+    hsn.status === 200 && hsn.data.items?.some((i) => i.hsnCode === "constructor"),
+    `status ${hsn.status}`);
+
+  // The buy side: a cancelled bill is not input credit, and its goods go back.
+  const vendor = (await call("POST", "/vendors", { ...T, body: { name: "TD Vendor", gstin: "29TDTDT0000T1Z5" } })).data;
+  const bill = (p) => call("POST", "/purchases", { ...T, body: { vendorId: vendor.id, billDate: "2026-08-12",
+    items: [{ description: "Bought Thing", quantity: 10, unitPrice: 500, gstRate: 18 }], ...p } });
+  const b1 = (await bill({})).data;
+  const b2 = (await bill({})).data;                                   // 500 * 10 = 5000, gst 900
+  const bizId = sqlValue(`SELECT id FROM businesses WHERE user_id = ${td.userId}`);
+  const thingStock = () => Number(sqlValue(`SELECT stock_quantity FROM products WHERE business_id=${bizId} AND name='Bought Thing'`));
+  check("tax-docs", "two bills of 10 leave 20 in stock", thingStock() === 20, String(thingStock()));
+
+  await call("PATCH", `/purchases/${b2.id}`, { ...T, body: { paymentStatus: "cancelled" } });
+  check("tax-docs", "cancelling a bill returns its goods", thingStock() === 10, String(thingStock()));
+  const g3b = (await call("GET", "/reports/gstr3b?month=8&year=2026", T)).data;
+  check("tax-docs", "and removes its input credit from GSTR-3B",
+    g3b.inputCgst === 450 && g3b.inputSgst === 450, `cgst ${g3b.inputCgst} sgst ${g3b.inputSgst}`);
+
+  const again = await call("PATCH", `/purchases/${b2.id}`, { ...T, body: { paymentStatus: "cancelled" } });
+  check("tax-docs", "a cancelled bill is final", again.status === 409, `status ${again.status}`);
+  check("tax-docs", "and a second cancel does not return the goods twice", thingStock() === 10, String(thingStock()));
+  const revive = await call("PATCH", `/purchases/${b2.id}`, { ...T, body: { paymentStatus: "unpaid" } });
+  check("tax-docs", "it cannot be revived", revive.status === 409, `status ${revive.status}`);
+  void b1;
+}
+
+// === review: an invoice and its payments cannot disagree ===================
+//
+// `paidAmount` was accepted up to 1e12 whatever the invoice totalled; lowering
+// it and cancelling left the receipts behind; two concurrent "mark paid" calls
+// each wrote a receipt; and POST /payments never touched the invoice it named.
+{
+  const lg = await register("ledger");
+  const T = { token: lg.token };
+  await call("PATCH", "/business", { ...T, body: { stateCode: "29" } });
+  const mk = (unitPrice = 1000) => call("POST", "/invoices", { ...T, body: {
+    invoiceDate: "2026-08-10", customerName: "C", placeOfSupply: "29",
+    items: [{ description: "x", quantity: 1, unitPrice, gstRate: 18 }] } });
+  const status = (id, body) => call("PATCH", `/invoices/${id}/status`, { ...T, body });
+  const ledger = (id) => Number(sqlValue(
+    `SELECT coalesce(sum(CASE WHEN type IN ('received','in') THEN amount ELSE -amount END), 0)
+       FROM payments WHERE invoice_id = ${id}`));
+
+  const inv = (await mk()).data.invoice;                              // 1180
+  const part = await status(inv.id, { paymentStatus: "partial", paidAmount: 400 });
+  check("ledger", "a part-payment is 'partial' with the balance still due",
+    part.data.status === "partial" && part.data.paidAmount === 400 && part.data.balanceDue === 780,
+    JSON.stringify([part.data.status, part.data.paidAmount, part.data.balanceDue]));
+
+  const over = await status(inv.id, { paidAmount: 5000 });
+  check("ledger", "paying more than the invoice total is refused", over.status === 409, `status ${over.status}`);
+  const mismatch = await status(inv.id, { paymentStatus: "paid", paidAmount: 500 });
+  check("ledger", "a status that contradicts the amount is refused", mismatch.status === 400, `status ${mismatch.status}`);
+  const noAmount = await status((await mk()).data.invoice.id, { paymentStatus: "partial" });
+  check("ledger", "'partial' with no amount is refused rather than guessed", noAmount.status === 400, `status ${noAmount.status}`);
+
+  const edit = await call("PATCH", `/invoices/${inv.id}`, { ...T, body: {
+    items: [{ description: "x", quantity: 1, unitPrice: 1, gstRate: 18 }] } });
+  check("ledger", "the figures of an invoice with payments cannot be edited", edit.status === 409, `status ${edit.status}`);
+  const note = await call("PATCH", `/invoices/${inv.id}`, { ...T, body: { notes: "call on Monday" } });
+  check("ledger", "but its notes can", note.status === 200, `status ${note.status}`);
+
+  const pay = (body) => call("POST", "/payments", { ...T, body: {
+    type: "received", date: "2026-08-11", mode: "upi", invoiceId: inv.id, ...body } });
+  const rest = await pay({ amount: 780 });
+  check("ledger", "a payment naming the invoice is applied to it", rest.status === 201, `status ${rest.status}`);
+  const settled = (await call("GET", `/invoices/${inv.id}`, T)).data;
+  check("ledger", "which settles it", settled.status === "paid" && settled.balanceDue === 0,
+    `${settled.status} due ${settled.balanceDue}`);
+  check("ledger", "and the receipts add up to what the invoice says was paid",
+    ledger(inv.id) === settled.paidAmount, `${ledger(inv.id)} vs ${settled.paidAmount}`);
+
+  check("ledger", "a payment past the total is refused", (await pay({ amount: 1 })).status === 409);
+  check("ledger", "a negative amount is refused", (await pay({ amount: -5 })).status === 400);
+  check("ledger", "and so is zero", (await pay({ amount: 0 })).status === 400);
+  check("ledger", "money going out cannot be a receipt against an invoice",
+    (await pay({ amount: 5, type: "paid" })).status === 400);
+  check("ledger", "an unknown payment type is refused", (await pay({ amount: 5, type: "gift" })).status === 400);
+
+  // Undoing a payment records a reversal; the receipt is not deleted.
+  const reverted = await status(inv.id, { paymentStatus: "unpaid" });
+  check("ledger", "marking a paid invoice unpaid clears what was paid",
+    reverted.data.status === "unpaid" && reverted.data.paidAmount === 0, JSON.stringify(reverted.data.status));
+  check("ledger", "by recording a reversal rather than deleting the receipts",
+    Number(sqlValue(`SELECT count(*) FROM payments WHERE invoice_id=${inv.id} AND type='paid'`)) === 1 &&
+    Number(sqlValue(`SELECT count(*) FROM payments WHERE invoice_id=${inv.id} AND type='received'`)) === 2);
+  check("ledger", "so the ledger still nets to the invoice", ledger(inv.id) === 0, String(ledger(inv.id)));
+
+  // Two people marking the same invoice paid at once: one receipt, not two.
+  const twice = (await mk()).data.invoice;
+  await Promise.all([status(twice.id, { paymentStatus: "paid" }), status(twice.id, { paymentStatus: "paid" })]);
+  check("ledger", "concurrent 'mark paid' requests record one receipt",
+    Number(sqlValue(`SELECT count(*) FROM payments WHERE invoice_id=${twice.id} AND type='received'`)) === 1 &&
+    ledger(twice.id) === 1180, `${sqlValue(`SELECT count(*) FROM payments WHERE invoice_id=${twice.id}`)} rows, ledger ${ledger(twice.id)}`);
+
+  // Cancelling reverses what was received, and is final.
+  const c = (await mk()).data.invoice;
+  await status(c.id, { paidAmount: 500 });
+  const cancelled = await status(c.id, { status: "cancelled" });
+  check("ledger", "cancelling a part-paid invoice clears it",
+    cancelled.data.status === "cancelled" && cancelled.data.paidAmount === 0, JSON.stringify(cancelled.data.status));
+  check("ledger", "and reverses the receipt in the ledger", ledger(c.id) === 0, String(ledger(c.id)));
+  check("ledger", "a cancelled invoice cannot be edited",
+    (await call("PATCH", `/invoices/${c.id}`, { ...T, body: { notes: "x" } })).status === 409);
+  check("ledger", "or paid", (await status(c.id, { paymentStatus: "paid" })).status === 409);
+  check("ledger", "or paid through the payments endpoint",
+    (await call("POST", "/payments", { ...T, body: { type: "received", amount: 5, date: "2026-08-11",
+      mode: "cash", invoiceId: c.id } })).status === 409);
+  check("ledger", "or deleted", (await call("DELETE", `/invoices/${c.id}`, T)).status === 409);
+  check("ledger", "and an unpaid one cannot be deleted either",
+    (await call("DELETE", `/invoices/${(await mk()).data.invoice.id}`, T)).status === 409);
+}
+
+// === review: concurrent stock movements are not lost =======================
+//
+// Stock was read, adjusted in JavaScript and written back as an absolute value,
+// so two invoices raised together both started from the same quantity and the
+// last write won: goods were sold twice and stock fell once.
+{
+  const sr = await register("stockrace");
+  const T = { token: sr.token };
+  await call("PATCH", "/business", { ...T, body: { stateCode: "29" } });
+  const bizId = sqlValue(`SELECT id FROM businesses WHERE user_id = ${sr.userId}`);
+  const prod = (await call("POST", "/products", { ...T,
+    body: { name: "Raced", unit: "Nos", sellingPrice: 10, gstRate: 18, stockQuantity: 1000 } })).data;
+
+  const line = (quantity) => [{ productId: prod.id, description: "Raced", quantity, unitPrice: 10, gstRate: 18 }];
+  const stockOf = () => Number(sqlValue(`SELECT stock_quantity FROM products WHERE business_id=${bizId} AND name='Raced'`));
+
+  // Raising invoices is already serialised by the number allocation, which locks
+  // one row until the request ends — so creation alone cannot show the race.
+  // Editing does not allocate a number, so edits are what run truly in parallel.
+  const created = [];
+  for (let i = 0; i < 10; i++) {
+    created.push((await call("POST", "/invoices", { ...T, body: {
+      invoiceDate: "2026-08-10", customerName: "C", placeOfSupply: "29", items: line(1) } })).data.invoice);
+  }
+  check("stock-race", "ten sales of 1 leave 990", stockOf() === 990, `stock ${stockOf()}`);
+
+  const edits = await Promise.all(created.map((inv) =>
+    call("PATCH", `/invoices/${inv.id}`, { ...T, body: { items: line(6) } })));
+  check("stock-race", "ten concurrent edits from 1 to 6 all succeed", edits.every((r) => r.status === 200),
+    edits.map((r) => r.status).join(","));
+  check("stock-race", "and stock falls by exactly the 50 they added", stockOf() === 940, `stock ${stockOf()}`);
+}
+
+// === review: e-way bills are bounded ========================================
+{
+  const ew = await register("ewaylimits");
+  const T = { token: ew.token };
+  const bill = (items) => call("POST", "/eway-bills", { ...T, body: { docNo: "D1", docDate: "2026-08-10", items } });
+
+  const big = await bill(Array.from({ length: 300 }, (_, i) => ({ n: i, note: "x".repeat(1000) })));
+  check("eway", "a bill carrying far more line data than any bill needs is refused",
+    big.status === 400, `status ${big.status}`);
+  const fine = await bill([{ description: "goods", qty: 1 }]);
+  check("eway", "an ordinary bill is accepted", fine.status === 201, `status ${fine.status}`);
+
+  const list = await call("GET", "/eway-bills", T);
+  check("eway", "the list reports a total alongside the page",
+    Array.isArray(list.data.bills) && list.data.total === 1, JSON.stringify(list.data).slice(0, 80));
+  check("eway", "and the page size is capped",
+    (await call("GET", "/eway-bills?limit=100000", T)).status === 400);
+}
+
+// === review: an authenticated caller cannot flood the API ==================
+//
+// Nothing throttled an authenticated tenant, so a registered account could
+// script writes without limit. The ceiling is per business: one tenant is one
+// tenant however many addresses it uses.
+{
+  const fl = await register("flooder");
+  const other = await register("bystander");
+  const write = () => call("PATCH", "/business", { token: fl.token, body: { stateCode: "29" } });
+
+  const codes = [];
+  for (let batch = 0; batch < 8; batch++) {
+    codes.push(...(await Promise.all(Array.from({ length: 40 }, write))).map((r) => r.status));
+  }
+  const accepted = codes.filter((c) => c === 200).length;
+  const throttled = codes.filter((c) => c === 429).length;
+  check("flood", "writes past the ceiling are throttled", throttled > 0, `${accepted} accepted, ${throttled} throttled`);
+  check("flood", "after roughly the documented 300 a minute", accepted >= 250 && accepted <= 310, `${accepted} accepted`);
+
+  const throttledRead = await call("GET", "/customers", { token: fl.token });
+  check("flood", "reads have their own, much larger budget", throttledRead.status === 200, `status ${throttledRead.status}`);
+  const bystander = await call("PATCH", "/business", { token: other.token, body: { stateCode: "29" } });
+  check("flood", "another business is unaffected", bystander.status === 200, `status ${bystander.status}`);
+}
+
+
 // === F-14: registration tells you nothing about an address =================
 //
 // The endpoint used to answer 400 "Email already registered" for a taken
@@ -889,9 +1161,10 @@ const adminEmail = `admin${uniq}@example.test`;
 {
   const stamp = Date.now();
   const submit = (email) => call("POST", "/auth/register", {
-    body: { name: "Probe", email, password: PASSWORD,
+    body: { name: "Probe", email,
             businessName: "Probe Traders", gstin: "27AAAAA0000A1Z5" },
   });
+  const verifyWith = (token) => call("POST", "/auth/verify-registration", { body: { token, password: PASSWORD } });
 
   // An address nobody has registered.
   const freeEmail = `f14free${stamp}@example.test`;
@@ -929,19 +1202,18 @@ const adminEmail = `admin${uniq}@example.test`;
 
   // The link is what creates the account.
   const token = verificationToken(freeEmail);
-  const verified = await call("POST", "/auth/verify-registration", { body: { token } });
+  const verified = await verifyWith(token);
   check("F-14", "opening the link creates the account", verified.status === 201, `status ${verified.status}`);
   check("F-14", "and signs the person in", Boolean(verified.data?.token));
   check("F-14", "with the business it was submitted with",
     verified.data?.user?.businessId > 0, String(verified.data?.user?.businessId));
 
-  const replay = await call("POST", "/auth/verify-registration", { body: { token } });
+  const replay = await verifyWith(token);
   check("F-14", "the link works exactly once", replay.status === 400, `status ${replay.status}`);
   check("F-14", "spent pending rows are cleared",
     sqlValue(`SELECT count(*) FROM pending_registrations WHERE email = '${freeEmail}'`) === "0");
 
-  const forged = await call("POST", "/auth/verify-registration",
-    { body: { token: "not-a-real-token-at-all-0000000000" } });
+  const forged = await verifyWith("not-a-real-token-at-all-0000000000");
   check("F-14", "an unknown token is refused", forged.status === 400, `status ${forged.status}`);
   check("F-14", "and is refused in the same words as a spent one",
     forged.data?.error === replay.data?.error,
@@ -952,7 +1224,7 @@ const adminEmail = `admin${uniq}@example.test`;
   await submit(staleEmail);
   const staleToken = verificationToken(staleEmail);
   sqlExec(`UPDATE pending_registrations SET expires_at = now() - interval '1 hour' WHERE email = '${staleEmail}'`);
-  const expired = await call("POST", "/auth/verify-registration", { body: { token: staleToken } });
+  const expired = await verifyWith(staleToken);
   check("F-14", "an expired link is refused", expired.status === 400, `status ${expired.status}`);
   check("F-14", "and the account was never created",
     sqlValue(`SELECT count(*) FROM users WHERE email = '${staleEmail}'`) === "0");
@@ -965,9 +1237,9 @@ const adminEmail = `admin${uniq}@example.test`;
   const secondToken = verificationToken(raceEmail);
   check("F-14", "a second submission for the same address is accepted",
     firstToken !== secondToken && Boolean(secondToken));
-  const winner = await call("POST", "/auth/verify-registration", { body: { token: secondToken } });
+  const winner = await verifyWith(secondToken);
   check("F-14", "the link that is opened creates the account", winner.status === 201, `status ${winner.status}`);
-  const loser = await call("POST", "/auth/verify-registration", { body: { token: firstToken } });
+  const loser = await verifyWith(firstToken);
   check("F-14", "the other link is spent with it, not left live",
     loser.status === 400, `status ${loser.status}`);
   check("F-14", "exactly one account exists for the address",
@@ -1019,7 +1291,7 @@ const adminEmail = `admin${uniq}@example.test`;
   const stamp = Date.now();
   const submit = (email, ip) => call("POST", "/auth/register", {
     headers: ip ? { "x-forwarded-for": ip } : undefined,
-    body: { name: "Probe", email, password: PASSWORD, businessName: "Probe Traders" },
+    body: { name: "Probe", email, businessName: "Probe Traders" },
   });
   const login = (email) => call("POST", "/auth/login", {
     headers: { "x-forwarded-for": "192.0.2.50" },
@@ -1083,6 +1355,88 @@ const adminEmail = `admin${uniq}@example.test`;
 }
 
 
+// === review: the password is chosen by whoever proves the mailbox ==========
+//
+// It used to be chosen by whoever submitted the form. Submit a victim's address
+// with a password you know, and when they open the link they are signed in to an
+// account whose password you also hold.
+{
+  const stamp = Date.now();
+  const victim = `prehijack${stamp}@example.test`;
+  const ATTACKER_PW = "attacker-picked-passphrase-1";
+  const VICTIM_PW = "victim-chose-this-one-2026";
+  const login = (password) => call("POST", "/auth/login", { body: { email: victim, password } });
+
+  const submitted = await call("POST", "/auth/register", {
+    body: { name: "Vic", email: victim, password: ATTACKER_PW, businessName: "V Ltd" },
+  });
+  check("prehijack", "a submission naming the victim's address is accepted", submitted.status === 202, `status ${submitted.status}`);
+  check("prehijack", "and nothing the submitter chose as a password is kept",
+    sqlValue(`SELECT count(*) FROM information_schema.columns
+              WHERE table_name = 'pending_registrations' AND column_name = 'password_hash'`) === "0");
+
+  const opened = await call("POST", "/auth/verify-registration", {
+    body: { token: verificationToken(victim), password: VICTIM_PW },
+  });
+  check("prehijack", "the victim opens the link and chooses their own password", opened.status === 201, `status ${opened.status}`);
+  check("prehijack", "the password the attacker submitted does not work",
+    (await login(ATTACKER_PW)).status === 401);
+  check("prehijack", "the one the victim chose does", (await login(VICTIM_PW)).status === 200);
+}
+
+// === review: a stranger's name cannot forge the body of our email ==========
+{
+  const stamp = Date.now();
+  const target = `mailinject${stamp}@example.test`;
+  await call("POST", "/auth/register", {
+    body: { name: "Eve\r\n\r\nYour account is suspended - call +91 99999 99999\r\nBcc: someone@else.test",
+            email: target, businessName: "E Ltd" },
+  });
+  const message = outbox().filter((m) => m.to === target).at(-1);
+  const lines = (message?.text ?? "").split("\n");
+  check("mail-injection", "the greeting stays on a single line",
+    lines[0]?.startsWith("Hello Eve") && lines[0].endsWith(",") && lines[1] === "", lines.slice(0, 2).join(" | "));
+  check("mail-injection", "no carriage return survives into the message", !/\r/.test(message?.text ?? ""));
+  check("mail-injection", "and the message still carries the verification link",
+    /verify\?token=/.test(message?.text ?? ""));
+}
+
+// === review: a page on another site cannot sign a visitor in ================
+//
+// CORS decides who may *read* a response, not whether the request is sent, and
+// the CSRF token only protects a request that already carries a session. So a
+// hostile page could submit a form to /auth/login and have the visitor's browser
+// sign in to the attacker's account.
+{
+  const victim = await register("logincsrf");
+  const creds = { email: victim.email, password: PASSWORD };
+  const post = (headers, body) => fetch(`${B}/auth/login`, { method: "POST", headers, body });
+  const json = { "content-type": "application/json" };
+  const hasSession = (res) => (res.headers.getSetCookie?.() ?? []).some((c) => c.startsWith("gst_session="));
+
+  const foreign = await post({ ...json, origin: "https://evil.example" }, JSON.stringify(creds));
+  check("login-csrf", "a login submitted from a foreign origin is refused", foreign.status === 403, `status ${foreign.status}`);
+  check("login-csrf", "and issues no session", !hasSession(foreign));
+
+  const opaque = await post({ ...json, origin: "null" }, JSON.stringify(creds));
+  check("login-csrf", "so is one from an opaque origin", opaque.status === 403, `status ${opaque.status}`);
+
+  const own = await post({ ...json, origin: "http://localhost:25512" }, JSON.stringify(creds));
+  check("login-csrf", "the app's own origin still signs in", own.status === 200 && hasSession(own), `status ${own.status}`);
+  const native = await post(json, JSON.stringify(creds));
+  check("login-csrf", "as does a client that sends no origin at all", native.status === 200, `status ${native.status}`);
+
+  const form = await post({ "content-type": "application/x-www-form-urlencoded" }, new URLSearchParams(creds));
+  check("login-csrf", "a plain HTML form post is not accepted as a login", form.status === 400 && !hasSession(form),
+    `status ${form.status}`);
+
+  const evilRegister = await fetch(`${B}/auth/register`, { method: "POST",
+    headers: { ...json, origin: "https://evil.example" },
+    body: JSON.stringify({ name: "X", email: `csrf${Date.now()}@example.test`, businessName: "X" }) });
+  check("login-csrf", "registration from a foreign origin is refused too", evilRegister.status === 403,
+    `status ${evilRegister.status}`);
+}
+
 // === F-09: cookie session, CSRF, security headers ==========================
 {
   const jar = newJar();
@@ -1140,13 +1494,20 @@ const adminEmail = `admin${uniq}@example.test`;
     ["a top-of-the-list password", "password123"],
     ["a single repeated character", "aaaaaaaaaaaaaaaa"],
   ];
+  // The password is chosen when the emailed link is opened, so that is where
+  // the policy is enforced — and a refusal must not spend the link.
+  const weakEmail = `weak${Math.random().toString(36).slice(2)}@example.test`;
+  await call("POST", "/auth/register", { body: { name: "W", email: weakEmail, businessName: "W Ltd" } });
+  const weakToken = verificationToken(weakEmail);
   for (const [label, pw] of weak) {
-    const r = await call("POST", "/auth/register", {
-      body: { name: "W", email: `weak${Math.random().toString(36).slice(2)}@example.test`,
-              password: pw, businessName: "W Ltd" },
-    });
+    const r = await call("POST", "/auth/verify-registration", { body: { token: weakToken, password: pw } });
     check("F-12", `${label} is rejected`, r.status === 400, `status ${r.status}`);
   }
+  const noPassword = await call("POST", "/auth/verify-registration", { body: { token: weakToken } });
+  check("F-12", "a link opened with no password is refused", noPassword.status === 400, `status ${noPassword.status}`);
+  const stillGood = await call("POST", "/auth/verify-registration", { body: { token: weakToken, password: PASSWORD } });
+  check("F-12", "and refusals do not spend the link: a good password still works on it",
+    stillGood.status === 201, `status ${stillGood.status}`);
 
   const jar = newJar();
   await call("GET", "/healthz", { jar });
@@ -1313,11 +1674,14 @@ const adminEmail = `admin${uniq}@example.test`;
   check("numbering", "April opens a fresh series",
     apr.invoiceNumber.includes("2027-28") && apr.invoiceNumber.endsWith("0001"), apr.invoiceNumber);
 
-  // Deleting must not free a number for reuse.
-  await call("DELETE", `/invoices/${b.id}`, { token: biz.token });
-  const afterDelete = (await mk("2026-07-01")).data.invoice;
-  check("numbering", "a deleted invoice's number is never reissued",
-    afterDelete.invoiceNumber.endsWith("0004"), `${b.invoiceNumber} deleted, next is ${afterDelete.invoiceNumber}`);
+  // Cancelling must not free a number for reuse, and deleting is refused so the
+  // series never has a hole in it.
+  const del = await call("DELETE", `/invoices/${b.id}`, { token: biz.token });
+  check("numbering", "an issued invoice cannot be deleted", del.status === 409, `status ${del.status}`);
+  await call("PATCH", `/invoices/${b.id}/status`, { token: biz.token, body: { status: "cancelled" } });
+  const afterCancel = (await mk("2026-07-01")).data.invoice;
+  check("numbering", "a cancelled invoice's number is never reissued",
+    afterCancel.invoiceNumber.endsWith("0004"), `${b.invoiceNumber} cancelled, next is ${afterCancel.invoiceNumber}`);
 
   // Concurrency: the old COUNT(*)+1 handed every concurrent caller the same number.
   const burst = await Promise.all(Array.from({ length: 12 }, () => mk("2026-08-15")));

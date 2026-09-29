@@ -5,10 +5,12 @@
  * GST Billing & Inventory Management Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { InvoiceInputType } from './invoiceInputType';
 import type { InvoiceItem } from './invoiceItem';
 
 export interface InvoiceInput {
-  type?: string;
+  /** Reports treat the types differently: a credit note subtracts from sales and tax, and a proforma invoice is not a tax document and is left out. Defaults to a tax invoice. */
+  type?: InvoiceInputType;
   /** Omit for a walk-in customer and send `customerName` instead. The id must belong to the caller's own business. */
   customerId?: number;
   /** Required when `customerId` is omitted. */

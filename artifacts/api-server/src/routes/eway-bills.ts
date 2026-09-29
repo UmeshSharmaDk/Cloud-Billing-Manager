@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { db, ewayBillsTable, businessesTable, invoicesTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, count } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { dec, toColumn, toJson } from "../lib/money";
-import { validateBody, validateParams } from "../middleware/validate";
-import { CreateEwayBillBody, UpdateEwayBillBody, IdParam } from "../schemas";
+import { validateBody, validateParams, validateQuery } from "../middleware/validate";
+import { CreateEwayBillBody, UpdateEwayBillBody, ListEwayBillsQuery, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 
 const router = Router();
@@ -30,12 +30,19 @@ function mapBill(b: any) {
   };
 }
 
-router.get("/", requireAuth, requireBusiness, async (req: Req, res) => {
+router.get("/", requireAuth, requireBusiness, validateQuery(ListEwayBillsQuery), async (req: Req, res) => {
   const businessId = req.businessId;
+  const { page, limit } = req.validatedQuery;
+  // This was the one list endpoint with no page or limit: every bill a tenant
+  // had ever created, each carrying up to 500 line records, built in memory and
+  // serialised in one response.
   const bills = await db.select().from(ewayBillsTable)
     .where(eq(ewayBillsTable.businessId, businessId))
-    .orderBy(desc(ewayBillsTable.createdAt));
-  return res.json({ bills: bills.map(mapBill) });
+    .orderBy(desc(ewayBillsTable.createdAt))
+    .limit(limit).offset((page - 1) * limit);
+  const [{ count: total }] = await db.select({ count: count() }).from(ewayBillsTable)
+    .where(eq(ewayBillsTable.businessId, businessId));
+  return res.json({ bills: bills.map(mapBill), total: Number(total) });
 });
 
 router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody), async (req: Req, res) => {

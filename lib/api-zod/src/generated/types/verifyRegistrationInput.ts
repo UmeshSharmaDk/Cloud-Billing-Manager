@@ -13,4 +13,10 @@ export interface VerifyRegistrationInput {
      * @maxLength 512
      */
   token: string;
+  /**
+     * The password for the new account, chosen by whoever opens the link. It is not collected at registration: a password chosen by whoever submitted the form could be known to someone who does not control the mailbox.
+     * @minLength 12
+     * @maxLength 128
+     */
+  password: string;
 }

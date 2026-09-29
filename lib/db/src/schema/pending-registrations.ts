@@ -26,8 +26,12 @@ export const pendingRegistrationsTable = pgTable(
     tokenHash: text("token_hash").notNull().unique(),
     email: text("email").notNull(),
     name: text("name").notNull(),
-    /** Already hashed with Argon2 — the plaintext never reaches this table. */
-    passwordHash: text("password_hash").notNull(),
+    // There is deliberately no password here. It used to be chosen by whoever
+    // submitted the form and stored (hashed) until the link was opened, so anyone
+    // could submit a victim's address with a password they knew — and when the
+    // victim, unsuspecting, opened the emailed link, the account they were signed
+    // in to had a password the attacker also held. The password is now chosen by
+    // whoever opens the link, at the moment they prove they control the mailbox.
     businessName: text("business_name").notNull(),
     gstin: text("gstin"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),

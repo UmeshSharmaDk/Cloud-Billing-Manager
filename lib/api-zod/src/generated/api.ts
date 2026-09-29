@@ -65,7 +65,6 @@ export const ChangePasswordResponse = zod.object({
 export const RegisterBody = zod.object({
   "name": zod.string(),
   "email": zod.string(),
-  "password": zod.string(),
   "businessName": zod.string(),
   "gstin": zod.string().nullish()
 })
@@ -76,10 +75,14 @@ export const RegisterBody = zod.object({
  */
 export const verifyRegistrationBodyTokenMax = 512;
 
+export const verifyRegistrationBodyPasswordMin = 12;
+export const verifyRegistrationBodyPasswordMax = 128;
+
 
 
 export const VerifyRegistrationBody = zod.object({
-  "token": zod.string().min(1).max(verifyRegistrationBodyTokenMax).describe('The single-use token from the verification link.')
+  "token": zod.string().min(1).max(verifyRegistrationBodyTokenMax).describe('The single-use token from the verification link.'),
+  "password": zod.string().min(verifyRegistrationBodyPasswordMin).max(verifyRegistrationBodyPasswordMax).describe('The password for the new account, chosen by whoever opens the link. It is not collected at registration: a password chosen by whoever submitted the form could be known to someone who does not control the mailbox.')
 })
 
 
@@ -722,7 +725,7 @@ export const ListInvoicesResponse = zod.object({
  * @summary Create invoice
  */
 export const CreateInvoiceBody = zod.object({
-  "type": zod.string().optional(),
+  "type": zod.enum(['Tax Invoice', 'Bill of Supply', 'Proforma Invoice', 'Credit Note', 'Debit Note']).optional().describe('Reports treat the types differently: a credit note subtracts from sales and tax, and a proforma invoice is not a tax document and is left out. Defaults to a tax invoice.'),
   "customerId": zod.number().optional().describe('Omit for a walk-in customer and send `customerName` instead. The id must belong to the caller\'s own business.'),
   "customerName": zod.string().optional().describe('Required when `customerId` is omitted.'),
   "customerGstin": zod.string().nullish(),
@@ -810,7 +813,7 @@ export const UpdateInvoiceParams = zod.object({
 })
 
 export const UpdateInvoiceBody = zod.object({
-  "type": zod.string().optional(),
+  "type": zod.enum(['Tax Invoice', 'Bill of Supply', 'Proforma Invoice', 'Credit Note', 'Debit Note']).optional(),
   "customerId": zod.number().optional(),
   "invoiceDate": zod.string().optional(),
   "dueDate": zod.string().nullish(),
@@ -881,7 +884,8 @@ export const UpdateInvoiceResponse = zod.object({
 
 
 /**
- * @summary Delete invoice
+ * An issued invoice is never deleted: its number comes from a gapless statutory series and removing it leaves a hole in the series. Cancel it with `PATCH /invoices/{id}/status` instead, which keeps the number, takes the invoice out of every total and returns its goods to stock.
+ * @summary Delete invoice (always refused; cancel it instead)
  */
 export const DeleteInvoiceParams = zod.object({
   "id": zod.coerce.number()
@@ -889,6 +893,7 @@ export const DeleteInvoiceParams = zod.object({
 
 
 /**
+ * Changes what has been paid on an invoice, or cancels it. The status is derived from the amount, not taken on trust: `paid` settles the balance, `unpaid` reverses whatever was paid, and `partial` needs `paidAmount`. Every change is recorded in the payments ledger, and lowering what was paid records a reversal rather than deleting the receipt. Cancelling reverses any receipts, returns the goods to stock and is final.
  * @summary Update invoice payment status
  */
 export const UpdateInvoiceStatusParams = zod.object({
@@ -898,7 +903,7 @@ export const UpdateInvoiceStatusParams = zod.object({
 export const UpdateInvoiceStatusBody = zod.object({
   "status": zod.enum(['paid', 'unpaid', 'partial', 'cancelled']).optional(),
   "paymentStatus": zod.enum(['paid', 'unpaid', 'partial', 'cancelled']).optional().describe('Alias for `status`; whichever is present is used.'),
-  "paidAmount": zod.number().nullish()
+  "paidAmount": zod.number().nullish().describe('The total paid so far, between zero and the invoice\'s grand total. It is not added to what was already paid.')
 })
 
 export const UpdateInvoiceStatusResponse = zod.object({
@@ -1168,11 +1173,16 @@ export const ListPaymentsResponse = zod.object({
 
 
 /**
+ * A received payment that names an `invoiceId` is applied to that invoice in the same transaction: the invoice's paid amount and status move with it. Money going out cannot name an invoice.
  * @summary Create payment entry
  */
+export const createPaymentBodyAmountExclusiveMin = 0;
+
+
+
 export const CreatePaymentBody = zod.object({
-  "type": zod.string(),
-  "amount": zod.number(),
+  "type": zod.enum(['received', 'paid', 'in', 'out']),
+  "amount": zod.number().gt(createPaymentBodyAmountExclusiveMin).describe('Always positive; the direction is the `type`, not the sign.'),
   "date": zod.string(),
   "mode": zod.string(),
   "referenceNumber": zod.string().nullish(),

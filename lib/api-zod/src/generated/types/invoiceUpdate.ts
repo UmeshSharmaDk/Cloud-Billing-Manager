@@ -6,9 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { InvoiceItem } from './invoiceItem';
+import type { InvoiceUpdateType } from './invoiceUpdateType';
 
 export interface InvoiceUpdate {
-  type?: string;
+  type?: InvoiceUpdateType;
   customerId?: number;
   invoiceDate?: string;
   /** @nullable */

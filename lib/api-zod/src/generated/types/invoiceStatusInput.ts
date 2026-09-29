@@ -12,6 +12,9 @@ export interface InvoiceStatusInput {
   status?: InvoiceStatusInputStatus;
   /** Alias for `status`; whichever is present is used. */
   paymentStatus?: InvoiceStatusInputPaymentStatus;
-  /** @nullable */
+  /**
+     * The total paid so far, between zero and the invoice's grand total. It is not added to what was already paid.
+     * @nullable
+     */
   paidAmount?: number | null;
 }

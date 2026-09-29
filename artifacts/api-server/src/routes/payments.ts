@@ -2,7 +2,8 @@ import { Router } from "express";
 import { db, paymentsTable, invoicesTable, customersTable, vendorsTable } from "@workspace/db";
 import { eq, and, count, desc } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
-import { toColumn, toJson } from "../lib/money";
+import { dec, toColumn, toJson } from "../lib/money";
+import { settleInvoice } from "../lib/invoice-payments";
 import { validateBody, validateQuery } from "../middleware/validate";
 import { ListPaymentsQuery, CreatePaymentBody } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
@@ -38,7 +39,6 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListPaymentsQuery), 
 router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { type, amount, date, mode, referenceNumber, invoiceId, customerId, vendorId, notes } = req.body;
-  if (!type || !amount || !date || !mode) return res.status(400).json({ error: "Required fields missing" });
 
   // Each of these named a row by id and was stored unchecked, so a payment
   // could point at another tenant's invoice, customer or vendor. Zod proves
@@ -50,10 +50,35 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), 
   });
   if (!refs.ok) return res.status(400).json({ error: refs.error });
 
+  const resolvedInvoiceId: number | null = refs.ids["invoiceId"] ?? null;
+
+  // A payment that names an invoice is a receipt against it, so it has to move
+  // the invoice's own figures — it used to be stored beside the invoice and
+  // change nothing, leaving a receipt and a balance due that disagreed. It goes
+  // through the same path as marking an invoice paid: one locked transaction,
+  // refused if it would take the invoice past its total or the invoice is
+  // cancelled. Money going out cannot be a receipt against a sales invoice.
+  if (resolvedInvoiceId !== null) {
+    if (type !== "received" && type !== "in") {
+      return res.status(400).json({ error: "Only a received payment can be recorded against an invoice." });
+    }
+    const result = await db.transaction((tx) => settleInvoice(
+      tx, businessId, resolvedInvoiceId,
+      (invoice) => ({ target: dec(invoice.paidAmount).plus(dec(amount)) }),
+      {
+        type, date, mode, referenceNumber, notes,
+        customerId: refs.ids["customerId"] ?? undefined,
+        vendorId: refs.ids["vendorId"] ?? undefined,
+      },
+    ));
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    return res.status(201).json(mapPayment(result.payment));
+  }
+
   const [payment] = await db.insert(paymentsTable).values({
     businessId, type, amount: toColumn(amount), date, mode,
     referenceNumber, notes,
-    invoiceId: refs.ids["invoiceId"], customerId: refs.ids["customerId"], vendorId: refs.ids["vendorId"],
+    invoiceId: null, customerId: refs.ids["customerId"], vendorId: refs.ids["vendorId"],
   }).returning();
   return res.status(201).json(mapPayment(payment));
 });

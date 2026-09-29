@@ -677,6 +677,103 @@ policy, so it never needed one. The same burst now completes in about half a sec
 Covered by 13 new integration checks. Run against the previous code, 10 of them fail — including the
 21 × `500` burst — so they pin the defects rather than merely exercise the routes.
 
+### Eleven Medium findings — fixed
+
+From the same review. Each was reproduced or read out of the code before it was changed, and the
+integration suite now holds 295 checks. Against the previous code, over forty of the checks written for
+the reports, ledger, stock and limit fixes fail; the registration and CSRF checks cannot be run against it,
+because the flow they exercise no longer exists.
+
+**Reports counted documents that are not supplies.** Every GSTR-1, GSTR-3B, HSN, sales and dashboard
+figure added up every invoice and bill in the range whatever its state. A cancelled invoice stayed in
+outward tax, a cancelled purchase stayed in as input credit, and a *credit note added* to the liability
+it exists to reduce. Against seeded data the old code reported 5 invoices and ₹4,200 taxable where 2 and
+₹800 were right. `lib/tax-documents.ts` now holds the rule in one place: cancelled documents count for
+nothing, a proforma is not a tax document, a credit note is the negative of an invoice. Invoice `type`
+is an enum for that reason — a free string could say none of it. "Outstanding" is now the *balance* on
+unsettled invoices; it counted only status `unpaid`, at full value, so a part-payment changed nothing.
+An HSN code spelled `constructor` or `__proto__` resolved to a member of `Object.prototype` and broke
+the whole month's HSN report with a 500; the buckets are a `Map` now.
+
+**Invoices and their payments could disagree, and issued invoices could be rewritten.**
+`paidAmount` was accepted up to 1e12 whatever the invoice totalled; every rise wrote a receipt but a fall
+or a cancellation wrote nothing; two concurrent "mark paid" calls each wrote a receipt; and
+`POST /payments` never touched the invoice it named (it also accepted negative amounts and any `type`).
+All of it now goes through `lib/invoice-payments.ts`: one locked transaction, an amount held to 0..total,
+a status *derived* from the amount (a status that contradicts it is refused), and an append-only ledger —
+lowering what was paid records a reversal instead of deleting the receipt, so the ledger always nets to
+the invoice. Cancelling reverses the receipts, returns the goods to stock exactly once, and is final.
+The figures of an invoice with payments cannot be edited (notes and due date can), and **issued invoices
+can no longer be deleted**: the number comes from a gapless statutory series, so the row is cancelled
+instead. Purchase bills follow the same rule for cancellation.
+
+*Not done:* there is no filing lock. Nothing in the data says which month has been filed, so an *unpaid*
+invoice in a filed period can still be edited. That needs a period-close feature, not a check.
+
+**Stock updates were lost under concurrency.** Stock was read, adjusted in JavaScript and written back as
+an absolute value, so two edits touching one product both started from the same quantity and the last
+write won: ten concurrent edits that should have removed 50 units removed 10. It is an atomic
+`stock = stock + delta` now, in a fixed lock order. (Raising invoices is serialised by the number
+allocation, so creation alone never showed it.)
+
+**The registration password was chosen by whoever submitted the form.** Submit a victim's address with a
+password you know; when they open the emailed link they are signed in to an account whose password you
+also hold, and the account then fills with their invoices. The password is now chosen on the page the
+link opens, after the mailbox is proved; the pending row holds none (`password_hash` is dropped), and a
+refused password does not spend the link. With the hash gone the two registration paths no longer
+matched in cost, so both now run the same insert-then-one-more-write in one transaction (arm the row, or
+delete it): measured medians differ by under 1 ms with no consistent sign. The public request and
+response shapes changed — see the spec.
+
+**A stranger's name could forge the body of our email.** `name` went into the greeting verbatim and the
+mail goes to whatever address was typed, so newlines turned it into a forged paragraph from our domain.
+Control characters collapse to a space and the length is capped where it is interpolated.
+
+**A page on another site could sign a visitor in.** CORS decides who may *read* a response, not whether
+the request is sent, and the CSRF token protects only a request that already has a session. A hostile
+form posted to `/auth/login` signed the visitor in to the attacker's account. An `Origin` that is present
+and not on the allowlist is now refused on every state-changing request, and the urlencoded body parser
+is gone so a plain HTML form is not a valid request at all.
+
+**An authenticated tenant could flood the API.** Only `/auth/*` was limited. A registered business could
+script thousands of large writes (an e-way bill carries up to 500 free-form records), then list them
+all. Limits are per business — 300 writes and 1,200 reads a minute by default, `TENANT_WRITE_RATE_LIMIT_MAX`
+and `TENANT_READ_RATE_LIMIT_MAX` — applied before a database connection is taken. They live in process
+memory, so they bound each instance rather than the fleet: a ceiling, not a quota. E-way bill lists are
+paginated (up to 100 a page, which is also the default so the unpaginated page loses nothing) and one
+bill's line records are capped at 100 KB. *Not done:* per-tenant row quotas, which are a pricing decision.
+
+**Browser dependencies, the SPA's policy and the OCR assets** (changes made in `artifacts/gst-platform`,
+tooling and CI):
+
+- `xlsx` 0.18.5 has known prototype-pollution and ReDoS flaws and parsed any file a user picked. It is
+  0.20.3 now (installed from SheetJS's own registry, which is where fixed versions are published), with
+  a 10 MB cap on every import. Extracted text is byte-identical to the old library's on four fixtures.
+- The CI audit skipped every browser dependency because they were all `devDependencies`, so the claim in
+  the workflow that the production tree had none was empty. The packages the app ships are now
+  `dependencies`, which put a **high** advisory in `pdfjs-dist` (arbitrary JavaScript from a malicious
+  PDF) in view; it is bumped. A separate step fails if the installed `xlsx` is below 0.20.2, since
+  `pnpm audit` cannot see a tarball dependency. `qs` and `body-parser` are overridden past their fixes.
+- The SPA now has a Content-Security-Policy (`default-src 'self'`, scripts from self only). Tesseract's
+  worker, core and language data used to load from two third-party CDNs with no integrity check; they are
+  self-hosted. Checked in headless Chromium against the built app: no violations across the login page
+  and six import paths, and a script from a CDN does trigger one.
+- The Vite dev servers no longer bind every interface with host checking off, except inside Replit.
+
+*Not done, and why:* **`frame-ancestors` is not enforced** — it cannot be set from a `<meta>` tag, and the
+deployment (autoscale behind an artifact router) has no place in this repository to set response headers,
+so the admin UI can still be framed. **`nodemailer` is still on 9.x**; 10.x ships its own types and
+`lib/mailer.ts` needs a small change to build against them. Both are recorded here rather than guessed.
+
+### Still open — found while testing
+
+**A create-then-use can 404.** A request's transaction commits a moment *after* its response is written,
+so a request that arrives first does not see the row. Measured: 1 in 150 create-then-`DELETE` sequences.
+It is the same window as the registration bug above and it is not specific to any one route — a UI that
+creates an invoice and immediately navigates to it will occasionally see "not found". The integration
+suite now waits 20 ms after each successful write for that reason. The fix is the one already named
+above: commit before the response is flushed, which is a change to `middleware/tenant-scope.ts`.
+
 ### Operator actions that code cannot perform
 
 **Configure a mail transport before deploying.** The server refuses to start in production without
@@ -705,6 +802,18 @@ complete.
    `pnpm --filter @workspace/db run push`. The unique index will fail to build if duplicate invoice
    numbers already exist — if it does, that is the old `COUNT(*) + 1` bug showing up in real data,
    and those invoices need renumbering before the index can be created.
+
+7. **Apply the schema change.** `pnpm --filter @workspace/db run push` now **drops
+   `pending_registrations.password_hash`**, so `drizzle-kit` will ask to confirm data loss. Answer yes:
+   the table holds only signups awaiting a link that expires in 24 hours, and any link already sent still
+   works — the person is asked for a password when they open it. Re-apply the RLS policies afterwards
+   (`rls:apply`), as after every push.
+8. **Deploy the API and the web app together.** Registration no longer takes a password and the
+   verification link now asks for one, so a new API with the old web app (or the reverse) cannot complete
+   a signup. Existing sessions are unaffected.
+9. **Optional tuning:** `REGISTER_RATE_LIMIT_MAX` (default 10 per 15 minutes per address),
+   `TENANT_WRITE_RATE_LIMIT_MAX` (300 a minute) and `TENANT_READ_RATE_LIMIT_MAX` (1,200 a minute). The
+   defaults are far above what one person reaches; raise them only for a shared integration client.
 
 ### Where the implementation deviates from the recommendations below
 

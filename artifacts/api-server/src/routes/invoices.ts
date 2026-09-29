@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { db, invoicesTable, businessesTable, customersTable, productsTable, invoiceCountersTable, paymentsTable } from "@workspace/db";
+import { db, invoicesTable, businessesTable, customersTable, productsTable, invoiceCountersTable } from "@workspace/db";
 import { eq, ilike, and, count, gte, lte, desc, sql } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { resolveSupplyType } from "../lib/gst";
 import { applyStockMovement, STOCK_OUT } from "../lib/stock";
+import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
@@ -20,6 +21,19 @@ const router = Router();
  */
 type Req = TenantRequest<any, any, IdParams>;
 
+
+/**
+ * Why an invoice may not be edited as asked, or `null` if it may.
+ * See the PATCH handler for the reasoning; kept here so the check made before
+ * the write and the one made under the row lock are the same rule.
+ */
+function invoiceEditBlock(inv: { status: string; paidAmount: unknown }, editsFigures: boolean): string | null {
+  if (inv.status === "cancelled") return "A cancelled invoice cannot be changed.";
+  if (editsFigures && dec(inv.paidAmount).greaterThan(0)) {
+    return "This invoice has payments recorded against it, so its figures can no longer be edited. Cancel it or issue a credit note instead.";
+  }
+  return null;
+}
 
 function calcGst(items: any[], isInterstate: boolean) {
   // Each line is rounded to paise here, and the invoice totals are the sum of
@@ -222,6 +236,18 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     .limit(1);
   if (!existing) return res.status(404).json({ error: "Not found" });
 
+  // An issued invoice is a tax document. Once it is cancelled it is final, and
+  // once money has been recorded against it the figures it was paid against
+  // cannot move — an edit could drop the total below what was received, and
+  // silently rewrite what a customer was told they owe. Notes and the due date
+  // are not part of that, so they stay editable. To correct a paid invoice,
+  // cancel it (which reverses the receipts) or issue a credit note.
+  const editsFigures = Boolean(
+    type || customerId || invoiceDate || placeOfSupply !== undefined || items,
+  );
+  const blocked = invoiceEditBlock(existing, editsFigures);
+  if (blocked) return res.status(409).json({ error: blocked });
+
   const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
   const effectivePlace = placeOfSupply !== undefined ? placeOfSupply : existing.placeOfSupply;
   const supply = resolveSupplyType(business, effectivePlace);
@@ -264,98 +290,105 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   // A request that changes nothing is not an error, but `set({})` is invalid SQL.
   if (Object.keys(updates).length === 0) return res.json(mapInvoice(existing));
 
-  const invoice = await db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx) => {
+    // Re-read under a row lock and re-apply the rule. The check above ran on a
+    // snapshot, and a payment or a cancellation can land between it and here.
+    const [locked] = await tx.select().from(invoicesTable)
+      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+      .for("update")
+      .limit(1);
+    if (!locked) return { kind: "missing" as const };
+    const conflict = invoiceEditBlock(locked, editsFigures);
+    if (conflict) return { kind: "conflict" as const, error: conflict };
+
     // Only a change of lines moves goods. A re-split for a changed place of
     // supply rewrites the same quantities, so reversing and reapplying it would
     // net to nothing — but doing neither keeps the stored movement honest.
     if (items) {
-      await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_OUT);
+      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -STOCK_OUT);
       await applyStockMovement(tx, productsTable, eq, businessId, updates.items, STOCK_OUT);
     }
 
     const [updated] = await tx.update(invoicesTable).set(updates)
       .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
       .returning();
-    return updated;
+    return { kind: "updated" as const, invoice: updated };
   });
 
-  if (!invoice) return res.status(404).json({ error: "Not found" });
-  return res.json(mapInvoice(invoice));
+  if (outcome.kind === "missing") return res.status(404).json({ error: "Not found" });
+  if (outcome.kind === "conflict") return res.status(409).json({ error: outcome.error });
+  return res.json(mapInvoice(outcome.invoice));
 });
 
+/**
+ * Invoices are never deleted. The number was allocated from a gapless statutory
+ * series and is on the customer's copy; removing the row leaves a hole in the
+ * series that cannot be explained, and takes any payments recorded against it
+ * out from under their invoice. Cancelling keeps the number and the history,
+ * takes the invoice out of every total, and puts its goods back in stock.
+ */
 router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
   const businessId = req.businessId;
-
-  // Deleting an invoice un-sells its goods. Without this the stock it deducted
-  // stayed deducted, so a create/delete cycle walked inventory down with no
-  // sales on the books and the low-stock reports followed it.
-  await db.transaction(async (tx) => {
-    const [existing] = await tx.select().from(invoicesTable)
-      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
-      .limit(1);
-    if (!existing) return;
-    await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_OUT);
-    await tx.delete(invoicesTable)
-      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)));
+  const [existing] = await db.select({ id: invoicesTable.id }).from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
+    .limit(1);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+  return res.status(409).json({
+    error: "An issued invoice cannot be deleted. Cancel it instead, so its number stays on record.",
   });
-  return res.json({ success: true });
 });
 
 router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: Req, res) => {
   const businessId = req.businessId;
   const { paymentStatus, status, paidAmount, mode, referenceNumber } = req.body;
   const newStatus = paymentStatus ?? status;
+  const cancelling = newStatus === "cancelled";
 
-  const [existing] = await db.select().from(invoicesTable)
-    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
-    .limit(1);
-  if (!existing) return res.status(404).json({ error: "Not found" });
-
-  const updates: any = {};
-  if (newStatus) updates.status = newStatus;
-
-  // Marking an invoice paid used to set the status and nothing else, so the
-  // invoice showed "paid" with its full balance still due — `paidAmount` stayed
-  // at zero and `balanceDue` is derived from it. Settle the money alongside the
-  // status unless the caller states an amount itself.
-  const previouslyPaid = dec(existing.paidAmount);
-  let settled = previouslyPaid;
-  if (paidAmount !== undefined) {
-    settled = dec(paidAmount);
-  } else if (newStatus === "paid") {
-    settled = dec(existing.grandTotal);
-  } else if (newStatus === "unpaid" || newStatus === "cancelled") {
-    settled = dec(0);
+  if (cancelling && paidAmount !== undefined) {
+    return res.status(400).json({ error: "A cancelled invoice has nothing paid; omit paidAmount." });
   }
-  if (!settled.equals(previouslyPaid)) updates.paidAmount = toColumn(settled);
 
-  const invoice = await db.transaction(async (tx) => {
-    const [updated] = await tx.update(invoicesTable).set(updates)
-      .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
-      .returning();
+  // Everything that changes what has been paid goes through `settleInvoice`,
+  // which locks the row, keeps the amount inside 0..grandTotal, derives the
+  // status from it and writes the ledger entry. Marking an invoice paid used to
+  // set the status alone, then the amount, then a receipt, none of it atomic.
+  const result = await db.transaction(async (tx) => {
+    const settled = await settleInvoice(
+      tx, businessId, req.validatedParams.id,
+      (invoice) => {
+        const grandTotal = dec(invoice.grandTotal);
+        let target: Decimal;
+        if (paidAmount !== undefined) target = dec(paidAmount);
+        else if (newStatus === "paid") target = grandTotal;
+        else if (newStatus === "unpaid") target = dec(0);
+        else if (newStatus === "partial") {
+          return { error: "State the amount received to mark an invoice partly paid." };
+        } else target = dec(invoice.paidAmount);
 
-    // Record the receipt, so the Payments page reflects what actually happened.
-    // Its empty state has always promised that "payments are recorded when you
-    // mark invoices as paid"; nothing wrote one, so the page was always empty.
-    const received = settled.minus(previouslyPaid);
-    if (received.greaterThan(0)) {
-      await tx.insert(paymentsTable).values({
-        businessId,
-        type: "received",
-        amount: toColumn(received),
-        date: new Date().toISOString().slice(0, 10),
-        mode: mode ?? "cash",
-        referenceNumber: referenceNumber ?? null,
-        invoiceId: updated.id,
-        customerId: updated.customerId ?? null,
-        notes: `Invoice ${updated.invoiceNumber}`,
-      });
+        // The status is a description of the amount, not a second input. Taking
+        // both at face value let an invoice read "paid" with its balance due.
+        const implied = deriveStatus(target, grandTotal, newStatus);
+        if (newStatus && newStatus !== implied) {
+          return {
+            error: `An amount paid of ${target.toFixed(2)} makes this invoice '${implied}', not '${newStatus}'.`,
+          };
+        }
+        return { target };
+      },
+      { mode, referenceNumber },
+      { cancel: cancelling, requestedStatus: newStatus },
+    );
+
+    // Cancelling un-sells the goods, exactly once: a cancelled invoice is final,
+    // so this cannot run twice for the same invoice.
+    if (settled.ok && cancelling) {
+      await applyStockMovement(tx, productsTable, eq, businessId, settled.invoice.items as any[], -STOCK_OUT);
     }
-
-    return updated;
+    return settled;
   });
 
-  return res.json(mapInvoice(invoice));
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  return res.json(mapInvoice(result.invoice));
 });
 
 export default router;
