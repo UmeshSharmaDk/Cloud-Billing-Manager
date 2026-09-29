@@ -158,3 +158,8 @@ overrides:
   # drizzle-kit uses esbuild internally on an older version that's vulnerable, this overrides it
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  # Advisory fixes for transitive dependencies of express@5 (pnpm audit --prod).
+  # These are selector overrides: they only apply to a version below the fix, so
+  # they stop mattering once express itself depends on a fixed release.
+  "qs@<6.16.0": ">=6.16.0"
+  "body-parser@<2.3.0": ">=2.3.0"
