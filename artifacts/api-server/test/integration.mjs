@@ -104,14 +104,6 @@ async function call(method, path, { token, body, jar, csrf = true, origin, heade
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
 
-  // A request's transaction commits a moment after its response is written (see
-  // "A side effect can escape before its transaction commits" in
-  // SECURITY-REVIEW.md), so the very next request can arrive first and not see
-  // the row. Measured at about one create-then-use in 150. Real clients rarely
-  // hit it; a suite that fires the next call the instant the last returns hits
-  // it constantly, and would flake on a race that is not what it is testing.
-  if (!SAFE.has(method) && res.status < 400) await new Promise((r) => setTimeout(r, 20));
-
   return { status: res.status, data, headers: res.headers };
 }
 
@@ -1149,6 +1141,108 @@ const adminEmail = `admin${uniq}@example.test`;
   check("flood", "reads have their own, much larger budget", throttledRead.status === 200, `status ${throttledRead.status}`);
   const bystander = await call("PATCH", "/business", { token: other.token, body: { stateCode: "29" } });
   check("flood", "another business is unaffected", bystander.status === 200, `status ${bystander.status}`);
+}
+
+
+// === review: a response is never sent before its transaction commits ======
+//
+// A request's transaction used to commit only after the response had been
+// written, so a client that acted on the response at once — read what it had
+// just created, or emailed a link to it — could arrive before the row was
+// durable. Measured at about one create-then-use in 150; here the commit is made
+// slow at the database so it happens every time instead of by chance.
+{
+  const cf = await register("commitfirst");
+  const T = { token: cf.token };
+  await call("PATCH", "/business", { ...T, body: { stateCode: "29" } });
+  const inv = () => call("POST", "/invoices", { ...T, body: {
+    invoiceDate: "2026-08-10", customerName: "C", placeOfSupply: "29",
+    items: [{ description: "x", quantity: 1, unitPrice: 10, gstRate: 18 }] } });
+
+  // Deferred constraint triggers run at COMMIT, so this makes every commit on
+  // `invoices` take 300 ms — long enough for the next request to overtake it.
+  sqlExec(`CREATE OR REPLACE FUNCTION test_slow_commit() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN PERFORM pg_sleep(0.3); RETURN NULL; END'`);
+  sqlExec(`DROP TRIGGER IF EXISTS test_slow_commit ON invoices`);
+  sqlExec(`CREATE CONSTRAINT TRIGGER test_slow_commit AFTER INSERT ON invoices DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_slow_commit()`);
+  try {
+    const created = (await inv()).data.invoice;
+    check("commit-first", "the row is already committed when the response arrives",
+      sqlValue(`SELECT count(*) FROM invoices WHERE id = ${created.id}`) === "1");
+
+    const reads = [];
+    for (let i = 0; i < 4; i++) {
+      const made = (await inv()).data.invoice;
+      reads.push((await call("GET", `/invoices/${made.id}`, T)).status);
+    }
+    check("commit-first", "so an invoice can be read the instant its creation returns",
+      reads.every((s) => s === 200), reads.join(","));
+
+    // A burst, each read straight after its own create.
+    const burst = await Promise.all(Array.from({ length: 8 }, async () => {
+      const made = (await inv()).data.invoice;
+      return (await call("GET", `/invoices/${made.id}`, T)).status;
+    }));
+    check("commit-first", "including when many are in flight at once", burst.every((s) => s === 200), burst.join(","));
+  } finally {
+    sqlExec(`DROP TRIGGER IF EXISTS test_slow_commit ON invoices`);
+  }
+}
+
+// === review: a failed commit is reported as a failure =======================
+//
+// Because the response went out first, a transaction that failed at COMMIT — a
+// deferred constraint, a serialisation failure — had already told the client it
+// succeeded. The write was gone and the client was never told.
+{
+  const fc = await register("commitfail");
+  const T = { token: fc.token };
+  sqlExec(`CREATE OR REPLACE FUNCTION test_reject_commit() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN IF NEW.name = ''COMMITFAIL'' THEN RAISE EXCEPTION ''rejected at commit''; END IF; RETURN NULL; END'`);
+  sqlExec(`DROP TRIGGER IF EXISTS test_reject_commit ON customers`);
+  sqlExec(`CREATE CONSTRAINT TRIGGER test_reject_commit AFTER INSERT ON customers DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION test_reject_commit()`);
+  try {
+    const bad = await call("POST", "/customers", { ...T, body: { name: "COMMITFAIL" } });
+    check("commit-fail", "a write that cannot commit is answered with an error, not success",
+      bad.status === 500, `status ${bad.status}`);
+    check("commit-fail", "the error carries a request id and nothing else",
+      typeof bad.data?.requestId !== "undefined" && Object.keys(bad.data ?? {}).sort().join() === "error,requestId",
+      JSON.stringify(bad.data));
+    check("commit-fail", "and nothing was stored",
+      sqlValue(`SELECT count(*) FROM customers WHERE name = 'COMMITFAIL'`) === "0");
+
+    const good = await call("POST", "/customers", { ...T, body: { name: "Committable" } });
+    check("commit-fail", "the connection is healthy afterwards", good.status === 201, `status ${good.status}`);
+  } finally {
+    sqlExec(`DROP TRIGGER IF EXISTS test_reject_commit ON customers`);
+  }
+}
+
+// === review: clients that give up do not strand connections =================
+//
+// The response is now held until the commit, so a request whose client has gone
+// must still finish and release its connection, or the pool drains.
+{
+  const ab = await register("abandoned");
+  const T = { token: ab.token };
+  await Promise.allSettled(Array.from({ length: 30 }, (_, i) => {
+    const controller = new AbortController();
+    const sent = fetch(`${B}/customers`, { method: "POST", signal: controller.signal,
+      headers: { "content-type": "application/json", authorization: `Bearer ${ab.token}` },
+      body: JSON.stringify({ name: `Gone ${i}` }) });
+    setTimeout(() => controller.abort(), 2);
+    return sent;
+  }));
+  const after = await Promise.all(Array.from({ length: 25 }, () => call("GET", "/customers", T)));
+  check("abandoned", "after 30 abandoned requests the pool still serves 25 at once",
+    after.every((r) => r.status === 200), after.map((r) => r.status).join(","));
+
+  // A request left holding its transaction shows up here as `idle in transaction`.
+  let open = -1;
+  for (let i = 0; i < 20 && open !== 0; i++) {
+    open = Number(sqlValue(
+      `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle in transaction'`));
+    if (open !== 0) await new Promise((r) => setTimeout(r, 100));
+  }
+  check("abandoned", "and none of them is left holding a transaction open", open === 0, `${open} open`);
 }
 
 

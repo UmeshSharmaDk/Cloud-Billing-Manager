@@ -344,10 +344,10 @@ before a tenant is known. Anything reached that way is trusting its own authoriz
 database-level net underneath, which is why it is applied per-router rather than being the default.
 
 The cost is honest: **one transaction is held open per request**, from `requireBusiness` until the
-response is written. It commits on the way out, or rolls back if the handler produced a 5xx. On a
-connection-constrained deployment this changes pool sizing, and a slow handler now holds a connection
-for its whole duration rather than per query. That is the price of the guarantee; it should be
-watched under load.
+handler answers. It commits then — the response is sent only afterwards — or rolls back if the handler
+produced a 5xx. On a connection-constrained deployment this changes pool sizing, and a slow handler now
+holds a connection for its whole duration rather than per query. That is the price of the guarantee; it
+should be watched under load.
 
 ### Verified
 
@@ -626,12 +626,10 @@ simple: **anything that escapes the request — an email, a webhook, a queued
 message, a credential — must be emitted after the state it refers to is
 committed, not merely after it is written.**
 
-The general property remains: a future endpoint that emits an external side
-effect inside the request transaction will have the same window. Making it
-impossible means committing before the response is flushed — buffering the
-response, committing, then writing — which is a change to a core middleware that
-nothing currently demands. It is recorded here rather than done on speculation,
-and it is the first thing to reach for if this shape appears again.
+*Update:* this was made structurally impossible rather than left as a rule to
+remember — see **Commit before the response** below. The two fixes above are no
+longer load-bearing, and are kept because an email should not depend on which
+middleware happens to wrap the route that sends it.
 
 ### Three defects in the lockout and registration — fixed
 
@@ -767,14 +765,46 @@ deployment (autoscale behind an artifact router) has no place in this repository
 so the admin UI can still be framed. **`nodemailer` is still on 9.x**; 10.x ships its own types and
 `lib/mailer.ts` needs a small change to build against them. Both are recorded here rather than guessed.
 
-### Still open — found while testing
+### Commit before the response — fixed
 
-**A create-then-use can 404.** A request's transaction commits a moment *after* its response is written,
-so a request that arrives first does not see the row. Measured: 1 in 150 create-then-`DELETE` sequences.
-It is the same window as the registration bug above and it is not specific to any one route — a UI that
-creates an invoice and immediately navigates to it will occasionally see "not found". The integration
-suite now waits 20 ms after each successful write for that reason. The fix is the one already named
-above: commit before the response is flushed, which is a change to `middleware/tenant-scope.ts`.
+The property the section *A side effect can escape before its transaction commits* left open: a request's
+transaction committed only after its response had been written. It had two consequences, both reproduced
+before the change.
+
+**A client could outrun the commit.** A create followed at once by a read, edit or delete came back `404`
+about one time in 150 — a UI that created an invoice and immediately navigated to it would occasionally be
+told it did not exist. It was not specific to one route; it was every scoped route. To make it happen every
+time rather than by chance, the test makes the commit itself slow at the database (a deferred constraint
+trigger that sleeps at `COMMIT`): with the old ordering every create-then-read returned `404`.
+
+**A failed commit was reported as success.** A transaction that failed *at* `COMMIT` — a deferred
+constraint, a serialisation failure — had already sent its answer. Reproduced with a trigger that refuses
+one customer name at commit: the API answered `201` with an `id` for a row that was never stored. The write
+was gone and the client was never told.
+
+The scope middleware now holds the handler's first write, commits, and only then releases the response
+(`middleware/tenant-scope.ts`, `ResponseGate`). If the commit fails the held answer is discarded — along
+with any cookie set beside it — and the client gets a `500` with a request id. A handler that returns a 5xx
+still rolls back, and its error response is sent unchanged. The status the handler chose is fixed at the
+moment it answers, so an error handler reacting to a later throw cannot change what the client is told.
+
+Three side effects worth knowing:
+
+- **The connection is released at commit, not when the last byte has been read.** A slow client used to
+  hold a pooled connection for as long as it took to download the response.
+- **A request whose client has gone still finishes and commits** — the handler completes its work whether
+  or not anyone is listening. If the handler never answers, its transaction is rolled back after 30 seconds
+  so it cannot pin a connection for ever.
+- **Latency is unchanged within noise.** The commit was always going to happen; it is now on the response's
+  critical path, which added about a millisecond at the median (write p50 5.2–5.7 ms against 4.3–5.2 ms
+  across two runs each).
+
+*What it assumes:* responses are produced with `res.json` and friends, which end in a single `res.end`. A
+handler that streamed a large body through `res.write` would have it buffered until the commit. Nothing in
+the API does; a route that starts to should not use a scope, or should write its file first.
+
+The integration suite's 20 ms wait after every write — added as a workaround for this — is removed, and
+three consecutive full runs pass without it.
 
 ### Operator actions that code cannot perform
 

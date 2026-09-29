@@ -396,15 +396,15 @@ router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (r
     expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
   };
 
-  // Written on `rootDb`, which always commits on its own connection.
+  // Written on `rootDb`, which commits on its own connection before anything
+  // below runs.
   //
-  // A request-scoped transaction commits only once the response has been
-  // written, and an email is not a response: it leaves the process the moment it
-  // is sent, and the person it names can act on it before that commit lands.
-  // Sending a link to a row that is not yet durable produces exactly the failure
-  // it looks like — "that link is invalid or has expired" for a link that was
-  // valid and had not expired. This route has no scope today; using `rootDb`
-  // keeps the row durable before the link exists even if one is ever added.
+  // An email is not a response: it leaves the process the moment it is sent, and
+  // the person it names can act on it at once. A link that names a row which is
+  // not yet durable fails as "that link is invalid or has expired" for a link
+  // that was valid. Scoped routes now commit before they respond too (see
+  // `middleware/tenant-scope.ts`), but nothing that sends mail should depend on
+  // which middleware happens to wrap it, and this route has no scope at all.
   //
   // Both branches run the same shape: insert a row that is already expired, then
   // one more write, in one transaction. The free address arms the row by giving
@@ -468,19 +468,15 @@ router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrati
   if (policyFailure) return res.status(400).json({ error: policyFailure.message });
   const passwordHash = await hashPassword(password);
 
-  // Its own system scope rather than the request's.
+  // Its own system scope, opened here rather than as route middleware.
   //
-  // `systemScope` as middleware holds one transaction until the *response has
-  // been written*, so an account created under it is not durable at the moment
-  // its session is handed back — and the caller uses that session on its very
-  // next request. That window is small and real: it showed up as the next
-  // request being rejected with the credential this one had just issued.
-  //
-  // Opening the scope here instead means the transaction commits when this
-  // callback returns, before anything is sent. It still needs to be a *system*
-  // scope rather than a bare transaction, because `businesses` carries a tenant
-  // policy and there is no tenant yet to scope to — the row being inserted is
-  // what creates one.
+  // The account must be committed before its session exists, because the caller
+  // uses that session on its very next request. Opening the scope here means the
+  // transaction commits when this callback returns, before the session is even
+  // created — independent of when any surrounding middleware commits. It still
+  // needs to be a *system* scope rather than a bare transaction, because
+  // `businesses` carries a tenant policy and there is no tenant yet to scope to —
+  // the row being inserted is what creates one.
   const created = await runInSystemScope(rootDb, async () => {
     const tx = db;
     // Re-checked inside the transaction: two links for the same address could
