@@ -3,6 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <!--
+      Content-Security-Policy for the built app (vite.config.ts removes this tag for `vite dev`, whose
+      inline HMR/React-refresh scripts it would block). A <meta> policy cannot express frame-ancestors,
+      report-uri or sandbox; those need a response header, which the static host would have to send.
+        script-src   'self' + 'wasm-unsafe-eval'  pdf.js and tesseract.js compile WebAssembly; no eval, no inline script
+        style-src    'unsafe-inline'              React/Radix set style attributes and chart.tsx emits a <style> tag
+        Google Fonts stylesheet + files           the Inter font below
+        img-src      data: blob:                  canvas/PDF page previews and inline SVG icons
+        connect-src  'self'                       the API is same-origin (/api); OCR assets are under /ocr
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta name="referrer" content="same-origin" />
     <title>GST Billing &amp; Inventory Platform</title>
     <meta name="description" content="GST Billing &amp; Inventory Platform — built on Replit. Update this description to reflect the app." />
     <meta name="robots" content="index, follow" />

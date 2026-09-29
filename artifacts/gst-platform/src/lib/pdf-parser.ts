@@ -71,8 +71,20 @@ async function renderPdfPages(file: File): Promise<HTMLCanvasElement[]> {
   return canvases;
 }
 
+// Served from this origin by the `self-hosted-ocr-assets` plugin in vite.config.ts.
+// Without these paths tesseract.js pulls its worker and WebAssembly core from jsDelivr
+// and the English model from tessdata.projectnaptha.com, which the page's
+// Content-Security-Policy (script-src / connect-src 'self') does not allow.
+const OCR_BASE = `${import.meta.env.BASE_URL.replace(/\/?$/, "/")}ocr`;
+
 async function extractOcrText(images: Array<File | HTMLCanvasElement>): Promise<string> {
-  const worker = await createWorker("eng");
+  const worker = await createWorker("eng", undefined, {
+    workerPath: `${OCR_BASE}/worker.min.js`,
+    corePath: `${OCR_BASE}/core`,
+    langPath: `${OCR_BASE}/lang`,
+    // Spawn the script directly instead of through a blob: URL wrapper, so worker-src can stay 'self'.
+    workerBlobURL: false,
+  });
   try {
     const pages: string[] = [];
     for (const image of images) {

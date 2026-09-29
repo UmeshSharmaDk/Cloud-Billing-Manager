@@ -27,6 +27,15 @@ if (!basePath) {
   );
 }
 
+// Inside Replit the dev server sits behind Replit's proxy, whose hostnames vary
+// (*.replit.dev, *.repl.co, ...) and cannot be listed up front, so it has to accept
+// any Host and bind every interface. Anywhere else keep Vite's defaults: loopback
+// only, and only localhost-style Host headers, which is what stops a hostile web
+// page from DNS-rebinding onto the dev server and reading source through it.
+const inReplit = process.env.REPL_ID !== undefined;
+const devHost = inReplit ? "0.0.0.0" : "127.0.0.1";
+const devAllowedHosts = inReplit ? true : undefined;
+
 export default defineConfig({
   base: basePath,
   plugins: [
@@ -57,15 +66,15 @@ export default defineConfig({
   },
   server: {
     port,
-    host: "0.0.0.0",
-    allowedHosts: true,
+    host: devHost,
+    allowedHosts: devAllowedHosts,
     fs: {
       strict: true,
     },
   },
   preview: {
     port,
-    host: "0.0.0.0",
-    allowedHosts: true,
+    host: devHost,
+    allowedHosts: devAllowedHosts,
   },
 });
