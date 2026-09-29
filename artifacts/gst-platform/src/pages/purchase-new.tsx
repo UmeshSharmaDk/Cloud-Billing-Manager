@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useListVendors, useListProducts, useCreatePurchase } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
-import { parsePurchaseBill } from "@/lib/pdf-parser";
+import { parsePurchaseBill, MAX_IMPORT_FILE_BYTES, ImportFileTooLargeError } from "@/lib/pdf-parser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,6 +50,14 @@ export default function PurchaseNewPage() {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-selecting the same file
     if (!file) return;
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      toast({
+        title: "File is too large",
+        description: `${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB. Import files up to ${MAX_IMPORT_FILE_BYTES / (1024 * 1024)} MB, or add the items manually.`,
+        variant: "destructive",
+      });
+      return;
+    }
     setImportedFile(file.name);
     setImportParsing(true);
     setImportWarnings([]);
@@ -81,6 +89,10 @@ export default function PurchaseNewPage() {
         description: result.warnings.length ? `${result.warnings.length} warning(s) — review below` : "Review the extracted items before saving",
       });
     } catch (err) {
+      if (err instanceof ImportFileTooLargeError) {
+        toast({ title: "File is too large", description: err.message, variant: "destructive" });
+        return;
+      }
       toast({ title: "Failed to read file", description: "The file may be corrupted, password-protected, or in an unsupported format", variant: "destructive" });
     } finally {
       setImportParsing(false);
