@@ -705,7 +705,9 @@ lowering what was paid records a reversal instead of deleting the receipt, so th
 the invoice. Cancelling reverses the receipts, returns the goods to stock exactly once, and is final.
 The figures of an invoice with payments cannot be edited (notes and due date can), and **issued invoices
 can no longer be deleted**: the number comes from a gapless statutory series, so the row is cancelled
-instead. Purchase bills follow the same rule for cancellation.
+instead. Purchase bills follow the same rule for cancellation. On the invoice page, "Mark Partial" now asks
+how much was received — the server will not take "partly paid" without an amount — and a refusal shows
+the server's reason instead of a bare "Update failed".
 
 *Not done:* there is no filing lock. Nothing in the data says which month has been filed, so an *unpaid*
 invoice in a filed period can still be edited. That needs a period-close feature, not a check.

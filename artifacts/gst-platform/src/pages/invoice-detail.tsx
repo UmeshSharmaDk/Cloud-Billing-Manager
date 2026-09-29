@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useGetInvoice, useUpdateInvoiceStatus, useGetBusiness, useGetCustomer } from "@workspace/api-client-react";
 import { formatCurrency, formatDate, statusBadge, amountToWords } from "@/lib/utils";
@@ -6,6 +7,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Printer, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export default function InvoiceDetailPage() {
   const [, params] = useRoute("/invoices/:id");
@@ -23,11 +27,34 @@ export default function InvoiceDetailPage() {
   const { data: customerData } = useGetCustomer(inv.customerId || 0, { query: { enabled: !!inv.customerId } as any });
   const customer: any = customerData || {};
 
-  const handleStatus = (newStatus: string) => {
-    paymentMutation.mutate({ id: parseInt(params?.id || "0"), data: { paymentStatus: newStatus } as any }, {
-      onSuccess: () => { toast({ title: `Status updated to ${newStatus}` }); refetch(); },
-      onError: () => toast({ title: "Update failed", variant: "destructive" }),
+  // "Partly paid" is a statement about an amount, so the server will not take it
+  // without one — asking for it here is what makes that option usable.
+  const [partialOpen, setPartialOpen] = useState(false);
+  const [partialAmount, setPartialAmount] = useState("");
+
+  const updateStatus = (body: { paymentStatus: string; paidAmount?: number }, done?: () => void) => {
+    paymentMutation.mutate({ id: parseInt(params?.id || "0"), data: body as any }, {
+      onSuccess: () => { toast({ title: `Status updated to ${body.paymentStatus}` }); done?.(); refetch(); },
+      onError: (err: any) => toast({
+        title: "Update failed",
+        description: err?.data?.error,
+        variant: "destructive",
+      }),
     });
+  };
+
+  const handleStatus = (newStatus: string) => {
+    if (newStatus === "partial") {
+      setPartialAmount("");
+      setPartialOpen(true);
+      return;
+    }
+    updateStatus({ paymentStatus: newStatus });
+  };
+
+  const submitPartial = (e: React.FormEvent) => {
+    e.preventDefault();
+    updateStatus({ paymentStatus: "partial", paidAmount: Number(partialAmount) }, () => setPartialOpen(false));
   };
 
   if (isLoading) return (
@@ -225,6 +252,38 @@ export default function InvoiceDetailPage() {
           </div>
         </div>
       </div>
+      <Dialog open={partialOpen} onOpenChange={setPartialOpen}>
+        <DialogContent className="no-print sm:max-w-md">
+          <form onSubmit={submitPartial} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Record a part-payment</DialogTitle>
+              <DialogDescription>
+                How much has been received so far against {inv.invoiceNumber}? It must be more than
+                zero and less than the invoice total of {formatCurrency(inv.grandTotal)}.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="partial-amount">Total received so far (₹)</Label>
+              <Input
+                id="partial-amount"
+                type="number"
+                inputMode="decimal"
+                min="0.01"
+                step="0.01"
+                max={Math.max(0, Number(inv.grandTotal || 0) - 0.01)}
+                value={partialAmount}
+                onChange={(e) => setPartialAmount(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setPartialOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={paymentMutation.isPending}>Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
