@@ -83,8 +83,8 @@ function absorb(jar, res) {
 
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
 
-async function call(method, path, { token, body, jar, csrf = true, origin } = {}) {
-  const headers = {};
+async function call(method, path, { token, body, jar, csrf = true, origin, headers: extra } = {}) {
+  const headers = { ...extra };
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers["content-type"] = "application/json";
   if (origin) headers.origin = origin;
@@ -350,7 +350,7 @@ const adminEmail = `admin${uniq}@example.test`;
   const r = await call("POST", "/auth/login", { body: { email: victim, password: "correct-horse-battery-staple" } });
   check("F-06", "lockout holds against the correct password", r.status === 429, `status ${r.status}`);
 
-  const rows = sqlValue(`SELECT count(*) FROM login_attempts WHERE key LIKE 'email:%'`);
+  const rows = sqlValue(`SELECT count(*) FROM login_attempts WHERE key LIKE 'login:%'`);
   check("F-06", "lockout state is in the database, not process memory", Number(rows) > 0, `${rows} rows`);
 
   // Those deliberate failures also tripped the per-IP counter, and every
@@ -972,6 +972,114 @@ const adminEmail = `admin${uniq}@example.test`;
     loser.status === 400, `status ${loser.status}`);
   check("F-14", "exactly one account exists for the address",
     sqlValue(`SELECT count(*) FROM users WHERE email = '${raceEmail}'`) === "1");
+}
+
+
+// === review: the lockout cannot be turned against its owner ================
+//
+// The durable lock used to be keyed on the email alone. An email is chosen by
+// the caller, so failing a login for anyone's address locked that person out —
+// the platform administrator included — from every source, for as long as the
+// attacker kept it up.
+{
+  const owner = await register("lockdos");
+  const attacker = "203.0.113.9";
+  const elsewhere = "198.51.100.77";
+  const login = (password, ip) => call("POST", "/auth/login",
+    { headers: { "x-forwarded-for": ip }, body: { email: owner.email, password } });
+
+  let sawLock = false;
+  for (let i = 0; i < 16 && !sawLock; i++) {
+    sawLock = (await login(`wrong-${i}`, attacker)).status === 429;
+  }
+  check("lockout", "repeated failures lock the source they came from", sawLock);
+  check("lockout", "and that lock holds against the correct password",
+    (await login(PASSWORD, attacker)).status === 429);
+
+  const real = await login(PASSWORD, elsewhere);
+  check("lockout", "the owner, from another address, is not locked out",
+    real.status === 200, `status ${real.status}`);
+  check("lockout", "failed logins never charge the account-wide step-up counter",
+    sqlValue(`SELECT count(*) FROM login_attempts WHERE key = 'user:${owner.userId}'`) === "0");
+  check("lockout", "and no lock is keyed on the email alone",
+    sqlValue(`SELECT count(*) FROM login_attempts WHERE key LIKE 'email:%'`) === "0");
+
+  sqlExec(`DELETE FROM login_attempts WHERE key LIKE 'login:%'`);
+}
+
+// === review: registration is throttled and charges nothing login reads =====
+//
+// F-14 closed the response oracle and this route then reopened it: an existing
+// address charged the login lockout and a free one did not, so a run of
+// registrations followed by one login answered "is there an account?" with 429
+// versus 401. Separately, only failures were counted against the per-address
+// limit, and every registration is a 202, so the route was unthrottled — while
+// holding a pooled connection for the whole request.
+{
+  const stamp = Date.now();
+  const submit = (email, ip) => call("POST", "/auth/register", {
+    headers: ip ? { "x-forwarded-for": ip } : undefined,
+    body: { name: "Probe", email, password: PASSWORD, businessName: "Probe Traders" },
+  });
+  const login = (email) => call("POST", "/auth/login", {
+    headers: { "x-forwarded-for": "192.0.2.50" },
+    body: { email, password: "not-the-password-at-all" },
+  });
+
+  // The same run of requests at an address with an account and one without.
+  const taken = await register("budgettaken");
+  const freeEmail = `budgetfree${stamp}@example.test`;
+  const takenStatuses = [];
+  const freeStatuses = [];
+  for (let i = 0; i < 7; i++) {
+    takenStatuses.push((await submit(taken.email)).status);
+    freeStatuses.push((await submit(freeEmail)).status);
+  }
+
+  // `register()` above already spent one unit of the taken address's budget, so
+  // the two addresses must be cut off after the same total.
+  const accepted = (statuses) => statuses.filter((s) => s === 202).length;
+  check("register", "a free address stops being accepted after the recipient budget",
+    accepted(freeStatuses) === 5 && freeStatuses.slice(5).every((s) => s === 429),
+    freeStatuses.join(","));
+  check("register", "a taken address is cut off after exactly the same total",
+    1 + accepted(takenStatuses) === 5 && takenStatuses.slice(4).every((s) => s === 429),
+    takenStatuses.join(","));
+  check("register", "so the mail one address can be sent is bounded",
+    outbox().filter((m) => m.to === freeEmail).length === 5,
+    String(outbox().filter((m) => m.to === freeEmail).length));
+
+  check("register", "registering never charges a login lock for the address",
+    sqlValue(`SELECT count(*) FROM login_attempts
+              WHERE key = 'email:${taken.email}' OR key LIKE 'login:%|${taken.email}'`) === "0");
+  const lt = await login(taken.email);
+  const lf = await login(freeEmail);
+  check("register", "a login for a taken address is refused exactly as for a free one",
+    lt.status === lf.status && lt.status === 401, `taken ${lt.status} vs free ${lf.status}`);
+
+  // A 202 must count against the per-address limit, or the limiter is decoration.
+  const remaining = (r) => Number(/remaining=(\d+)/.exec(r.headers.get("ratelimit") ?? "")?.[1] ?? NaN);
+  const first = await submit(`ipcount1${stamp}@example.test`, "203.0.113.200");
+  const second = await submit(`ipcount2${stamp}@example.test`, "203.0.113.200");
+  check("register", "a successful registration counts against the per-address limit",
+    first.status === 202 && remaining(second) < remaining(first),
+    `${remaining(first)} then ${remaining(second)}`);
+
+  // The route must not hold a pooled connection while it waits for a second
+  // one. Forty in flight against a pool of twenty used to deadlock: half came
+  // back 500 after the ten-second connection timeout.
+  const started = Date.now();
+  const burst = await Promise.all(
+    Array.from({ length: 40 }, (_, i) => submit(`burst${i}x${stamp}@example.test`)),
+  );
+  const tally = {};
+  for (const r of burst) tally[r.status] = (tally[r.status] ?? 0) + 1;
+  check("register", "a burst of 40 concurrent registrations all succeed",
+    burst.every((r) => r.status === 202), JSON.stringify(tally));
+  check("register", "and finishes well inside the connection timeout",
+    Date.now() - started < 8000, `${Date.now() - started} ms`);
+
+  sqlExec(`DELETE FROM login_attempts WHERE key LIKE 'login:%'`);
 }
 
 

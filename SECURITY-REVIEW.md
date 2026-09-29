@@ -59,7 +59,7 @@ verified** — 133 integration checks against a real Postgres plus 34 unit tests
 | F-10 | **Fixed** | Terminal error handler returns `{error, requestId}` and nothing else; full detail is logged server-side under the same id. Logger now treats an unset `NODE_ENV` as production. |
 | F-04 | **Fixed** | Zod validation on every route. Type-confused login, negative quantity, 900% GST rate, malformed date and non-numeric `:id` all return `400`; unknown body keys are stripped rather than written. |
 | F-05 | **Fixed** | The four unscoped lookups now filter by `businessId` and return `400` instead of silently falling back. A two-tenant suite proves every `:id` route is `404` across the boundary and that no cross-tenant name or GSTIN appears in any response. |
-| F-06 | **Fixed** | Per-IP limiter plus a per-account lockout held in Postgres, so it survives restarts and spans autoscale instances. Locks after 11 failures with exponential backoff, and holds even against the correct password. |
+| F-06 | **Fixed** | Per-IP limiter plus a durable lockout held in Postgres, so it survives restarts and spans autoscale instances. Locks after 11 failures with exponential backoff, and holds even against the correct password. The lock is keyed on (source address, email), not the email alone — see *Three defects in the lockout and registration* below. |
 | F-07 | **Fixed** | `requireAuth` loads the user row on every request. Promotion, demotion, deactivation and subscription expiry all take effect immediately — previously up to seven days. |
 | F-11 | **Fixed** (caps) | `?limit=100000000`, `?limit=abc` and `?page=0` are `400`; report spans are capped at 366 days and default to the current month; the admin user lists filter, count and page in SQL. |
 | L-02 | **Fixed** | E-way bills can no longer reference another tenant's invoice. |
@@ -67,7 +67,7 @@ verified** — 133 integration checks against a real Postgres plus 34 unit tests
 | F-09 | **Fixed** | The session is an `HttpOnly` cookie; no token is reachable from page script anywhere in the app. Double-submit CSRF on every cookie-authenticated write. Helmet adds a `default-src 'none'` CSP, HSTS, nosniff and `X-Frame-Options: DENY`. Logout is no longer a stub. |
 | F-12 | **Fixed** | 12-character minimum, common-password screening, and a Have I Been Pwned k-anonymity lookup that fails open. New self-service `POST /auth/change-password`. |
 | F-13 | **Fixed** | Append-only `audit_log`; step-up re-authentication for password resets and role changes; soft delete so tenant records are never orphaned; last-admin and self-action guards. |
-| F-14 | **Fixed** | Both halves. The timing half closed in Phase 1; registration now answers `202` with the same body whether or not the address is taken and settles the difference by email. Enumeration still charges the account lockout as well. |
+| F-14 | **Fixed** | Both halves. The timing half closed in Phase 1; registration now answers `202` with the same body whether or not the address is taken and settles the difference by email. The registration route once charged the login lockout for an existing address, which reopened the oracle; that is removed — see *Three defects in the lockout and registration* below. |
 | L-01 | **Fixed** | `.env*` ignored, `.env.example` added, gitleaks in CI. |
 | L-03 | **Fixed** | `securitySchemes` declared (cookie + bearer), applied globally, with the three genuinely public operations marked `security: []`. |
 | L-04 | **Fixed** | `.github/workflows/security.yml`: `pnpm audit`, gitleaks, typecheck, and a grep that rejects the exact `process.env.X ?? "literal"` shape that caused F-01. |
@@ -584,7 +584,9 @@ proves nothing. The decision logic is covered by 10 unit tests instead
 process, that a padding row is not read as a hit, and that a network failure fails open rather than
 locking users out of registration.
 
-**The durable lockout is per-account, not per-address.** The first implementation counted failures
+**The durable lockout is per-account, not per-address.** *(Superseded: an account-wide lock keyed on
+a caller-supplied email is itself a lockout weapon. It is now keyed on source address and email — see
+below.)* The first implementation counted failures
 against the IP as well, at the same threshold, which meant ten typos from one office locked out
 everyone behind that NAT — and an attacker rotating addresses walks around it anyway. Addresses are
 now the in-memory limiter's job at a threshold three times looser, which is what the module claimed
@@ -630,6 +632,50 @@ impossible means committing before the response is flushed — buffering the
 response, committing, then writing — which is a change to a core middleware that
 nothing currently demands. It is recorded here rather than done on speculation,
 and it is the first thing to reach for if this shape appears again.
+
+### Three defects in the lockout and registration — fixed
+
+Found in a later whole-application review and each reproduced against a live server before it was
+changed. All three sat in code the sections above describe as finished.
+
+**Anyone could lock anyone out.** The durable lock was keyed on `email:<address>`, and the address is
+chosen by the caller. Sixteen failed logins for a known address — `admin@gstplatform.in` is one —
+locked it for an hour from *every* source, blocking even the correct password, and stayed under the
+per-address limit. A failed login also charged the account's step-up counter, so the owner's
+change-password and role-change confirmations locked too. Reproduced: the owner's correct login from a
+different address returned 429.
+
+The lock is now keyed on `login:<source address>|<email>`, so an attacker can only lock their own
+address out. A failed login no longer charges `user:<id>`; that counter is reached only by an
+authenticated session, which is who it was written to constrain.
+
+*The trade-off, plainly:* an attacker rotating through many source addresses now gets a fresh budget
+per address instead of one shared account budget. What limits that is the cost of each guess (a 19 MiB
+Argon2 verification), the password policy refusing weak and breached passwords, and the per-address
+limiter bounding each source. There is no account-wide lock any more because an account-wide lock keyed
+on unauthenticated input cannot be told apart from an attack. If distributed guessing becomes a real
+concern the answer is a second factor for administrators, which is already listed under what is left.
+
+**Registration reopened the oracle F-14 had closed.** A taken address charged the login lockout and a
+free one did not, so ten registrations for a candidate followed by one login answered "does this account
+exist?" with 429 versus 401. The two responses to `/register` were byte-identical; the *side effect*
+was not. Reproduced: 429 for the taken address, 401 for the free one. Registration no longer touches the
+login counters. It spends a separate per-recipient budget (5 per 15 minutes) on every request, taken or
+free, so the count carries no information — and the same budget stops the endpoint being used to send
+unlimited mail to a third party.
+
+**Registration was unthrottled and could starve the connection pool.** The per-address limiter skips
+successful responses, and every registration is a `202`, so nothing was ever counted. Each request also
+sat inside `systemScope` — holding a pooled connection across the breach lookup, the Argon2 hash and the
+mail send — and then needed a *second* connection for the insert. With the pool at twenty, forty
+concurrent registrations each held one connection while waiting for another: 21 of 40 came back `500`
+after the ten-second connection timeout, and every authenticated request behind them waited too. The
+route now has its own limiter that counts every response (`REGISTER_RATE_LIMIT_MAX`, default 10 per 15
+minutes per address) and no longer opens a scope; `users` and `pending_registrations` carry no tenant
+policy, so it never needed one. The same burst now completes in about half a second.
+
+Covered by 13 new integration checks. Run against the previous code, 10 of them fail — including the
+21 × `500` burst — so they pin the defects rather than merely exercise the routes.
 
 ### Operator actions that code cannot perform
 

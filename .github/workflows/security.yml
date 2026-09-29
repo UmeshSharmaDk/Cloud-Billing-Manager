@@ -139,6 +139,11 @@ jobs:
       # would otherwise trip the per-IP limiter. The per-account lockout that
       # F-06 asserts still runs at its real threshold of 10.
       AUTH_RATE_LIMIT_MAX: "500"
+      # Registration has its own per-address limit that counts every request,
+      # not only failures. The suite registers dozens of accounts and fires a
+      # 40-request burst from one address, so it needs the same headroom. The
+      # per-recipient mail budget is fixed and is what the suite asserts on.
+      REGISTER_RATE_LIMIT_MAX: "500"
       # Registration is two steps now: the response cannot say whether an
       # address is taken, so the outcome is emailed. The server writes mail to
       # this file instead of sending it and the suite reads the verification

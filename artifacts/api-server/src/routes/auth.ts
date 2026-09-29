@@ -16,14 +16,18 @@ import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody } f
 import { validatePassword } from "../lib/password-policy";
 import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
-import { openTenantScope, systemScope } from "../middleware/tenant-scope";
+import { openTenantScope } from "../middleware/tenant-scope";
 import {
   authIpLimiter,
+  registerIpLimiter,
+  REGISTER_RECIPIENT_LIMIT,
   anyLocked,
   recordFailures,
   clearFailures,
+  consumeBudget,
   userKey,
-  emailKey,
+  loginKey,
+  registerKey,
 } from "../middleware/rate-limit";
 
 const router = Router();
@@ -241,9 +245,13 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   const { email, password } = req.body;
   const normalisedEmail = email.toLowerCase();
 
+  // Scoped to this source address as well as the account: see `loginKey`. A
+  // lock keyed on the email alone lets anyone lock anyone out.
+  const attemptKey = loginKey(normalisedEmail, req.ip);
+
   // Checked before any work is done, so a locked-out attacker cannot even make
   // us hash a candidate password.
-  const locked = await anyLocked([emailKey(normalisedEmail)]);
+  const locked = await anyLocked([attemptKey]);
   if (locked) {
     const retryAfter = Math.ceil((locked.getTime() - Date.now()) / 1000);
     res.setHeader("Retry-After", String(retryAfter));
@@ -257,17 +265,19 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
     // Spend the same work as a real verification so the response time does not
     // reveal whether the address has an account.
     await spendVerificationTime(password);
-    await recordFailures([emailKey(normalisedEmail)]);
+    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
   const { valid, needsRehash } = await verifyPassword(user.passwordHash, password);
   if (!valid) {
-    await recordFailures([emailKey(normalisedEmail), userKey(user.id)]);
+    // Not `userKey`: that one guards step-up and change-password, and a failed
+    // login is by definition made by someone who is not the account's owner.
+    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  await clearFailures([emailKey(normalisedEmail), userKey(user.id)]);
+  await clearFailures([attemptKey, userKey(user.id)]);
 
   // The password was correct but is still stored under the superseded SHA-256
   // scheme (or weaker Argon2 parameters). This is the only moment we hold the
@@ -334,8 +344,21 @@ const REGISTRATION_ACCEPTED = {
  * Skipping the hash when the address is taken would replace the oracle we
  * closed with a slower one: ~50 ms of missing latency is as good an answer as
  * a 400.
+ *
+ * Nothing here may depend on whether the address is taken — that includes what
+ * this route charges. It used to charge the *login* lockout when the address
+ * existed, so a run of registrations followed by one login told you whether the
+ * account was real (429 versus 401). The recipient budget below is charged on
+ * every request and is a separate counter that login never reads.
+ *
+ * There is deliberately no `systemScope` here. It would hold a pooled
+ * connection for the whole request — across the breach lookup, the hash and the
+ * mail send — and the insert below needs a second one, so a burst of
+ * registrations could each hold one connection while waiting for another and
+ * starve every authenticated request. `users` and `pending_registrations`
+ * carry no tenant policy, so nothing here needs a scope.
  */
-router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope, async (req: Req, res) => {
+router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (req: Req, res) => {
   const { name, email, password, businessName, gstin } = req.body;
   const normalisedEmail = email.toLowerCase();
 
@@ -345,6 +368,15 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope,
   const policyFailure = await validatePassword(password);
   if (policyFailure) return res.status(400).json({ error: policyFailure.message });
 
+  // Bounds how much mail one address can be sent from this endpoint, and so
+  // stops it being used to spam or phish a third party. Charged before the
+  // lookup and for every request, so a taken address and a free one are
+  // indistinguishable — the count says nothing about whether an account exists.
+  const withinBudget = await consumeBudget(registerKey(normalisedEmail), REGISTER_RECIPIENT_LIMIT);
+  if (!withinBudget) {
+    return res.status(429).json({ error: "Too many registration attempts for this address. Try again later." });
+  }
+
   // Always hashed, even when it will be thrown away below.
   const passwordHash = await hashPassword(password);
 
@@ -352,29 +384,21 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope,
     .where(eq(usersTable.email, normalisedEmail)).limit(1);
 
   if (existing) {
-    // Still charged against the lockout counters, so bulk probing runs into the
-    // same backoff as password guessing even though it learns nothing.
-    await recordFailures([emailKey(normalisedEmail)]);
     await sendQuietly(alreadyRegisteredMessage(normalisedEmail));
     return res.status(202).json(REGISTRATION_ACCEPTED);
   }
 
   const token = crypto.randomBytes(32).toString("base64url");
 
-  // Written on `rootDb` — outside this request's transaction — on purpose.
+  // Written on `rootDb`, which always commits on its own connection.
   //
-  // `systemScope` holds one transaction for the whole request and commits it
-  // only once the response has been written. An email is not a response: it
-  // leaves the process the moment it is sent, and the person it names can act
-  // on it before that commit lands. Sending a link to a row that is not yet
-  // durable produces exactly the failure it looks like — "that link is invalid
-  // or has expired" for a link that was valid and had not expired.
-  //
-  // It showed up as an intermittent CI failure before it could show up as a
-  // support ticket. Nothing else in the request needs this row, and the table
-  // carries no tenant policy, so committing it on its own connection costs
-  // nothing and removes the window entirely: the row is durable before the
-  // link that references it exists anywhere.
+  // A request-scoped transaction commits only once the response has been
+  // written, and an email is not a response: it leaves the process the moment it
+  // is sent, and the person it names can act on it before that commit lands.
+  // Sending a link to a row that is not yet durable produces exactly the failure
+  // it looks like — "that link is invalid or has expired" for a link that was
+  // valid and had not expired. This route has no scope today; using `rootDb`
+  // keeps the row durable before the link exists even if one is ever added.
   await rootDb.insert(pendingRegistrationsTable).values({
     tokenHash: hashToken(token),
     email: normalisedEmail,
