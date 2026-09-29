@@ -9,11 +9,15 @@
  *      instance recycles and is invisible to sibling instances, which is
  *      acceptable for what it defends.
  *
- *   2. A per-account lockout held in Postgres. This is the one that matters:
- *      the attack worth defending is credential stuffing against a known
- *      address, and that attacker rotates IPs. Keeping the counter in the
- *      database means it survives restarts and is shared across every
- *      instance of an autoscale deployment.
+ *   2. A durable lockout held in Postgres, keyed on (source address, email).
+ *      Keeping the counter in the database means it survives restarts and is
+ *      shared across every instance of an autoscale deployment.
+ *
+ * The lockout is deliberately NOT keyed on the email alone. An email is chosen
+ * by the caller, so an email-only key lets anyone lock any account — including
+ * the platform administrator's — by failing a login for it, and keep it locked
+ * for as long as they like. Scoping the lock to the source address means an
+ * attacker can only ever lock themselves out.
  */
 
 import rateLimit from "express-rate-limit";
@@ -36,16 +40,27 @@ function lockDurationMs(failures: number): number {
 }
 
 /**
- * Namespaced so an account id and an address can never collide.
+ * Namespaced so the different kinds of subject can never collide.
  *
- * Addresses are deliberately absent: the durable lockout is per-account only.
- * Applying an account-grade threshold to an address punishes everyone behind a
- * shared NAT for one person's ten typos, and an attacker who rotates addresses
- * walks around it anyway. Addresses are the in-memory limiter's job, at a
- * threshold three times looser.
+ * `userKey` guards actions that already require a valid session (step-up,
+ * change-password). Only a caller who holds that session can charge it, so it is
+ * safe to lock the account outright. A failed *login* must never charge it: the
+ * caller of a login is unauthenticated, and letting them charge an account-wide
+ * key hands them a way to lock the real owner out of their own settings.
+ *
+ * `loginKey` is what a failed login charges. It includes the source address, so
+ * the lock stops that source guessing without touching anyone else's access.
+ * The trade-off is that an attacker rotating through many addresses gets a fresh
+ * budget per address; each guess still costs a 19 MiB Argon2 verification, the
+ * password policy refuses weak and breached passwords, and the per-address
+ * limiter above bounds each source.
+ *
+ * `registerKey` is a per-recipient mail budget and is never read by login.
  */
 export const userKey = (userId: number) => `user:${userId}`;
-export const emailKey = (email: string) => `email:${email.toLowerCase().slice(0, 200)}`;
+export const loginKey = (email: string, ip: string | undefined) =>
+  `login:${ip ?? "unknown"}|${email.toLowerCase().slice(0, 200)}`;
+export const registerKey = (email: string) => `register:${email.toLowerCase().slice(0, 200)}`;
 
 /**
  * Failed auth attempts tolerated from one address per window.
@@ -77,6 +92,72 @@ export const authIpLimiter: ReturnType<typeof rateLimit> = rateLimit({
   message: { error: "Too many attempts. Try again later." },
 });
 
+/** Registrations one address may submit per window, whatever the outcome. */
+const registerIpLimit = Number(process.env["REGISTER_RATE_LIMIT_MAX"] ?? 10);
+
+if (!Number.isInteger(registerIpLimit) || registerIpLimit < 1) {
+  throw new Error(
+    `REGISTER_RATE_LIMIT_MAX must be a positive integer (got "${process.env["REGISTER_RATE_LIMIT_MAX"]}").`,
+  );
+}
+
+/**
+ * Per-IP limiter for registration.
+ *
+ * Unlike `authIpLimiter` it counts *every* response. A registration that
+ * succeeds still costs a breach lookup, a 19 MiB Argon2 hash, an email and a
+ * database row, and the whole point of the endpoint is that success and failure
+ * look identical — so skipping successes would leave it unthrottled.
+ */
+export const registerIpLimiter: ReturnType<typeof rateLimit> = rateLimit({
+  windowMs: WINDOW_MS,
+  limit: registerIpLimit,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many registration attempts. Try again later." },
+});
+
+/** Registrations that may name one address per window, from any source. */
+export const REGISTER_RECIPIENT_LIMIT = 5;
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer (got "${raw}").`);
+  }
+  return value;
+}
+
+/**
+ * Requests one business may make per minute, split into reads and writes.
+ *
+ * Nothing limited an authenticated caller. A registered tenant could script
+ * thousands of large writes — an e-way bill carries up to 500 free-form line
+ * records — and then list them, growing storage and response size without bound.
+ * The limit is per *business* rather than per address: one business is one
+ * tenant however many devices or offices it uses, and a botnet cannot multiply
+ * it by changing address. Writes are limited much harder than reads because
+ * they are what grows the database.
+ *
+ * Held in process memory, so it bounds each instance rather than the fleet; it
+ * is a ceiling against runaway or abusive clients, not a quota. The defaults are
+ * far above what a person clicking through the app reaches.
+ */
+const tenantWriteLimit = positiveIntFromEnv("TENANT_WRITE_RATE_LIMIT_MAX", 300);
+const tenantReadLimit = positiveIntFromEnv("TENANT_READ_RATE_LIMIT_MAX", 1200);
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const isRead = (req: { method: string }) => SAFE_METHODS.has(req.method);
+
+export const tenantApiLimiter: ReturnType<typeof rateLimit> = rateLimit({
+  windowMs: 60_000,
+  limit: (req) => (isRead(req) ? tenantReadLimit : tenantWriteLimit),
+  keyGenerator: (req) => `${(req as any).businessId}:${isRead(req) ? "read" : "write"}`,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { error: "Too many requests. Slow down and try again shortly." },
+});
+
 /**
  * Whether this subject is currently locked out, and until when.
  * A read failure returns `null` — the lockout must never become an outage.
@@ -105,42 +186,64 @@ export async function anyLocked(keys: string[]): Promise<Date | null> {
 }
 
 /**
- * Record a failed attempt against each subject and extend the lock if the
- * threshold has been passed.
+ * Add one to a subject's counter and return the row.
  *
  * The upsert resets the counter when the last failure fell outside the window,
  * so occasional typos never accumulate into a lockout.
  */
-export async function recordFailures(keys: string[]): Promise<void> {
+async function incrementCounter(key: string) {
   const now = new Date();
   const windowStart = new Date(now.getTime() - WINDOW_MS);
 
+  const [row] = await db
+    .insert(loginAttemptsTable)
+    .values({ key, failures: 1, firstFailureAt: now, lockedUntil: null })
+    .onConflictDoUpdate({
+      target: loginAttemptsTable.key,
+      set: {
+        failures: sql`CASE
+          WHEN ${loginAttemptsTable.firstFailureAt} < ${windowStart}
+            AND (${loginAttemptsTable.lockedUntil} IS NULL
+                 OR ${loginAttemptsTable.lockedUntil} < ${now})
+          THEN 1
+          ELSE ${loginAttemptsTable.failures} + 1
+        END`,
+        firstFailureAt: sql`CASE
+          WHEN ${loginAttemptsTable.firstFailureAt} < ${windowStart}
+            AND (${loginAttemptsTable.lockedUntil} IS NULL
+                 OR ${loginAttemptsTable.lockedUntil} < ${now})
+          THEN ${now}
+          ELSE ${loginAttemptsTable.firstFailureAt}
+        END`,
+      },
+    })
+    .returning();
+
+  return row;
+}
+
+/**
+ * Spend one unit of a per-window budget and report whether it was within
+ * `limit`. Fails open: a database error must not stop people registering.
+ */
+export async function consumeBudget(key: string, limit: number): Promise<boolean> {
+  try {
+    const row = await incrementCounter(key);
+    return (row?.failures ?? 0) <= limit;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Record a failed attempt against each subject and extend the lock if the
+ * threshold has been passed.
+ */
+export async function recordFailures(keys: string[]): Promise<void> {
   await Promise.all(
     keys.map(async (key) => {
       try {
-        const [row] = await db
-          .insert(loginAttemptsTable)
-          .values({ key, failures: 1, firstFailureAt: now, lockedUntil: null })
-          .onConflictDoUpdate({
-            target: loginAttemptsTable.key,
-            set: {
-              failures: sql`CASE
-                WHEN ${loginAttemptsTable.firstFailureAt} < ${windowStart}
-                  AND (${loginAttemptsTable.lockedUntil} IS NULL
-                       OR ${loginAttemptsTable.lockedUntil} < ${now})
-                THEN 1
-                ELSE ${loginAttemptsTable.failures} + 1
-              END`,
-              firstFailureAt: sql`CASE
-                WHEN ${loginAttemptsTable.firstFailureAt} < ${windowStart}
-                  AND (${loginAttemptsTable.lockedUntil} IS NULL
-                       OR ${loginAttemptsTable.lockedUntil} < ${now})
-                THEN ${now}
-                ELSE ${loginAttemptsTable.firstFailureAt}
-              END`,
-            },
-          })
-          .returning();
+        const row = await incrementCounter(key);
 
         const lockMs = lockDurationMs(row?.failures ?? 0);
         if (lockMs > 0) {

@@ -219,6 +219,17 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     .limit(1);
   if (!existing) return res.status(404).json({ error: "Not found" });
 
+  // A cancelled bill is final, like a cancelled invoice: it is out of every
+  // total and its goods are out of stock, and letting it be edited or "revived"
+  // would put the credit back without putting the goods back.
+  if (existing.status === "cancelled") {
+    return res.status(409).json({ error: "A cancelled bill cannot be changed." });
+  }
+  const cancelling = paymentStatus === "cancelled";
+  if (cancelling && (items || vendorId)) {
+    return res.status(400).json({ error: "Cancel a bill on its own, without changing its lines or vendor." });
+  }
+
   const updates: any = {};
   const invoiceNumber = billNumber ?? rawNum;
   const invoiceDate = billDate ?? rawDate;
@@ -261,12 +272,25 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   };
 
   const purchase = await db.transaction(async (tx) => {
+    // Under a row lock, so two concurrent cancels cannot both return the goods.
+    const [locked] = await tx.select().from(purchasesTable)
+      .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
+      .for("update")
+      .limit(1);
+    if (!locked) return null;
+    if (locked.status === "cancelled") return "cancelled" as const;
+
+    if (cancelling) {
+      // The goods this bill received go back out.
+      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -STOCK_IN);
+    }
+
     if (items) {
       const calc = calcPurchaseTotals(items, supply.isInterstate);
       const resolvedItems = await resolveItemsToProducts(tx, businessId, calc.items);
       // Undo what this bill previously put into stock, then apply what it says
       // now. Without the reversal, re-saving a bill for 10 units left 20.
-      await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_IN);
+      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -STOCK_IN);
       await applyStockMovement(tx, productsTable, eq, businessId, resolvedItems, STOCK_IN);
       assignTotals(calc, resolvedItems);
     } else if (supply.isInterstate !== existing.isInterstate) {
@@ -285,6 +309,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     return updated;
   });
   if (!purchase) return res.status(404).json({ error: "Not found" });
+  if (purchase === "cancelled") return res.status(409).json({ error: "A cancelled bill cannot be changed." });
   return res.json(mapPurchase(purchase));
 });
 
@@ -298,7 +323,11 @@ router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), asy
       .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
       .limit(1);
     if (!existing) return;
-    await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_IN);
+    // A cancelled bill already handed its goods back; reversing again would take
+    // the same units out of stock twice.
+    if (existing.status !== "cancelled") {
+      await applyStockMovement(tx, productsTable, eq, businessId, existing.items as any[], -STOCK_IN);
+    }
     await tx.delete(purchasesTable)
       .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)));
   });

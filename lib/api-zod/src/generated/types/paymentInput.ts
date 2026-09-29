@@ -5,9 +5,14 @@
  * GST Billing & Inventory Management Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { PaymentInputType } from './paymentInputType';
 
 export interface PaymentInput {
-  type: string;
+  type: PaymentInputType;
+  /**
+     * Always positive; the direction is the `type`, not the sign.
+     * @exclusiveMinimum 0
+     */
   amount: number;
   date: string;
   mode: string;

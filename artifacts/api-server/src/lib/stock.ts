@@ -20,6 +20,7 @@
  * — that five units are owed. A floor is a display decision, not a storage one.
  */
 
+import { and, sql } from "drizzle-orm";
 import { dec, toColumn } from "./money";
 
 export interface StockLine {
@@ -95,14 +96,21 @@ export async function applyStockMovement(
     .from(productsTable)
     .where(eq(productsTable.businessId, businessId));
 
-  for (const [productId, delta] of netByProduct(catalog, lines, direction)) {
+  // Ascending by id, so two concurrent documents touching the same products
+  // take their row locks in the same order and cannot deadlock each other.
+  const deltas = [...netByProduct(catalog, lines, direction)].sort(([a], [b]) => a - b);
+
+  for (const [productId, delta] of deltas) {
     if (delta.isZero()) continue;
-    const product = catalog.find((p) => p.id === productId);
-    if (!product) continue;
+    // The addition happens in the database. This used to write back
+    // `catalogValue + delta`, where the catalog value had been read moments
+    // earlier without a lock: two concurrent invoices for one product both
+    // started from the same quantity and the last write won, so goods were sold
+    // twice and stock fell once.
     await tx
       .update(productsTable)
-      .set({ stockQuantity: dec(product.stockQuantity).plus(delta).toFixed(3) })
-      .where(eq(productsTable.id, productId));
+      .set({ stockQuantity: sql`${productsTable.stockQuantity} + ${delta.toFixed(3)}::numeric` })
+      .where(and(eq(productsTable.id, productId), eq(productsTable.businessId, businessId)));
   }
 }
 

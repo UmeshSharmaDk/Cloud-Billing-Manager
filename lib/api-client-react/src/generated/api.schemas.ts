@@ -17,6 +17,12 @@ export interface VerifyRegistrationInput {
      * @maxLength 512
      */
   token: string;
+  /**
+     * The password for the new account, chosen by whoever opens the link. It is not collected at registration: a password chosen by whoever submitted the form could be known to someone who does not control the mailbox.
+     * @minLength 12
+     * @maxLength 128
+     */
+  password: string;
 }
 
 export interface HealthStatus {
@@ -158,7 +164,6 @@ export interface LoginInput {
 export interface RegisterInput {
   name: string;
   email: string;
-  password: string;
   businessName: string;
   /** @nullable */
   gstin?: string | null;
@@ -575,8 +580,23 @@ export interface InvoiceListResponse {
   total: number;
 }
 
+/**
+ * Reports treat the types differently: a credit note subtracts from sales and tax, and a proforma invoice is not a tax document and is left out. Defaults to a tax invoice.
+ */
+export type InvoiceInputType = typeof InvoiceInputType[keyof typeof InvoiceInputType];
+
+
+export const InvoiceInputType = {
+  Tax_Invoice: 'Tax Invoice',
+  Bill_of_Supply: 'Bill of Supply',
+  Proforma_Invoice: 'Proforma Invoice',
+  Credit_Note: 'Credit Note',
+  Debit_Note: 'Debit Note',
+} as const;
+
 export interface InvoiceInput {
-  type?: string;
+  /** Reports treat the types differently: a credit note subtracts from sales and tax, and a proforma invoice is not a tax document and is left out. Defaults to a tax invoice. */
+  type?: InvoiceInputType;
   /** Omit for a walk-in customer and send `customerName` instead. The id must belong to the caller's own business. */
   customerId?: number;
   /** Required when `customerId` is omitted. */
@@ -593,8 +613,19 @@ export interface InvoiceInput {
   items: InvoiceItem[];
 }
 
+export type InvoiceUpdateType = typeof InvoiceUpdateType[keyof typeof InvoiceUpdateType];
+
+
+export const InvoiceUpdateType = {
+  Tax_Invoice: 'Tax Invoice',
+  Bill_of_Supply: 'Bill of Supply',
+  Proforma_Invoice: 'Proforma Invoice',
+  Credit_Note: 'Credit Note',
+  Debit_Note: 'Debit Note',
+} as const;
+
 export interface InvoiceUpdate {
-  type?: string;
+  type?: InvoiceUpdateType;
   customerId?: number;
   invoiceDate?: string;
   /** @nullable */
@@ -634,7 +665,10 @@ export interface InvoiceStatusInput {
   status?: InvoiceStatusInputStatus;
   /** Alias for `status`; whichever is present is used. */
   paymentStatus?: InvoiceStatusInputPaymentStatus;
-  /** @nullable */
+  /**
+     * The total paid so far, between zero and the invoice's grand total. It is not added to what was already paid.
+     * @nullable
+     */
   paidAmount?: number | null;
 }
 
@@ -744,8 +778,22 @@ export interface PaymentListResponse {
   total: number;
 }
 
+export type PaymentInputType = typeof PaymentInputType[keyof typeof PaymentInputType];
+
+
+export const PaymentInputType = {
+  received: 'received',
+  paid: 'paid',
+  in: 'in',
+  out: 'out',
+} as const;
+
 export interface PaymentInput {
-  type: string;
+  type: PaymentInputType;
+  /**
+     * Always positive; the direction is the `type`, not the sign.
+     * @exclusiveMinimum 0
+     */
   amount: number;
   date: string;
   mode: string;

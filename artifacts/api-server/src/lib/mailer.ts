@@ -88,6 +88,20 @@ function selectMailer(): Mailer {
 export const mailer: Mailer = selectMailer();
 
 /**
+ * Text that came from a stranger, made safe to sit inside one line of a message.
+ *
+ * `name` is whatever the person submitting the form typed, and it is mailed to
+ * the *address they typed*, which need not be theirs. With newlines allowed, the
+ * greeting could be turned into a forged paragraph — "Hello X, your account is
+ * suspended, call this number" — delivered from our own domain to a third party.
+ * Control characters and line breaks collapse to a space, and the length is
+ * capped so the name cannot crowd out the rest of the message.
+ */
+function plainLine(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, 80);
+}
+
+/**
  * Sent when the address is free: here is the link that finishes your signup.
  */
 export function verificationMessage(to: string, name: string, link: string): Message {
@@ -95,10 +109,10 @@ export function verificationMessage(to: string, name: string, link: string): Mes
     to,
     subject: "Confirm your GST Platform account",
     text: [
-      `Hello ${name},`,
+      `Hello ${plainLine(name)},`,
       "",
       "Someone — we hope you — asked to create a GST Platform account with this",
-      "address. Open the link below to finish setting it up:",
+      "address. Open the link below to finish setting it up and choose a password:",
       "",
       link,
       "",

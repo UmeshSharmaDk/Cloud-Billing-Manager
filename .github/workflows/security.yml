@@ -27,21 +27,50 @@ jobs:
       # freshly published malicious version. That does nothing about known
       # CVEs in packages that have been around for months, which is this step.
       #
-      # Scoped to production dependencies, and that is a deliberate line rather
-      # than a way to get green. Auditing the whole tree reports 22 high and 11
-      # critical advisories, every one of them reached through `orval` — the
-      # OpenAPI code generator in `lib/api-spec`, which runs at build time and
-      # ships nothing. The production tree has none: a high advisory there is a
-      # package an attacker can actually reach at runtime, so it fails the
-      # build. Today that set is empty, which is what makes the check a signal
-      # rather than a wall of noise everyone learns to click past.
-      - name: Audit production dependencies
+      # Scoped to `dependencies`, and that is a deliberate line rather than a way
+      # to get green. `pnpm audit --prod` only looks at `dependencies`, so what
+      # counts as "shipped" has to be declared there: for the API server that is
+      # everything it imports, and for the React app (artifacts/gst-platform)
+      # everything Vite bundles into the browser build -- react, the Radix
+      # components, pdfjs-dist, tesseract.js, mammoth and so on -- while the
+      # build tooling (vite, tailwind, the Replit plugins, @types/*) stays in
+      # `devDependencies`. A package the app imports must therefore be added
+      # under `dependencies`, or this audit silently stops covering it (the app
+      # once kept all of them in devDependencies, which made this step vacuous
+      # for everything that runs in the user's browser).
+      #
+      # Auditing the whole tree also reports high and critical advisories, all
+      # of them in build-time tooling that ships nothing: `orval`, the OpenAPI
+      # code generator in `lib/api-spec`, and the dev-server side of Vite. A
+      # high advisory in the production set is a package an attacker can reach
+      # at runtime, so it fails the build; the second step below keeps the rest
+      # visible without letting it block an unrelated fix.
+      - name: Audit production and browser-bundled dependencies
         run: pnpm audit --prod --audit-level=high
 
-      # The build-time tree, reported and not gated. Its advisories are real and
-      # worth seeing — they just do not belong on the path that blocks a fix to
-      # an unrelated bug. Upgrading past them means moving orval, which is its
-      # own change.
+      # `pnpm audit` cannot see xlsx: SheetJS publishes fixed releases only from
+      # cdn.sheetjs.com (the npm package is stuck on the vulnerable 0.18.5), so
+      # it is installed from a tarball URL that carries no advisory data. This
+      # is the substitute check -- fail if the resolved version drops below
+      # 0.20.2, which fixes CVE-2023-30533 (prototype pollution) and
+      # CVE-2024-22363 (ReDoS). When bumping it, check SheetJS's advisories by hand.
+      - name: Assert xlsx is a fixed release
+        run: |
+          node -e '
+            const v = require("./artifacts/gst-platform/node_modules/xlsx/package.json").version;
+            const [a, b, c] = v.split(".").map(Number);
+            if (a === 0 && (b < 20 || (b === 20 && c < 2))) {
+              console.error("::error::xlsx " + v + " is below 0.20.2 (CVE-2023-30533, CVE-2024-22363)");
+              process.exit(1);
+            }
+            console.log("xlsx " + v + " ok");
+          '
+
+      # The whole tree, including build-time tooling, reported and not gated.
+      # Its advisories are real and worth seeing -- they just do not belong on
+      # the path that blocks a fix to an unrelated bug. Clearing them means
+      # moving orval and refreshing vite's lockfile entries, which is its own
+      # change.
       - name: Audit build-time dependencies (reporting only)
         continue-on-error: true
         run: pnpm audit --audit-level=high
@@ -139,6 +168,11 @@ jobs:
       # would otherwise trip the per-IP limiter. The per-account lockout that
       # F-06 asserts still runs at its real threshold of 10.
       AUTH_RATE_LIMIT_MAX: "500"
+      # Registration has its own per-address limit that counts every request,
+      # not only failures. The suite registers dozens of accounts and fires a
+      # 40-request burst from one address, so it needs the same headroom. The
+      # per-recipient mail budget is fixed and is what the suite asserts on.
+      REGISTER_RATE_LIMIT_MAX: "500"
       # Registration is two steps now: the response cannot say whether an
       # address is taken, so the outcome is emailed. The server writes mail to
       # this file instead of sending it and the suite reads the verification

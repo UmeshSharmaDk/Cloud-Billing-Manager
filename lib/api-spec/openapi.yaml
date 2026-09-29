@@ -133,7 +133,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuthResponse"
         "400":
-          description: The token is unknown, already used, or expired
+          description: >-
+            The token is unknown, already used, or expired — or the password does
+            not meet the policy, in which case the token is not spent and the
+            request can be retried.
         "409":
           description: The address was registered by someone else first
 
@@ -765,10 +768,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Invoice"
+        "409":
+          description: >-
+            The invoice is cancelled, or has payments recorded against it and the
+            request changes its figures. Notes and the due date remain editable
+            once payments exist. Cancel the invoice or issue a credit note instead.
     delete:
       operationId: deleteInvoice
       tags: [invoices]
-      summary: Delete invoice
+      summary: Delete invoice (always refused; cancel it instead)
+      description: >-
+        An issued invoice is never deleted: its number comes from a gapless
+        statutory series and removing it leaves a hole in the series. Cancel it
+        with `PATCH /invoices/{id}/status` instead, which keeps the number, takes
+        the invoice out of every total and returns its goods to stock.
       parameters:
         - name: id
           in: path
@@ -776,14 +789,23 @@ paths:
           schema:
             type: integer
       responses:
-        "200":
-          description: Deleted
+        "404":
+          description: No such invoice in the caller's business
+        "409":
+          description: Issued invoices cannot be deleted
 
   /invoices/{id}/status:
     patch:
       operationId: updateInvoiceStatus
       tags: [invoices]
       summary: Update invoice payment status
+      description: >-
+        Changes what has been paid on an invoice, or cancels it. The status is
+        derived from the amount, not taken on trust: `paid` settles the balance,
+        `unpaid` reverses whatever was paid, and `partial` needs `paidAmount`.
+        Every change is recorded in the payments ledger, and lowering what was paid
+        records a reversal rather than deleting the receipt. Cancelling reverses any
+        receipts, returns the goods to stock and is final.
       parameters:
         - name: id
           in: path
@@ -803,6 +825,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Invoice"
+        "400":
+          description: The status contradicts the amount, or `partial` was requested with no amount
+        "409":
+          description: The amount exceeds the invoice total, or the invoice is cancelled
 
   # Purchases
   /purchases:
@@ -945,6 +971,10 @@ paths:
       operationId: createPayment
       tags: [payments]
       summary: Create payment entry
+      description: >-
+        A received payment that names an `invoiceId` is applied to that invoice in
+        the same transaction: the invoice's paid amount and status move with it.
+        Money going out cannot name an invoice.
       requestBody:
         required: true
         content:
@@ -958,6 +988,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Payment"
+        "400":
+          description: Invalid payment, or an outgoing payment that names an invoice
+        "409":
+          description: The payment would take the invoice past its total, or the invoice is cancelled
 
   # Dashboard
   /dashboard/stats:
@@ -1360,13 +1394,22 @@ components:
             addresses have accounts.
     VerifyRegistrationInput:
       type: object
-      required: [token]
+      required: [token, password]
       properties:
         token:
           type: string
           minLength: 1
           maxLength: 512
           description: The single-use token from the verification link.
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+          description: >-
+            The password for the new account, chosen by whoever opens the link.
+            It is not collected at registration: a password chosen by whoever
+            submitted the form could be known to someone who does not control the
+            mailbox.
     HealthStatus:
       type: object
       properties:
@@ -1483,13 +1526,11 @@ components:
 
     RegisterInput:
       type: object
-      required: [name, email, password, businessName]
+      required: [name, email, businessName]
       properties:
         name:
           type: string
         email:
-          type: string
-        password:
           type: string
         businessName:
           type: string
@@ -2051,6 +2092,11 @@ components:
       properties:
         type:
           type: string
+          enum: [Tax Invoice, Bill of Supply, Proforma Invoice, Credit Note, Debit Note]
+          description: >-
+            Reports treat the types differently: a credit note subtracts from
+            sales and tax, and a proforma invoice is not a tax document and is
+            left out. Defaults to a tax invoice.
         customerId:
           type: integer
           description: >-
@@ -2082,6 +2128,7 @@ components:
       properties:
         type:
           type: string
+          enum: [Tax Invoice, Bill of Supply, Proforma Invoice, Credit Note, Debit Note]
         customerId:
           type: integer
         invoiceDate:
@@ -2111,6 +2158,9 @@ components:
           description: Alias for `status`; whichever is present is used.
         paidAmount:
           type: ["number", "null"]
+          description: >-
+            The total paid so far, between zero and the invoice's grand total. It
+            is not added to what was already paid.
 
     PurchaseItem:
       type: object
@@ -2287,8 +2337,11 @@ components:
       properties:
         type:
           type: string
+          enum: [received, paid, in, out]
         amount:
           type: number
+          exclusiveMinimum: 0
+          description: Always positive; the direction is the `type`, not the sign.
         date:
           type: string
         mode:

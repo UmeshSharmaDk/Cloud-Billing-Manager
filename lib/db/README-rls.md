@@ -87,9 +87,11 @@ connection carrying one request's tenant into the next.
 ### The cost
 
 One transaction is held open per request, from `requireBusiness` until the
-response is written — it commits on the way out, or rolls back if the handler
-produced a 5xx. A slow handler therefore holds a connection for its whole
-duration rather than for each query, so pool sizing matters more than it did.
+handler answers — it commits then, and only after that is the response sent, or
+it rolls back if the handler produced a 5xx. A slow handler therefore holds a
+connection for its whole duration rather than for each query, so pool sizing
+matters more than it did. The connection is released at commit, so a slow client
+reading the response does not hold one.
 Watch connection saturation after rolling this out.
 
 **With no tenant set, the policies match nothing.** That is deliberate: a code

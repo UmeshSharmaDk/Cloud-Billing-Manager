@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db, invoicesTable, purchasesTable, productsTable } from "@workspace/db";
-import { eq, and, gte, lte, count, desc, sum as sqlSum } from "drizzle-orm";
+import { eq, and, gte, lte, count, desc, sql, sum as sqlSum } from "drizzle-orm";
+import { taxInvoice, activePurchase, invoiceSign, signedInvoice } from "../lib/tax-documents";
 import { requireAuth, requireBusiness } from "./auth";
 import { validateQuery } from "../middleware/validate";
 import { MonthYearQuery, DateRangeQuery } from "../schemas";
@@ -59,24 +60,28 @@ router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery)
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  // Cancelled invoices and proformas are not supplies. Credit notes are, but as
+  // a reduction: `netted` carries them negated so every sum below nets, while
+  // `mapped` keeps each document's own figures for the list.
   const invoices = await db.select().from(invoicesTable)
-    .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
+    .where(and(eq(invoicesTable.businessId, businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
   const mapped = invoices.map(mapInvoice);
+  const netted = mapped.map(signedInvoice);
 
   const intraState = mapped.filter(i => !i.isInterstate);
   const interState = mapped.filter(i => i.isInterstate);
 
   // Summed as decimals. Adding two-decimal amounts as floats accumulates
   // representation error, and this figure is filed.
-  const totalTaxableValue = sumBy(mapped, (i) => i.subtotal);
-  const totalCgst = sumBy(mapped, (i) => i.cgst);
-  const totalSgst = sumBy(mapped, (i) => i.sgst);
-  const totalIgst = sumBy(mapped, (i) => i.igst);
+  const totalTaxableValue = sumBy(netted, (i) => i.subtotal);
+  const totalCgst = sumBy(netted, (i) => i.cgst);
+  const totalSgst = sumBy(netted, (i) => i.sgst);
+  const totalIgst = sumBy(netted, (i) => i.igst);
   const totalTax = sum([totalCgst, totalSgst, totalIgst]);
-  const totalAmount = sumBy(mapped, (i) => i.grandTotal);
+  const totalAmount = sumBy(netted, (i) => i.grandTotal);
 
   const rateMap = new Map<string, { taxable: ReturnType<typeof dec>; gst: ReturnType<typeof dec> }>();
-  for (const inv of mapped) {
+  for (const inv of netted) {
     for (const item of inv.items) {
       const rate = dec(item.gstRate ?? 0).toFixed(2);
       const bucket = rateMap.get(rate) ?? { taxable: dec(0), gst: dec(0) };
@@ -101,9 +106,9 @@ router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery)
     totalIgst: toJson(totalIgst),
     totalTax: toJson(totalTax),
     intraStateCount: intraState.length,
-    intraStateTaxable: toJson(sumBy(intraState, (i) => i.subtotal)),
+    intraStateTaxable: toJson(sumBy(netted.filter(i => !i.isInterstate), (i) => i.subtotal)),
     interStateCount: interState.length,
-    interStateTaxable: toJson(sumBy(interState, (i) => i.subtotal)),
+    interStateTaxable: toJson(sumBy(netted.filter(i => i.isInterstate), (i) => i.subtotal)),
     byRate,
     invoices: mapped.map(inv => ({ ...inv, taxableAmount: inv.subtotal, totalAmount: inv.grandTotal })),
   });
@@ -117,17 +122,20 @@ router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery
   const from = `${year}-${String(month).padStart(2, "0")}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  // A cancelled bill is not input credit and a cancelled invoice is not output
+  // tax; a credit note reduces output tax rather than adding to it.
   const [invoices, purchases] = await Promise.all([
-    db.select().from(invoicesTable).where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to))),
-    db.select().from(purchasesTable).where(and(eq(purchasesTable.businessId, businessId), gte(purchasesTable.invoiceDate, from), lte(purchasesTable.invoiceDate, to))),
+    db.select().from(invoicesTable).where(and(eq(invoicesTable.businessId, businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to))),
+    db.select().from(purchasesTable).where(and(eq(purchasesTable.businessId, businessId), activePurchase(purchasesTable), gte(purchasesTable.invoiceDate, from), lte(purchasesTable.invoiceDate, to))),
   ]);
   const mappedInv = invoices.map(mapInvoice);
+  const nettedInv = mappedInv.map(signedInvoice);
   const mappedPur = purchases.map(mapPurchase);
 
-  const outwardCgst = sumBy(mappedInv, (i) => i.cgst);
-  const outwardSgst = sumBy(mappedInv, (i) => i.sgst);
-  const outwardIgst = sumBy(mappedInv, (i) => i.igst);
-  const outwardTaxable = sumBy(mappedInv, (i) => i.subtotal);
+  const outwardCgst = sumBy(nettedInv, (i) => i.cgst);
+  const outwardSgst = sumBy(nettedInv, (i) => i.sgst);
+  const outwardIgst = sumBy(nettedInv, (i) => i.igst);
+  const outwardTaxable = sumBy(nettedInv, (i) => i.subtotal);
 
   const inputCgst = sumBy(mappedPur, (p) => p.cgst);
   const inputSgst = sumBy(mappedPur, (p) => p.sgst);
@@ -166,13 +174,15 @@ router.get("/sales", requireAuth, requireBusiness, validateQuery(DateRangeQuery)
   const { from, to } = reportRange(req.validatedQuery);
   const conditions: any[] = [
     eq(invoicesTable.businessId, businessId),
+    taxInvoice(invoicesTable),
     gte(invoicesTable.invoiceDate, from),
     lte(invoicesTable.invoiceDate, to),
   ];
-  // Totals over the whole range, from the database.
+  // Totals over the whole range, from the database. Credit notes subtract.
+  const sign = invoiceSign(invoicesTable);
   const [totals] = await db.select({
-    totalSales: sqlSum(invoicesTable.grandTotal),
-    totalGst: sqlSum(invoicesTable.totalGst),
+    totalSales: sqlSum(sql`${invoicesTable.grandTotal} * ${sign}`),
+    totalGst: sqlSum(sql`${invoicesTable.totalGst} * ${sign}`),
     invoiceCount: count(),
   }).from(invoicesTable).where(and(...conditions));
 
@@ -194,6 +204,7 @@ router.get("/purchases", requireAuth, requireBusiness, validateQuery(DateRangeQu
   const { from, to } = reportRange(req.validatedQuery);
   const conditions: any[] = [
     eq(purchasesTable.businessId, businessId),
+    activePurchase(purchasesTable),
     gte(purchasesTable.invoiceDate, from),
     lte(purchasesTable.invoiceDate, to),
   ];
@@ -226,27 +237,31 @@ router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), 
   const to = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
   const invoices = await db.select().from(invoicesTable)
-    .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
+    .where(and(eq(invoicesTable.businessId, businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)));
 
   type HsnBucket = {
     description: string; uqc: string;
     quantity: ReturnType<typeof dec>; taxableValue: ReturnType<typeof dec>;
     cgst: ReturnType<typeof dec>; sgst: ReturnType<typeof dec>; igst: ReturnType<typeof dec>;
   };
-  const hsnMap: Record<string, HsnBucket> = {};
+  // A Map, not an object literal: an HSN code is caller-supplied text, and a
+  // line coded "constructor" or "__proto__" resolved to a member of
+  // `Object.prototype`, so the bucket had no `.plus` and the whole month's
+  // report threw a 500.
+  const hsnMap = new Map<string, HsnBucket>();
 
-  for (const inv of invoices) {
-    const items = Array.isArray(inv.items) ? inv.items : [];
-    for (const item of items) {
+  for (const inv of invoices.map(mapInvoice).map(signedInvoice)) {
+    for (const item of inv.items) {
       const hsnCode = String(item.hsnCode || "N/A").trim();
-      if (!hsnMap[hsnCode]) {
-        hsnMap[hsnCode] = {
+      let bucket = hsnMap.get(hsnCode);
+      if (!bucket) {
+        bucket = {
           description: item.description ?? item.productName ?? "",
           uqc: item.unit ?? "Nos",
           quantity: dec(0), taxableValue: dec(0), cgst: dec(0), sgst: dec(0), igst: dec(0),
         };
+        hsnMap.set(hsnCode, bucket);
       }
-      const bucket = hsnMap[hsnCode];
       bucket.quantity = bucket.quantity.plus(dec(item.quantity ?? 0));
       bucket.taxableValue = bucket.taxableValue.plus(dec(item.taxableAmount ?? 0));
       bucket.cgst = bucket.cgst.plus(dec(item.cgst ?? 0));
@@ -255,7 +270,7 @@ router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), 
     }
   }
 
-  const items = Object.entries(hsnMap).map(([hsnCode, v]) => ({
+  const items = [...hsnMap.entries()].map(([hsnCode, v]) => ({
     hsnCode,
     description: v.description,
     quantity: toJson(v.quantity),

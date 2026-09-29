@@ -9,7 +9,6 @@
 export interface RegisterInput {
   name: string;
   email: string;
-  password: string;
   businessName: string;
   /** @nullable */
   gstin?: string | null;

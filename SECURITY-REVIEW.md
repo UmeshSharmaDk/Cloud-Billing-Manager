@@ -59,7 +59,7 @@ verified** — 133 integration checks against a real Postgres plus 34 unit tests
 | F-10 | **Fixed** | Terminal error handler returns `{error, requestId}` and nothing else; full detail is logged server-side under the same id. Logger now treats an unset `NODE_ENV` as production. |
 | F-04 | **Fixed** | Zod validation on every route. Type-confused login, negative quantity, 900% GST rate, malformed date and non-numeric `:id` all return `400`; unknown body keys are stripped rather than written. |
 | F-05 | **Fixed** | The four unscoped lookups now filter by `businessId` and return `400` instead of silently falling back. A two-tenant suite proves every `:id` route is `404` across the boundary and that no cross-tenant name or GSTIN appears in any response. |
-| F-06 | **Fixed** | Per-IP limiter plus a per-account lockout held in Postgres, so it survives restarts and spans autoscale instances. Locks after 11 failures with exponential backoff, and holds even against the correct password. |
+| F-06 | **Fixed** | Per-IP limiter plus a durable lockout held in Postgres, so it survives restarts and spans autoscale instances. Locks after 11 failures with exponential backoff, and holds even against the correct password. The lock is keyed on (source address, email), not the email alone — see *Three defects in the lockout and registration* below. |
 | F-07 | **Fixed** | `requireAuth` loads the user row on every request. Promotion, demotion, deactivation and subscription expiry all take effect immediately — previously up to seven days. |
 | F-11 | **Fixed** (caps) | `?limit=100000000`, `?limit=abc` and `?page=0` are `400`; report spans are capped at 366 days and default to the current month; the admin user lists filter, count and page in SQL. |
 | L-02 | **Fixed** | E-way bills can no longer reference another tenant's invoice. |
@@ -67,7 +67,7 @@ verified** — 133 integration checks against a real Postgres plus 34 unit tests
 | F-09 | **Fixed** | The session is an `HttpOnly` cookie; no token is reachable from page script anywhere in the app. Double-submit CSRF on every cookie-authenticated write. Helmet adds a `default-src 'none'` CSP, HSTS, nosniff and `X-Frame-Options: DENY`. Logout is no longer a stub. |
 | F-12 | **Fixed** | 12-character minimum, common-password screening, and a Have I Been Pwned k-anonymity lookup that fails open. New self-service `POST /auth/change-password`. |
 | F-13 | **Fixed** | Append-only `audit_log`; step-up re-authentication for password resets and role changes; soft delete so tenant records are never orphaned; last-admin and self-action guards. |
-| F-14 | **Fixed** | Both halves. The timing half closed in Phase 1; registration now answers `202` with the same body whether or not the address is taken and settles the difference by email. Enumeration still charges the account lockout as well. |
+| F-14 | **Fixed** | Both halves. The timing half closed in Phase 1; registration now answers `202` with the same body whether or not the address is taken and settles the difference by email. The registration route once charged the login lockout for an existing address, which reopened the oracle; that is removed — see *Three defects in the lockout and registration* below. |
 | L-01 | **Fixed** | `.env*` ignored, `.env.example` added, gitleaks in CI. |
 | L-03 | **Fixed** | `securitySchemes` declared (cookie + bearer), applied globally, with the three genuinely public operations marked `security: []`. |
 | L-04 | **Fixed** | `.github/workflows/security.yml`: `pnpm audit`, gitleaks, typecheck, and a grep that rejects the exact `process.env.X ?? "literal"` shape that caused F-01. |
@@ -344,10 +344,10 @@ before a tenant is known. Anything reached that way is trusting its own authoriz
 database-level net underneath, which is why it is applied per-router rather than being the default.
 
 The cost is honest: **one transaction is held open per request**, from `requireBusiness` until the
-response is written. It commits on the way out, or rolls back if the handler produced a 5xx. On a
-connection-constrained deployment this changes pool sizing, and a slow handler now holds a connection
-for its whole duration rather than per query. That is the price of the guarantee; it should be
-watched under load.
+handler answers. It commits then — the response is sent only afterwards — or rolls back if the handler
+produced a 5xx. On a connection-constrained deployment this changes pool sizing, and a slow handler now
+holds a connection for its whole duration rather than per query. That is the price of the guarantee; it
+should be watched under load.
 
 ### Verified
 
@@ -584,7 +584,9 @@ proves nothing. The decision logic is covered by 10 unit tests instead
 process, that a padding row is not read as a hit, and that a network failure fails open rather than
 locking users out of registration.
 
-**The durable lockout is per-account, not per-address.** The first implementation counted failures
+**The durable lockout is per-account, not per-address.** *(Superseded: an account-wide lock keyed on
+a caller-supplied email is itself a lockout weapon. It is now keyed on source address and email — see
+below.)* The first implementation counted failures
 against the IP as well, at the same threshold, which meant ten typos from one office locked out
 everyone behind that NAT — and an attacker rotating addresses walks around it anyway. Addresses are
 now the in-memory limiter's job at a threshold three times looser, which is what the module claimed
@@ -624,12 +626,185 @@ simple: **anything that escapes the request — an email, a webhook, a queued
 message, a credential — must be emitted after the state it refers to is
 committed, not merely after it is written.**
 
-The general property remains: a future endpoint that emits an external side
-effect inside the request transaction will have the same window. Making it
-impossible means committing before the response is flushed — buffering the
-response, committing, then writing — which is a change to a core middleware that
-nothing currently demands. It is recorded here rather than done on speculation,
-and it is the first thing to reach for if this shape appears again.
+*Update:* this was made structurally impossible rather than left as a rule to
+remember — see **Commit before the response** below. The two fixes above are no
+longer load-bearing, and are kept because an email should not depend on which
+middleware happens to wrap the route that sends it.
+
+### Three defects in the lockout and registration — fixed
+
+Found in a later whole-application review and each reproduced against a live server before it was
+changed. All three sat in code the sections above describe as finished.
+
+**Anyone could lock anyone out.** The durable lock was keyed on `email:<address>`, and the address is
+chosen by the caller. Sixteen failed logins for a known address — `admin@gstplatform.in` is one —
+locked it for an hour from *every* source, blocking even the correct password, and stayed under the
+per-address limit. A failed login also charged the account's step-up counter, so the owner's
+change-password and role-change confirmations locked too. Reproduced: the owner's correct login from a
+different address returned 429.
+
+The lock is now keyed on `login:<source address>|<email>`, so an attacker can only lock their own
+address out. A failed login no longer charges `user:<id>`; that counter is reached only by an
+authenticated session, which is who it was written to constrain.
+
+*The trade-off, plainly:* an attacker rotating through many source addresses now gets a fresh budget
+per address instead of one shared account budget. What limits that is the cost of each guess (a 19 MiB
+Argon2 verification), the password policy refusing weak and breached passwords, and the per-address
+limiter bounding each source. There is no account-wide lock any more because an account-wide lock keyed
+on unauthenticated input cannot be told apart from an attack. If distributed guessing becomes a real
+concern the answer is a second factor for administrators, which is already listed under what is left.
+
+**Registration reopened the oracle F-14 had closed.** A taken address charged the login lockout and a
+free one did not, so ten registrations for a candidate followed by one login answered "does this account
+exist?" with 429 versus 401. The two responses to `/register` were byte-identical; the *side effect*
+was not. Reproduced: 429 for the taken address, 401 for the free one. Registration no longer touches the
+login counters. It spends a separate per-recipient budget (5 per 15 minutes) on every request, taken or
+free, so the count carries no information — and the same budget stops the endpoint being used to send
+unlimited mail to a third party.
+
+**Registration was unthrottled and could starve the connection pool.** The per-address limiter skips
+successful responses, and every registration is a `202`, so nothing was ever counted. Each request also
+sat inside `systemScope` — holding a pooled connection across the breach lookup, the Argon2 hash and the
+mail send — and then needed a *second* connection for the insert. With the pool at twenty, forty
+concurrent registrations each held one connection while waiting for another: 21 of 40 came back `500`
+after the ten-second connection timeout, and every authenticated request behind them waited too. The
+route now has its own limiter that counts every response (`REGISTER_RATE_LIMIT_MAX`, default 10 per 15
+minutes per address) and no longer opens a scope; `users` and `pending_registrations` carry no tenant
+policy, so it never needed one. The same burst now completes in about half a second.
+
+Covered by 13 new integration checks. Run against the previous code, 10 of them fail — including the
+21 × `500` burst — so they pin the defects rather than merely exercise the routes.
+
+### Eleven Medium findings — fixed
+
+From the same review. Each was reproduced or read out of the code before it was changed, and the
+integration suite now holds 295 checks. Against the previous code, over forty of the checks written for
+the reports, ledger, stock and limit fixes fail; the registration and CSRF checks cannot be run against it,
+because the flow they exercise no longer exists.
+
+**Reports counted documents that are not supplies.** Every GSTR-1, GSTR-3B, HSN, sales and dashboard
+figure added up every invoice and bill in the range whatever its state. A cancelled invoice stayed in
+outward tax, a cancelled purchase stayed in as input credit, and a *credit note added* to the liability
+it exists to reduce. Against seeded data the old code reported 5 invoices and ₹4,200 taxable where 2 and
+₹800 were right. `lib/tax-documents.ts` now holds the rule in one place: cancelled documents count for
+nothing, a proforma is not a tax document, a credit note is the negative of an invoice. Invoice `type`
+is an enum for that reason — a free string could say none of it. "Outstanding" is now the *balance* on
+unsettled invoices; it counted only status `unpaid`, at full value, so a part-payment changed nothing.
+An HSN code spelled `constructor` or `__proto__` resolved to a member of `Object.prototype` and broke
+the whole month's HSN report with a 500; the buckets are a `Map` now.
+
+**Invoices and their payments could disagree, and issued invoices could be rewritten.**
+`paidAmount` was accepted up to 1e12 whatever the invoice totalled; every rise wrote a receipt but a fall
+or a cancellation wrote nothing; two concurrent "mark paid" calls each wrote a receipt; and
+`POST /payments` never touched the invoice it named (it also accepted negative amounts and any `type`).
+All of it now goes through `lib/invoice-payments.ts`: one locked transaction, an amount held to 0..total,
+a status *derived* from the amount (a status that contradicts it is refused), and an append-only ledger —
+lowering what was paid records a reversal instead of deleting the receipt, so the ledger always nets to
+the invoice. Cancelling reverses the receipts, returns the goods to stock exactly once, and is final.
+The figures of an invoice with payments cannot be edited (notes and due date can), and **issued invoices
+can no longer be deleted**: the number comes from a gapless statutory series, so the row is cancelled
+instead. Purchase bills follow the same rule for cancellation. On the invoice page, "Mark Partial" now asks
+how much was received — the server will not take "partly paid" without an amount — and a refusal shows
+the server's reason instead of a bare "Update failed".
+
+*Not done:* there is no filing lock. Nothing in the data says which month has been filed, so an *unpaid*
+invoice in a filed period can still be edited. That needs a period-close feature, not a check.
+
+**Stock updates were lost under concurrency.** Stock was read, adjusted in JavaScript and written back as
+an absolute value, so two edits touching one product both started from the same quantity and the last
+write won: ten concurrent edits that should have removed 50 units removed 10. It is an atomic
+`stock = stock + delta` now, in a fixed lock order. (Raising invoices is serialised by the number
+allocation, so creation alone never showed it.)
+
+**The registration password was chosen by whoever submitted the form.** Submit a victim's address with a
+password you know; when they open the emailed link they are signed in to an account whose password you
+also hold, and the account then fills with their invoices. The password is now chosen on the page the
+link opens, after the mailbox is proved; the pending row holds none (`password_hash` is dropped), and a
+refused password does not spend the link. With the hash gone the two registration paths no longer
+matched in cost, so both now run the same insert-then-one-more-write in one transaction (arm the row, or
+delete it): measured medians differ by under 1 ms with no consistent sign. The public request and
+response shapes changed — see the spec.
+
+**A stranger's name could forge the body of our email.** `name` went into the greeting verbatim and the
+mail goes to whatever address was typed, so newlines turned it into a forged paragraph from our domain.
+Control characters collapse to a space and the length is capped where it is interpolated.
+
+**A page on another site could sign a visitor in.** CORS decides who may *read* a response, not whether
+the request is sent, and the CSRF token protects only a request that already has a session. A hostile
+form posted to `/auth/login` signed the visitor in to the attacker's account. An `Origin` that is present
+and not on the allowlist is now refused on every state-changing request, and the urlencoded body parser
+is gone so a plain HTML form is not a valid request at all.
+
+**An authenticated tenant could flood the API.** Only `/auth/*` was limited. A registered business could
+script thousands of large writes (an e-way bill carries up to 500 free-form records), then list them
+all. Limits are per business — 300 writes and 1,200 reads a minute by default, `TENANT_WRITE_RATE_LIMIT_MAX`
+and `TENANT_READ_RATE_LIMIT_MAX` — applied before a database connection is taken. They live in process
+memory, so they bound each instance rather than the fleet: a ceiling, not a quota. E-way bill lists are
+paginated (up to 100 a page, which is also the default so the unpaginated page loses nothing) and one
+bill's line records are capped at 100 KB. *Not done:* per-tenant row quotas, which are a pricing decision.
+
+**Browser dependencies, the SPA's policy and the OCR assets** (changes made in `artifacts/gst-platform`,
+tooling and CI):
+
+- `xlsx` 0.18.5 has known prototype-pollution and ReDoS flaws and parsed any file a user picked. It is
+  0.20.3 now (installed from SheetJS's own registry, which is where fixed versions are published), with
+  a 10 MB cap on every import. Extracted text is byte-identical to the old library's on four fixtures.
+- The CI audit skipped every browser dependency because they were all `devDependencies`, so the claim in
+  the workflow that the production tree had none was empty. The packages the app ships are now
+  `dependencies`, which put a **high** advisory in `pdfjs-dist` (arbitrary JavaScript from a malicious
+  PDF) in view; it is bumped. A separate step fails if the installed `xlsx` is below 0.20.2, since
+  `pnpm audit` cannot see a tarball dependency. `qs` and `body-parser` are overridden past their fixes.
+- The SPA now has a Content-Security-Policy (`default-src 'self'`, scripts from self only). Tesseract's
+  worker, core and language data used to load from two third-party CDNs with no integrity check; they are
+  self-hosted. Checked in headless Chromium against the built app: no violations across the login page
+  and six import paths, and a script from a CDN does trigger one.
+- The Vite dev servers no longer bind every interface with host checking off, except inside Replit.
+
+*Not done, and why:* **`frame-ancestors` is not enforced** — it cannot be set from a `<meta>` tag, and the
+deployment (autoscale behind an artifact router) has no place in this repository to set response headers,
+so the admin UI can still be framed. **`nodemailer` is still on 9.x**; 10.x ships its own types and
+`lib/mailer.ts` needs a small change to build against them. Both are recorded here rather than guessed.
+
+### Commit before the response — fixed
+
+The property the section *A side effect can escape before its transaction commits* left open: a request's
+transaction committed only after its response had been written. It had two consequences, both reproduced
+before the change.
+
+**A client could outrun the commit.** A create followed at once by a read, edit or delete came back `404`
+about one time in 150 — a UI that created an invoice and immediately navigated to it would occasionally be
+told it did not exist. It was not specific to one route; it was every scoped route. To make it happen every
+time rather than by chance, the test makes the commit itself slow at the database (a deferred constraint
+trigger that sleeps at `COMMIT`): with the old ordering every create-then-read returned `404`.
+
+**A failed commit was reported as success.** A transaction that failed *at* `COMMIT` — a deferred
+constraint, a serialisation failure — had already sent its answer. Reproduced with a trigger that refuses
+one customer name at commit: the API answered `201` with an `id` for a row that was never stored. The write
+was gone and the client was never told.
+
+The scope middleware now holds the handler's first write, commits, and only then releases the response
+(`middleware/tenant-scope.ts`, `ResponseGate`). If the commit fails the held answer is discarded — along
+with any cookie set beside it — and the client gets a `500` with a request id. A handler that returns a 5xx
+still rolls back, and its error response is sent unchanged. The status the handler chose is fixed at the
+moment it answers, so an error handler reacting to a later throw cannot change what the client is told.
+
+Three side effects worth knowing:
+
+- **The connection is released at commit, not when the last byte has been read.** A slow client used to
+  hold a pooled connection for as long as it took to download the response.
+- **A request whose client has gone still finishes and commits** — the handler completes its work whether
+  or not anyone is listening. If the handler never answers, its transaction is rolled back after 30 seconds
+  so it cannot pin a connection for ever.
+- **Latency is unchanged within noise.** The commit was always going to happen; it is now on the response's
+  critical path, which added about a millisecond at the median (write p50 5.2–5.7 ms against 4.3–5.2 ms
+  across two runs each).
+
+*What it assumes:* responses are produced with `res.json` and friends, which end in a single `res.end`. A
+handler that streamed a large body through `res.write` would have it buffered until the commit. Nothing in
+the API does; a route that starts to should not use a scope, or should write its file first.
+
+The integration suite's 20 ms wait after every write — added as a workaround for this — is removed, and
+three consecutive full runs pass without it.
 
 ### Operator actions that code cannot perform
 
@@ -659,6 +834,18 @@ complete.
    `pnpm --filter @workspace/db run push`. The unique index will fail to build if duplicate invoice
    numbers already exist — if it does, that is the old `COUNT(*) + 1` bug showing up in real data,
    and those invoices need renumbering before the index can be created.
+
+7. **Apply the schema change.** `pnpm --filter @workspace/db run push` now **drops
+   `pending_registrations.password_hash`**, so `drizzle-kit` will ask to confirm data loss. Answer yes:
+   the table holds only signups awaiting a link that expires in 24 hours, and any link already sent still
+   works — the person is asked for a password when they open it. Re-apply the RLS policies afterwards
+   (`rls:apply`), as after every push.
+8. **Deploy the API and the web app together.** Registration no longer takes a password and the
+   verification link now asks for one, so a new API with the old web app (or the reverse) cannot complete
+   a signup. Existing sessions are unaffected.
+9. **Optional tuning:** `REGISTER_RATE_LIMIT_MAX` (default 10 per 15 minutes per address),
+   `TENANT_WRITE_RATE_LIMIT_MAX` (300 a minute) and `TENANT_READ_RATE_LIMIT_MAX` (1,200 a minute). The
+   defaults are far above what one person reaches; raise them only for a shared integration client.
 
 ### Where the implementation deviates from the recommendations below
 

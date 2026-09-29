@@ -2,7 +2,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import * as mammoth from "mammoth";
 import { createWorker } from "tesseract.js";
-import * as XLSX from "xlsx";
+import { spreadsheetBufferToText } from "./spreadsheet-text";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
@@ -71,8 +71,20 @@ async function renderPdfPages(file: File): Promise<HTMLCanvasElement[]> {
   return canvases;
 }
 
+// Served from this origin by the `self-hosted-ocr-assets` plugin in vite.config.ts.
+// Without these paths tesseract.js pulls its worker and WebAssembly core from jsDelivr
+// and the English model from tessdata.projectnaptha.com, which the page's
+// Content-Security-Policy (script-src / connect-src 'self') does not allow.
+const OCR_BASE = `${import.meta.env.BASE_URL.replace(/\/?$/, "/")}ocr`;
+
 async function extractOcrText(images: Array<File | HTMLCanvasElement>): Promise<string> {
-  const worker = await createWorker("eng");
+  const worker = await createWorker("eng", undefined, {
+    workerPath: `${OCR_BASE}/worker.min.js`,
+    corePath: `${OCR_BASE}/core`,
+    langPath: `${OCR_BASE}/lang`,
+    // Spawn the script directly instead of through a blob: URL wrapper, so worker-src can stay 'self'.
+    workerBlobURL: false,
+  });
   try {
     const pages: string[] = [];
     for (const image of images) {
@@ -91,14 +103,17 @@ async function extractWordText(file: File): Promise<string> {
 }
 
 async function extractSpreadsheetText(file: File): Promise<string> {
-  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
-  return workbook.SheetNames
-    .map(name => {
-      const sheet = workbook.Sheets[name];
-      return XLSX.utils.sheet_to_csv(sheet, { FS: "\t", blankrows: false });
-    })
-    .filter(Boolean)
-    .join("\n");
+  return spreadsheetBufferToText(await file.arrayBuffer());
+}
+
+/** Largest file the importer will read. Every parser below loads the whole file into memory. */
+export const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+
+export class ImportFileTooLargeError extends Error {
+  constructor(public readonly fileBytes: number) {
+    super(`File is ${(fileBytes / (1024 * 1024)).toFixed(1)} MB; the limit is ${MAX_IMPORT_FILE_BYTES / (1024 * 1024)} MB.`);
+    this.name = "ImportFileTooLargeError";
+  }
 }
 
 const NUM_RE = /-?\d[\d,]*\.?\d*/g;
@@ -378,6 +393,10 @@ function annotateResult(
 }
 
 export async function parsePurchaseBill(file: File, products: any[]): Promise<ParsedPdfResult> {
+  // Checked before anything reads the file: File.size comes from the file's metadata, so a
+  // large upload is refused without being pulled into memory or handed to a parser.
+  if (file.size > MAX_IMPORT_FILE_BYTES) throw new ImportFileTooLargeError(file.size);
+
   const extension = getExtension(file);
 
   if (file.type === "application/pdf" || extension === "pdf") {

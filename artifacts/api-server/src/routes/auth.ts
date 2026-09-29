@@ -16,14 +16,19 @@ import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody } f
 import { validatePassword } from "../lib/password-policy";
 import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
-import { openTenantScope, systemScope } from "../middleware/tenant-scope";
+import { openTenantScope } from "../middleware/tenant-scope";
 import {
   authIpLimiter,
+  registerIpLimiter,
+  tenantApiLimiter,
+  REGISTER_RECIPIENT_LIMIT,
   anyLocked,
   recordFailures,
   clearFailures,
+  consumeBudget,
   userKey,
-  emailKey,
+  loginKey,
+  registerKey,
 } from "../middleware/rate-limit";
 
 const router = Router();
@@ -231,19 +236,28 @@ export function requireBusiness(req: any, res: any, next: any) {
   const businessId = req.user?.businessId ?? null;
   if (!businessId) return res.status(400).json({ error: "No business" });
   req.businessId = businessId;
-  // Resolving the tenant and pinning it to the database session are the same
-  // decision, so they happen in the same place. No route opts in, and none can
-  // forget to.
-  openTenantScope(req, res, next, businessId);
+  // Before the scope is opened, so a rejected request never takes a pooled
+  // connection: the limiter exists to protect them.
+  tenantApiLimiter(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    // Resolving the tenant and pinning it to the database session are the same
+    // decision, so they happen in the same place. No route opts in, and none can
+    // forget to.
+    openTenantScope(req, res, next, businessId);
+  });
 }
 
 router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, res) => {
   const { email, password } = req.body;
   const normalisedEmail = email.toLowerCase();
 
+  // Scoped to this source address as well as the account: see `loginKey`. A
+  // lock keyed on the email alone lets anyone lock anyone out.
+  const attemptKey = loginKey(normalisedEmail, req.ip);
+
   // Checked before any work is done, so a locked-out attacker cannot even make
   // us hash a candidate password.
-  const locked = await anyLocked([emailKey(normalisedEmail)]);
+  const locked = await anyLocked([attemptKey]);
   if (locked) {
     const retryAfter = Math.ceil((locked.getTime() - Date.now()) / 1000);
     res.setHeader("Retry-After", String(retryAfter));
@@ -257,17 +271,19 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
     // Spend the same work as a real verification so the response time does not
     // reveal whether the address has an account.
     await spendVerificationTime(password);
-    await recordFailures([emailKey(normalisedEmail)]);
+    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
   const { valid, needsRehash } = await verifyPassword(user.passwordHash, password);
   if (!valid) {
-    await recordFailures([emailKey(normalisedEmail), userKey(user.id)]);
+    // Not `userKey`: that one guards step-up and change-password, and a failed
+    // login is by definition made by someone who is not the account's owner.
+    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  await clearFailures([emailKey(normalisedEmail), userKey(user.id)]);
+  await clearFailures([attemptKey, userKey(user.id)]);
 
   // The password was correct but is still stored under the superseded SHA-256
   // scheme (or weaker Argon2 parameters). This is the only moment we hold the
@@ -330,60 +346,88 @@ const REGISTRATION_ACCEPTED = {
  * The cost is that signing up no longer signs you in — it cannot, because a
  * session in the response would be exactly the difference we are removing.
  *
- * Both paths do the same work, in the same order, including the Argon2 hash.
- * Skipping the hash when the address is taken would replace the oracle we
- * closed with a slower one: ~50 ms of missing latency is as good an answer as
- * a 400.
+ * Both paths do the same work, in the same order, including a database write.
+ * Skipping the write when the address is taken would replace the oracle we
+ * closed with a faster one: a few milliseconds of missing latency is as good an
+ * answer as a 400, given enough samples. The taken path therefore performs the
+ * same insert and removes it again in the same transaction.
+ *
+ * No password is taken here. It used to be, and whoever submitted the form chose
+ * it: submit a victim's address with a password you know, and when they opened
+ * the link the account they were signed in to had a password you held too. The
+ * password is now chosen by whoever opens the link — see `/verify-registration`.
+ *
+ * Nothing here may depend on whether the address is taken — that includes what
+ * this route charges. It used to charge the *login* lockout when the address
+ * existed, so a run of registrations followed by one login told you whether the
+ * account was real (429 versus 401). The recipient budget below is charged on
+ * every request and is a separate counter that login never reads.
+ *
+ * There is deliberately no `systemScope` here. It would hold a pooled
+ * connection for the whole request — across the breach lookup, the hash and the
+ * mail send — and the insert below needs a second one, so a burst of
+ * registrations could each hold one connection while waiting for another and
+ * starve every authenticated request. `users` and `pending_registrations`
+ * carry no tenant policy, so nothing here needs a scope.
  */
-router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope, async (req: Req, res) => {
-  const { name, email, password, businessName, gstin } = req.body;
+router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (req: Req, res) => {
+  const { name, email, businessName, gstin } = req.body;
   const normalisedEmail = email.toLowerCase();
 
-  // A weak password is refused before anything else and is not an enumeration
-  // signal: the answer depends only on the password the caller just chose, not
-  // on anything the server knows about the address.
-  const policyFailure = await validatePassword(password);
-  if (policyFailure) return res.status(400).json({ error: policyFailure.message });
-
-  // Always hashed, even when it will be thrown away below.
-  const passwordHash = await hashPassword(password);
+  // Bounds how much mail one address can be sent from this endpoint, and so
+  // stops it being used to spam or phish a third party. Charged before the
+  // lookup and for every request, so a taken address and a free one are
+  // indistinguishable — the count says nothing about whether an account exists.
+  const withinBudget = await consumeBudget(registerKey(normalisedEmail), REGISTER_RECIPIENT_LIMIT);
+  if (!withinBudget) {
+    return res.status(429).json({ error: "Too many registration attempts for this address. Try again later." });
+  }
 
   const [existing] = await db.select({ id: usersTable.id }).from(usersTable)
     .where(eq(usersTable.email, normalisedEmail)).limit(1);
 
-  if (existing) {
-    // Still charged against the lockout counters, so bulk probing runs into the
-    // same backoff as password guessing even though it learns nothing.
-    await recordFailures([emailKey(normalisedEmail)]);
-    await sendQuietly(alreadyRegisteredMessage(normalisedEmail));
-    return res.status(202).json(REGISTRATION_ACCEPTED);
-  }
-
   const token = crypto.randomBytes(32).toString("base64url");
-
-  // Written on `rootDb` — outside this request's transaction — on purpose.
-  //
-  // `systemScope` holds one transaction for the whole request and commits it
-  // only once the response has been written. An email is not a response: it
-  // leaves the process the moment it is sent, and the person it names can act
-  // on it before that commit lands. Sending a link to a row that is not yet
-  // durable produces exactly the failure it looks like — "that link is invalid
-  // or has expired" for a link that was valid and had not expired.
-  //
-  // It showed up as an intermittent CI failure before it could show up as a
-  // support ticket. Nothing else in the request needs this row, and the table
-  // carries no tenant policy, so committing it on its own connection costs
-  // nothing and removes the window entirely: the row is durable before the
-  // link that references it exists anywhere.
-  await rootDb.insert(pendingRegistrationsTable).values({
+  const pendingRow = {
     tokenHash: hashToken(token),
     email: normalisedEmail,
     name,
-    passwordHash,
     businessName,
     gstin: gstin ?? null,
     expiresAt: new Date(Date.now() + VERIFICATION_TTL_MS),
+  };
+
+  // Written on `rootDb`, which commits on its own connection before anything
+  // below runs.
+  //
+  // An email is not a response: it leaves the process the moment it is sent, and
+  // the person it names can act on it at once. A link that names a row which is
+  // not yet durable fails as "that link is invalid or has expired" for a link
+  // that was valid. Scoped routes now commit before they respond too (see
+  // `middleware/tenant-scope.ts`), but nothing that sends mail should depend on
+  // which middleware happens to wrap it, and this route has no scope at all.
+  //
+  // Both branches run the same shape: insert a row that is already expired, then
+  // one more write, in one transaction. The free address arms the row by giving
+  // it its real expiry; the taken one deletes it. Same statements, same round
+  // trips, same commit — so how long the request takes says nothing about which
+  // branch ran, and a row that fails to arm is left expired rather than usable.
+  await rootDb.transaction(async (tx) => {
+    const [row] = await tx.insert(pendingRegistrationsTable)
+      .values({ ...pendingRow, expiresAt: new Date(0) })
+      .returning({ id: pendingRegistrationsTable.id });
+    if (existing) {
+      await tx.delete(pendingRegistrationsTable).where(eq(pendingRegistrationsTable.id, row.id));
+    } else {
+      await tx.update(pendingRegistrationsTable)
+        .set({ expiresAt: pendingRow.expiresAt })
+        .where(eq(pendingRegistrationsTable.id, row.id));
+    }
   });
+
+  if (existing) {
+    await sendQuietly(alreadyRegisteredMessage(normalisedEmail));
+    return res.status(202).json(REGISTRATION_ACCEPTED);
+  }
 
   const link = `${config.appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
   await sendQuietly(verificationMessage(normalisedEmail, name, link));
@@ -399,7 +443,7 @@ router.post("/register", authIpLimiter, validateBody(RegisterBody), systemScope,
  * wins and the rest are deleted with it.
  */
 router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrationBody), async (req: Req, res) => {
-  const { token } = req.body;
+  const { token, password } = req.body;
 
   // `rootDb` throughout: `pending_registrations` carries no tenant policy, and
   // this route deliberately does not run inside the request-scoped transaction.
@@ -416,19 +460,23 @@ router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrati
     return res.status(400).json({ error: "That link is invalid or has expired. Please register again." });
   }
 
-  // Its own system scope rather than the request's.
+  // The password is chosen here, by whoever holds the link — which is the
+  // person who controls the mailbox. Checked after the token so garbage tokens
+  // cost nothing, and before the token is spent so a refused password can be
+  // corrected and retried on the same link.
+  const policyFailure = await validatePassword(password);
+  if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+  const passwordHash = await hashPassword(password);
+
+  // Its own system scope, opened here rather than as route middleware.
   //
-  // `systemScope` as middleware holds one transaction until the *response has
-  // been written*, so an account created under it is not durable at the moment
-  // its session is handed back — and the caller uses that session on its very
-  // next request. That window is small and real: it showed up as the next
-  // request being rejected with the credential this one had just issued.
-  //
-  // Opening the scope here instead means the transaction commits when this
-  // callback returns, before anything is sent. It still needs to be a *system*
-  // scope rather than a bare transaction, because `businesses` carries a tenant
-  // policy and there is no tenant yet to scope to — the row being inserted is
-  // what creates one.
+  // The account must be committed before its session exists, because the caller
+  // uses that session on its very next request. Opening the scope here means the
+  // transaction commits when this callback returns, before the session is even
+  // created — independent of when any surrounding middleware commits. It still
+  // needs to be a *system* scope rather than a bare transaction, because
+  // `businesses` carries a tenant policy and there is no tenant yet to scope to —
+  // the row being inserted is what creates one.
   const created = await runInSystemScope(rootDb, async () => {
     const tx = db;
     // Re-checked inside the transaction: two links for the same address could
@@ -438,7 +486,7 @@ router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrati
     if (taken) return null;
 
     const [user] = await tx.insert(usersTable).values({
-      name: pending.name, email: pending.email, passwordHash: pending.passwordHash,
+      name: pending.name, email: pending.email, passwordHash,
       role: "user", isActive: true, subscriptionStatus: "trial",
       subscriptionEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
     }).returning();

@@ -5,6 +5,7 @@ import { requireAuth, requireBusiness } from "./auth";
 import { dec, sum, sumBy, toJson } from "../lib/money";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { lowStockSql } from "../lib/low-stock";
+import { taxInvoice, receivableInvoice, invoiceSign, activePurchase } from "../lib/tax-documents";
 
 const router = Router();
 
@@ -29,25 +30,32 @@ router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => {
   const businessId = req.businessId;
   const today = new Date().toISOString().slice(0, 10);
 
+  // Sales and tax skip cancelled invoices and proformas, and credit notes
+  // subtract — see lib/tax-documents.ts. "Outstanding" is what is still owed on
+  // an invoice that has not been settled or cancelled: the balance, so a part
+  // payment reduces it (it used to count only status 'unpaid', at full value,
+  // and ignore 'partial' altogether), and never a credit note.
+  const sign = invoiceSign(invoicesTable);
   const [[invoiceAgg], [purchaseAgg], [customerAgg], [vendorAgg], [productAgg]] = await Promise.all([
     db.select({
       count: count(),
-      totalSales: sqlSum(invoicesTable.grandTotal),
-      totalGst: sqlSum(invoicesTable.totalGst),
-      outstanding: sqlSum(
-        sql`CASE WHEN ${invoicesTable.status} = 'unpaid' THEN ${invoicesTable.grandTotal} ELSE 0 END`,
-      ),
+      totalSales: sql<string>`sum(${invoicesTable.grandTotal} * ${sign}) FILTER (WHERE ${taxInvoice(invoicesTable)})`,
+      totalGst: sql<string>`sum(${invoicesTable.totalGst} * ${sign}) FILTER (WHERE ${taxInvoice(invoicesTable)})`,
+      outstanding: sql<string>`sum(${invoicesTable.grandTotal} - ${invoicesTable.paidAmount}) FILTER (
+        WHERE ${receivableInvoice(invoicesTable)} AND ${invoicesTable.status} IN ('unpaid', 'partial')
+      )`,
       overdue: sql<number>`count(*) FILTER (
-        WHERE ${invoicesTable.dueDate} IS NOT NULL
+        WHERE ${receivableInvoice(invoicesTable)}
+          AND ${invoicesTable.status} IN ('unpaid', 'partial')
+          AND ${invoicesTable.dueDate} IS NOT NULL
           AND ${invoicesTable.dueDate} < ${today}
-          AND ${invoicesTable.status} <> 'paid'
       )`,
     }).from(invoicesTable).where(eq(invoicesTable.businessId, businessId)),
 
     db.select({
       totalPurchases: sqlSum(purchasesTable.grandTotal),
       totalGst: sqlSum(purchasesTable.totalGst),
-    }).from(purchasesTable).where(eq(purchasesTable.businessId, businessId)),
+    }).from(purchasesTable).where(and(eq(purchasesTable.businessId, businessId), activePurchase(purchasesTable))),
 
     db.select({ count: count() }).from(customersTable).where(eq(customersTable.businessId, businessId)),
     db.select({ count: count() }).from(vendorsTable).where(eq(vendorsTable.businessId, businessId)),
@@ -103,20 +111,21 @@ router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, re
 
   const monthOf = (col: any) => sql<string>`substring(${col} from 1 for 7)`;
 
+  const sign = invoiceSign(invoicesTable);
   const [invRows, purRows] = await Promise.all([
     db.select({
       month: monthOf(invoicesTable.invoiceDate),
-      sales: sqlSum(invoicesTable.grandTotal),
-      gst: sqlSum(invoicesTable.totalGst),
+      sales: sqlSum(sql`${invoicesTable.grandTotal} * ${sign}`),
+      gst: sqlSum(sql`${invoicesTable.totalGst} * ${sign}`),
     }).from(invoicesTable)
-      .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from)))
+      .where(and(eq(invoicesTable.businessId, businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from)))
       .groupBy(monthOf(invoicesTable.invoiceDate)),
 
     db.select({
       month: monthOf(purchasesTable.invoiceDate),
       purchases: sqlSum(purchasesTable.grandTotal),
     }).from(purchasesTable)
-      .where(and(eq(purchasesTable.businessId, businessId), gte(purchasesTable.invoiceDate, from)))
+      .where(and(eq(purchasesTable.businessId, businessId), activePurchase(purchasesTable), gte(purchasesTable.invoiceDate, from)))
       .groupBy(monthOf(purchasesTable.invoiceDate)),
   ]);
 
@@ -166,11 +175,12 @@ router.get("/top-products", requireAuth, requireBusiness, async (req: Req, res) 
     SELECT
       COALESCE((item->>'productId')::int, 0) AS product_id,
       COALESCE(item->>'description', item->>'productName', '') AS product_name,
-      SUM(COALESCE((item->>'quantity')::numeric, 0)) AS total_quantity,
-      SUM(COALESCE((item->>'totalAmount')::numeric, 0)) AS total_revenue
+      SUM(COALESCE((item->>'quantity')::numeric, 0) * ${invoiceSign(invoicesTable)}) AS total_quantity,
+      SUM(COALESCE((item->>'totalAmount')::numeric, 0) * ${invoiceSign(invoicesTable)}) AS total_revenue
     FROM ${invoicesTable}
     CROSS JOIN LATERAL jsonb_array_elements(${invoicesTable.items}) AS item
     WHERE ${invoicesTable.businessId} = ${businessId}
+      AND ${taxInvoice(invoicesTable)}
       AND jsonb_typeof(${invoicesTable.items}) = 'array'
     GROUP BY 1, 2
     ORDER BY total_revenue DESC
@@ -191,15 +201,18 @@ router.get("/gst-summary", requireAuth, requireBusiness, async (req: Req, res) =
   const now = new Date();
   const from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 
+  const sign = invoiceSign(invoicesTable);
   const [[out], [inp]] = await Promise.all([
     db.select({
-      cgst: sqlSum(invoicesTable.cgst), sgst: sqlSum(invoicesTable.sgst), igst: sqlSum(invoicesTable.igst),
+      cgst: sqlSum(sql`${invoicesTable.cgst} * ${sign}`),
+      sgst: sqlSum(sql`${invoicesTable.sgst} * ${sign}`),
+      igst: sqlSum(sql`${invoicesTable.igst} * ${sign}`),
     }).from(invoicesTable)
-      .where(and(eq(invoicesTable.businessId, businessId), gte(invoicesTable.invoiceDate, from))),
+      .where(and(eq(invoicesTable.businessId, businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from))),
     db.select({
       cgst: sqlSum(purchasesTable.cgst), sgst: sqlSum(purchasesTable.sgst), igst: sqlSum(purchasesTable.igst),
     }).from(purchasesTable)
-      .where(and(eq(purchasesTable.businessId, businessId), gte(purchasesTable.invoiceDate, from))),
+      .where(and(eq(purchasesTable.businessId, businessId), activePurchase(purchasesTable), gte(purchasesTable.invoiceDate, from))),
   ]);
 
   const netPayable = sum([out.cgst, out.sgst, out.igst]).minus(sum([inp.cgst, inp.sgst, inp.igst]));
