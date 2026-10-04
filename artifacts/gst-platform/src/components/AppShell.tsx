@@ -26,6 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (!user) return <>{children}</>;
 
   const isAdmin = user.role === "admin";
+  const isSuperadmin = user.role === "superadmin";
 
   const userNavigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -45,7 +46,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { name: "User Management", href: "/admin/users", icon: Users },
   ];
 
-  const navigation = isAdmin ? adminNavigation : userNavigation;
+  const superadminNavigation = [
+    { name: "Superadmin", href: "/superadmin", icon: Shield },
+  ];
+
+  const navigation = isSuperadmin ? superadminNavigation : isAdmin ? adminNavigation : userNavigation;
 
   const NavLinks = ({ onClick }: { onClick?: () => void }) => (
     <div className="space-y-1">
@@ -134,7 +139,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {navigation.find((n) => location === n.href || location.startsWith(`${n.href}/`))?.name || "Dashboard"}
           </h2>
           <div className="flex items-center gap-4">
-            {isAdmin && <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary uppercase tracking-wider">Admin</span>}
+            {(isAdmin || isSuperadmin) && (
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary uppercase tracking-wider">
+                {isSuperadmin ? "Superadmin" : "Admin"}
+              </span>
+            )}
           </div>
         </header>
         

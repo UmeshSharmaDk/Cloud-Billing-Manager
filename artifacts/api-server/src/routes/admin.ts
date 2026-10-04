@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, ne, and, or, ilike, isNull, count, desc, sql } from "drizzle-orm";
+import { eq, ne, and, or, ilike, isNull, count, desc, inArray, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
@@ -37,13 +37,31 @@ type Req = AuthedRequest<any, any, IdParams>;
  * filtered the arrays eight times. The cost grew with the size of the platform
  * — the endpoint got slower exactly as the product succeeded.
  */
-router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
+router.get("/stats", requireAuth, requireAdmin, async (req: Req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  const notAdmin = and(ne(usersTable.role, "admin"), isNull(usersTable.deletedAt));
+  const visibleUsers = req.userRole === "admin"
+    ? and(eq(usersTable.role, "user"), isNull(usersTable.deletedAt), eq(usersTable.createdByAdminId, req.user.id))
+    : and(eq(usersTable.role, "user"), isNull(usersTable.deletedAt));
+
+  const businessIds = req.userRole === "admin"
+    ? (await db.select({ businessId: usersTable.businessId }).from(usersTable).where(visibleUsers))
+      .map((row) => row.businessId)
+      .filter((id): id is number => id !== null)
+    : null;
+  const businessCountQuery = businessIds
+    ? businessIds.length
+      ? db.select({ count: count() }).from(businessesTable).where(inArray(businessesTable.id, businessIds))
+      : Promise.resolve([{ count: 0 }])
+    : db.select({ count: count() }).from(businessesTable);
+  const invoiceCountQuery = businessIds
+    ? businessIds.length
+      ? db.select({ count: count() }).from(invoicesTable).where(inArray(invoicesTable.businessId, businessIds))
+      : Promise.resolve([{ count: 0 }])
+    : db.select({ count: count() }).from(invoicesTable);
 
   const [[userAgg], [{ count: totalBusinesses }], [{ count: totalInvoices }], recentUsers] =
     await Promise.all([
@@ -59,12 +77,12 @@ router.get("/stats", requireAuth, requireAdmin, async (_req, res) => {
         yearly: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'yearly')`,
         trial: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'trial')`,
         expiredStatus: sql<number>`count(*) FILTER (WHERE ${usersTable.subscriptionStatus} = 'expired')`,
-      }).from(usersTable).where(notAdmin),
+      }).from(usersTable).where(visibleUsers),
 
-      db.select({ count: count() }).from(businessesTable),
-      db.select({ count: count() }).from(invoicesTable),
+      businessCountQuery,
+      invoiceCountQuery,
 
-      db.select().from(usersTable).where(notAdmin)
+      db.select().from(usersTable).where(visibleUsers)
         .orderBy(desc(usersTable.createdAt)).limit(10),
     ]);
 
@@ -94,10 +112,10 @@ router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuer
   // every user row into memory on each request and slice the array, so its
   // cost grew with the size of the platform while `limit` came straight from
   // the query string.
-  const where = search
-    ? and(isNull(usersTable.deletedAt),
-          or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)))
-    : isNull(usersTable.deletedAt);
+  const conditions = [isNull(usersTable.deletedAt), eq(usersTable.role, "user")];
+  if (req.userRole === "admin") conditions.push(eq(usersTable.createdByAdminId, req.user.id));
+  if (search) conditions.push(or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`))!);
+  const where = and(...conditions);
 
   const users = await db.select().from(usersTable).where(where)
     .orderBy(desc(usersTable.createdAt))
@@ -109,8 +127,9 @@ router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuer
 // GET /admin/users/:id — get a user with all their business data
 router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
   const userId = req.validatedParams.id;
-  const [user] = await db.select().from(usersTable)
-    .where(and(eq(usersTable.id, userId), isNull(usersTable.deletedAt))).limit(1);
+  const conditions = [eq(usersTable.id, userId), eq(usersTable.role, "user"), isNull(usersTable.deletedAt)];
+  if (req.userRole === "admin") conditions.push(eq(usersTable.createdByAdminId, req.user.id));
+  const [user] = await db.select().from(usersTable).where(and(...conditions)).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
 
   let business = null;
@@ -146,12 +165,18 @@ router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), v
 
     const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+    if (before.role !== "user" || (req.userRole === "admin" && before.createdByAdminId !== req.user.id)) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
     // Confirmation is required to CHANGE a role, not merely to send the field.
     // The admin edit form posts the whole record including the unchanged role,
     // so gating on presence made every save fail — a subscription edit is not
     // a privilege change and must not demand a password.
     if (role && role !== before.role) {
+      if (req.userRole !== "superadmin" || role === "admin") {
+        return res.status(403).json({ error: "Use an administrator invitation to grant admin access." });
+      }
       const stepUp = await verifyStepUp(req);
       if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
 

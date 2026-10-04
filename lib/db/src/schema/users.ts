@@ -1,4 +1,4 @@
-import { pgTable, text, serial, boolean, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, boolean, timestamp, integer, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -12,6 +12,8 @@ export const usersTable = pgTable("users", {
   subscriptionStatus: text("subscription_status"),
   subscriptionEnd: text("subscription_end"),
   businessId: integer("business_id"),
+  createdByAdminId: integer("created_by_admin_id"),
+  userLimit: integer("user_limit").notNull().default(15),
   /**
    * Soft delete. A hard DELETE removed only this row and left the business,
    * invoices, customers and products behind with a dangling businessId —
@@ -30,7 +32,9 @@ export const usersTable = pgTable("users", {
    */
   tokenVersion: integer("token_version").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  createdByAdminIdx: index("users_created_by_admin_idx").on(table.createdByAdminId),
+}));
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({ id: true, createdAt: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;

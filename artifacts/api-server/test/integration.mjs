@@ -142,6 +142,15 @@ function verificationToken(email) {
   return null;
 }
 
+function adminInvitationToken(email) {
+  for (const message of [...outbox()].reverse()) {
+    if (message.to !== email) continue;
+    const match = /accept-admin-invite\?token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
+    if (match) return match[1];
+  }
+  return null;
+}
+
 async function register(tag) {
   const email = `${tag}${uniq}@example.test`;
   const jar = newJar();
@@ -575,6 +584,7 @@ const adminEmail = `admin${uniq}@example.test`;
   const T = { token: su.token };
 
   const victim = await register("stepupvictim");
+  sqlExec(`UPDATE users SET created_by_admin_id=${su.userId} WHERE id=${victim.userId}`);
 
   // Below the threshold the wrong password is simply refused.
   const first = await call("POST", `/users/${victim.userId}/reset-password`,
@@ -623,7 +633,7 @@ const adminEmail = `admin${uniq}@example.test`;
   sqlExec(`DELETE FROM login_attempts WHERE key = 'user:${cp.userId}'`);
 }
 
-// === review: creating an admin needs the same confirmation as promoting one =
+// === review: admin accounts can only be created by invitation ==============
 {
   const mk = await register("mkadmin");
   sqlExec(`UPDATE users SET role='admin' WHERE id=${mk.userId}`);
@@ -639,7 +649,10 @@ const adminEmail = `admin${uniq}@example.test`;
   const confirmed = await call("POST", "/users", { ...T,
     body: { name: "Legit", email: `legit${stamp}@example.test`,
             password: "OperatorChosen9!x", role: "admin", confirmPassword: PASSWORD } });
-  check("admin-create", "and permitted with it", confirmed.status === 201, `status ${confirmed.status}`);
+  check("admin-create", "step-up cannot bypass the invitation-only admin flow",
+    confirmed.status === 403, `status ${confirmed.status}`);
+  check("admin-create", "the rejected admin account was not written",
+    sqlValue(`SELECT count(*) FROM users WHERE email='legit${stamp}@example.test'`) === "0");
 
   // A non-admin account is not a privilege grant and needs no confirmation.
   const plain = await call("POST", "/users", { ...T,
@@ -647,6 +660,8 @@ const adminEmail = `admin${uniq}@example.test`;
             password: "OrdinaryUser9!xy", role: "user" } });
   check("admin-create", "an ordinary account still needs no confirmation",
     plain.status === 201, `status ${plain.status}`);
+  check("admin-create", "the new account is owned by its creating admin",
+    sqlValue(`SELECT created_by_admin_id FROM users WHERE id=${plain.data.id}`) === String(mk.userId));
 
   const dup = await call("POST", "/users", { ...T,
     body: { name: "Dup", email: `plain${stamp}@example.test`,
@@ -725,6 +740,7 @@ const adminEmail = `admin${uniq}@example.test`;
   const au = await register("auditfail");
   sqlExec(`UPDATE users SET role='admin' WHERE id=${au.userId}`);
   const target = await register("audittarget");
+  sqlExec(`UPDATE users SET created_by_admin_id=${au.userId} WHERE id=${target.userId}`);
 
   sqlExec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS tmp_reject_audit`);
   sqlExec(`ALTER TABLE audit_log ADD CONSTRAINT tmp_reject_audit CHECK (actor_email NOT LIKE 'auditfail%') NOT VALID`);
@@ -1634,16 +1650,20 @@ const adminEmail = `admin${uniq}@example.test`;
 {
   const q = sqlValue;
 
-  // Promote alice so she can exercise the admin routes, and make a second
-  // admin so the last-admin guard is not tripped by the setup itself.
+  // Promote alice for tenant-admin routes. The spare account acts as the
+  // separately bootstrapped platform superadmin in this isolated test DB.
   sqlExec(`UPDATE users SET role='admin' WHERE id=${alice.userId}`);
+  sqlExec(`UPDATE users SET created_by_admin_id=${alice.userId} WHERE id=${bob.userId}`);
   const spare = await register("spare");
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${spare.userId}`);
+  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${spare.userId}`);
 
   const NEW_PASSWORD = "a-brand-new-passphrase-99";
   const jar = newJar();
   await call("GET", "/healthz", { jar });
   await call("POST", "/auth/login", { jar, body: { email: alice.email, password: NEW_PASSWORD } });
+  const superJar = newJar();
+  await call("GET", "/healthz", { jar: superJar });
+  await call("POST", "/auth/login", { jar: superJar, body: { email: spare.email, password: PASSWORD } });
 
   const noStepUp = await call("POST", `/users/${bob.userId}/reset-password`, {
     jar, body: { newPassword: "another-good-passphrase-77" },
@@ -1670,7 +1690,7 @@ const adminEmail = `admin${uniq}@example.test`;
     !/password|hash/i.test(q("SELECT details::text FROM audit_log ORDER BY id DESC LIMIT 1")));
 
   const roleNoStepUp = await call("PATCH", `/users/${bob.userId}`, { jar, body: { role: "admin" } });
-  check("F-13", "a role change needs confirmation too", roleNoStepUp.status === 403, `status ${roleNoStepUp.status}`);
+  check("F-13", "a tenant admin cannot promote a user even with a session", roleNoStepUp.status === 403, `status ${roleNoStepUp.status}`);
 
   const rename = await call("PATCH", `/users/${bob.userId}`, { jar, body: { name: "Renamed" } });
   check("F-13", "an ordinary edit does not", rename.status === 200, `status ${rename.status}`);
@@ -1689,8 +1709,15 @@ const adminEmail = `admin${uniq}@example.test`;
   const realChange = await call("PATCH", `/users/${bob.userId}`, {
     jar, body: { role: "admin", confirmPassword: NEW_PASSWORD },
   });
-  check("F-13", "an actual role change with confirmation succeeds", realChange.status === 200, `status ${realChange.status}`);
-  await call("PATCH", `/users/${bob.userId}`, { jar, body: { role: "user", confirmPassword: NEW_PASSWORD } });
+  check("F-13", "password confirmation cannot turn a tenant admin into a platform admin",
+    realChange.status === 403, `status ${realChange.status}`);
+
+  const superadminGenericCreate = await call("POST", "/users", {
+    jar: superJar,
+    body: { name: "Bypass", email: `bypass-${uniq}@example.test`, password: PASSWORD, role: "admin", confirmPassword: PASSWORD },
+  });
+  check("F-13", "the superadmin generic user endpoint also requires an invitation",
+    superadminGenericCreate.status === 403, `status ${superadminGenericCreate.status}`);
 
   const selfDelete = await call("DELETE", `/users/${alice.userId}`, { jar });
   check("F-13", "an admin cannot delete their own account", selfDelete.status === 409, `status ${selfDelete.status}`);
@@ -1698,7 +1725,6 @@ const adminEmail = `admin${uniq}@example.test`;
   // The guard only bites when alice really is the last active admin, and this
   // suite shares a database with whatever ran before it. Establish the
   // precondition explicitly rather than assuming a clean slate, then restore.
-  await call("PATCH", `/users/${spare.userId}`, { jar, body: { role: "user", confirmPassword: NEW_PASSWORD } });
   const others = q(
     `SELECT coalesce(string_agg(id::text, ','), '') FROM users ` +
     `WHERE role='admin' AND is_active AND deleted_at IS NULL AND id <> ${alice.userId}`,
@@ -1710,21 +1736,23 @@ const adminEmail = `admin${uniq}@example.test`;
     q(`SELECT count(*) FROM users WHERE role='admin' AND is_active AND deleted_at IS NULL`) === "1");
 
   const lastAdmin = await call("PATCH", `/users/${alice.userId}`, {
-    jar, body: { role: "user", confirmPassword: NEW_PASSWORD },
+    jar: superJar, body: { role: "user", confirmPassword: PASSWORD },
   });
   check("F-13", "the last administrator cannot be demoted", lastAdmin.status === 409, `status ${lastAdmin.status}`);
 
-  const lastAdminOff = await call("PATCH", `/admin/users/${alice.userId}`, {
-    jar, body: { isActive: false },
+  const lastAdminOff = await call("PATCH", `/users/${alice.userId}/toggle-status`, {
+    jar: superJar, body: { isActive: false },
   });
   check("F-13", "...nor deactivated", lastAdminOff.status === 409, `status ${lastAdminOff.status}`);
 
   if (others) {
     sqlExec(`UPDATE users SET role='admin' WHERE id IN (${others})`);
   }
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${spare.userId}`);
 
   // Soft delete keeps the tenant's records rather than orphaning them.
   const victim = await register("victim");
+  sqlExec(`UPDATE users SET created_by_admin_id=${alice.userId} WHERE id=${victim.userId}`);
   const vBiz = q(`SELECT business_id FROM users WHERE id=${victim.userId}`);
   const del = await call("DELETE", `/users/${victim.userId}`, { jar });
   check("F-13", "deleting a user succeeds", del.status === 200, `status ${del.status}`);
@@ -1994,9 +2022,12 @@ const adminEmail = `admin${uniq}@example.test`;
 
   // Admin stats: seeded above, so only structural invariants are safe to assert.
   sqlExec(`UPDATE users SET role='admin' WHERE id=${biz.userId}`);
+  sqlExec(`UPDATE users SET created_by_admin_id=${biz.userId} ` +
+    `WHERE role='user' AND deleted_at IS NULL AND created_by_admin_id IS NULL`);
   const ad = (await call("GET", "/admin/stats", T)).data;
-  const dbUsers = Number(sqlValue(`SELECT count(*) FROM users WHERE role <> 'admin' AND deleted_at IS NULL`));
-  check("aggregates", "admin totalUsers counts non-admin, non-deleted users",
+  const dbUsers = Number(sqlValue(`SELECT count(*) FROM users ` +
+    `WHERE role='user' AND deleted_at IS NULL AND created_by_admin_id=${biz.userId}`));
+  check("aggregates", "admin totalUsers counts only their non-deleted users",
     ad.totalUsers === dbUsers, `${ad.totalUsers} vs ${dbUsers}`);
   check("aggregates", "admin active + inactive accounts for every counted user",
     ad.activeUsers + ad.inactiveUsers === ad.totalUsers,
@@ -2004,6 +2035,7 @@ const adminEmail = `admin${uniq}@example.test`;
   check("aggregates", "admin recentUsers is capped at 10 and newest first",
     ad.recentUsers.length <= 10 &&
     ad.recentUsers.every((u, i, a) => i === 0 || new Date(a[i - 1].createdAt) >= new Date(u.createdAt)));
+  sqlExec(`UPDATE users SET created_by_admin_id=NULL WHERE created_by_admin_id=${biz.userId}`);
   sqlExec(`UPDATE users SET role='user' WHERE id=${biz.userId}`);
 }
 
@@ -2047,6 +2079,7 @@ const adminEmail = `admin${uniq}@example.test`;
   const target = await register("resettarget");
   const admin = await register("resetadmin");
   sqlExec(`UPDATE users SET role='admin' WHERE id=${admin.userId}`);
+  sqlExec(`UPDATE users SET created_by_admin_id=${admin.userId} WHERE id=${target.userId}`);
   const ajar = newJar();
   await call("GET", "/healthz", { jar: ajar });
   await call("POST", "/auth/login", { jar: ajar, body: { email: admin.email, password: PW } });
@@ -2056,6 +2089,246 @@ const adminEmail = `admin${uniq}@example.test`;
   check("revocation", "admin reset succeeds", reset.status === 200, `status ${reset.status}`);
   check("revocation", "the target's existing session is revoked by the reset",
     (await call("GET", "/auth/me", { token: target.token })).status === 401);
+}
+
+// === superadmin: invitation-only admin setup and capacity review ===========
+{
+  const operator = await register("platformoperator");
+  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${operator.userId}`);
+  const adminEmail = `invited-${uniq}@example.test`;
+  const createdInvite = await call("POST", "/superadmin/admin-invitations", {
+    token: operator.token,
+    body: { name: "Invited Admin", email: adminEmail, confirmPassword: PASSWORD },
+  });
+  check("superadmin", "an authorized superadmin can issue an invitation",
+    createdInvite.status === 201, `status ${createdInvite.status}`);
+  check("superadmin", "the invitation uses the default allowance of 15",
+    createdInvite.data?.userLimit === 15, String(createdInvite.data?.userLimit));
+  check("superadmin", "the invitation response contains no raw credential",
+    !("token" in (createdInvite.data ?? {})) && !("password" in (createdInvite.data ?? {})));
+
+  const adminToken = adminInvitationToken(adminEmail);
+  check("superadmin", "the setup link is delivered to the invited mailbox", Boolean(adminToken));
+  const activeInvitations = await call("GET", "/superadmin/admin-invitations", { token: operator.token });
+  check("superadmin", "the superadmin can see pending invitations without their tokens",
+    activeInvitations.status === 200 &&
+      activeInvitations.data?.invitations?.some((item) => item.email === adminEmail) &&
+      !JSON.stringify(activeInvitations.data).includes(adminToken ?? "not-a-token"));
+
+  const ADMIN_PASSWORD = "admin-chosen-passphrase-72";
+  const inviteJar = newJar();
+  await call("GET", "/healthz", { jar: inviteJar });
+  const accepted = await call("POST", "/auth/accept-admin-invite", {
+    jar: inviteJar,
+    body: { token: adminToken, password: ADMIN_PASSWORD },
+  });
+  check("superadmin", "an invited admin chooses a password and is signed in",
+    accepted.status === 201 && accepted.data?.user?.role === "admin",
+    `status ${accepted.status}`);
+  const acceptedMe = await call("GET", "/auth/me", { jar: inviteJar });
+  check("superadmin", "the accepted session resolves to the new admin account",
+    acceptedMe.status === 200 && acceptedMe.data?.email === adminEmail);
+  const reused = await call("POST", "/auth/accept-admin-invite", {
+    body: { token: adminToken, password: ADMIN_PASSWORD },
+  });
+  check("superadmin", "an invitation token can only be redeemed once",
+    reused.status === 400, `status ${reused.status}`);
+
+  const deniedAdminList = await call("GET", "/superadmin/admins", { token: accepted.data?.token });
+  check("superadmin", "a tenant admin cannot read the platform admin directory",
+    deniedAdminList.status === 403, `status ${deniedAdminList.status}`);
+
+  const tenantAdminId = accepted.data?.user?.id;
+  const setOneSeat = await call("PATCH", `/superadmin/admins/${tenantAdminId}/limit`, {
+    token: operator.token,
+    body: { userLimit: 1, confirmPassword: PASSWORD },
+  });
+  check("superadmin", "a superadmin can set an explicit allowance",
+    setOneSeat.status === 200 && setOneSeat.data?.userLimit === 1,
+    `status ${setOneSeat.status}`);
+  check("ownership", "tenant admins cannot alter the platform allowance",
+    (await call("PATCH", `/superadmin/admins/${tenantAdminId}/limit`, {
+      token: accepted.data?.token, body: { userLimit: 100, confirmPassword: ADMIN_PASSWORD },
+    })).status === 403);
+
+  const prematureRequest = await call("POST", "/superadmin/capacity-requests", {
+    token: accepted.data?.token,
+    body: { additionalUsers: 2 },
+  });
+  check("capacity", "an admin cannot request more capacity before reaching the limit",
+    prematureRequest.status === 409, `status ${prematureRequest.status}`);
+
+  const childPassword = "tenant-child-passphrase-83";
+  const firstChild = await call("POST", "/users", {
+    token: accepted.data?.token,
+    body: { name: "First Tenant User", email: `tenant-child-${uniq}@example.test`, password: childPassword, role: "user" },
+  });
+  check("capacity", "the tenant admin can create a user within its allowance",
+    firstChild.status === 201, `status ${firstChild.status}`);
+  check("capacity", "created user ownership is stored from the authenticated admin",
+    sqlValue(`SELECT created_by_admin_id FROM users WHERE id=${firstChild.data?.id}`) === String(tenantAdminId));
+
+  // Two simultaneous creates contend for the same locked admin row. Exactly
+  // one consumes the remaining seat; the other gets the request-capacity path.
+  const concurrent = await Promise.all([1, 2].map((n) => call("POST", "/users", {
+    token: accepted.data?.token,
+    body: {
+      name: `Concurrent User ${n}`,
+      email: `concurrent-${n}-${uniq}@example.test`,
+      password: `tenant-race-password-${n}-84`,
+      role: "user",
+    },
+  })));
+  const statuses = concurrent.map((response) => response.status).sort((a, b) => a - b);
+  check("capacity", "concurrent user creation cannot exceed the allowance",
+    statuses[0] === 201 && statuses[1] === 402, statuses.join(", "));
+  const quotaResponse = concurrent.find((response) => response.status === 402);
+  check("capacity", "quota errors include the fixed INR 1,000 per-user quote",
+    quotaResponse?.data?.amountInr === 1000 &&
+      quotaResponse?.data?.currency === "INR" &&
+      quotaResponse?.data?.userLimit === 1);
+  check("capacity", "exactly one concurrent account owns the final seat",
+    sqlValue(`SELECT count(*) FROM users WHERE created_by_admin_id=${tenantAdminId} AND role='user' AND deleted_at IS NULL`) === "2");
+
+  const capacity = await call("POST", "/superadmin/capacity-requests", {
+    token: accepted.data?.token,
+    body: { additionalUsers: 2, amountInr: 1, paid: true },
+  });
+  check("capacity", "the quoted request amount is calculated on the server",
+    capacity.status === 201 && capacity.data?.amountInr === 2000,
+    `status ${capacity.status}; amount ${capacity.data?.amountInr}`);
+  check("capacity", "a request does not change allowance or claim payment",
+    capacity.data?.status === "pending" &&
+      sqlValue(`SELECT user_limit FROM users WHERE id=${tenantAdminId}`) === "1" &&
+      !("paid" in (capacity.data ?? {})));
+  const ownRequests = await call("GET", "/superadmin/capacity-requests", {
+    token: accepted.data?.token,
+  });
+  check("capacity", "tenant admins see only their own capacity requests",
+    ownRequests.status === 200 && ownRequests.data?.requests?.length === 1 &&
+      ownRequests.data.requests[0].adminId === tenantAdminId,
+    `status ${ownRequests.status}; requests ${ownRequests.data?.requests?.length}`);
+  const adminReviewAttempt = await call("PATCH", `/superadmin/capacity-requests/${capacity.data?.id}/review`, {
+    token: accepted.data?.token,
+    body: { decision: "approve", userLimit: 3, confirmPassword: ADMIN_PASSWORD },
+  });
+  check("capacity", "tenant admins cannot review capacity requests",
+    adminReviewAttempt.status === 403, `status ${adminReviewAttempt.status}`);
+  const duplicateRequest = await call("POST", "/superadmin/capacity-requests", {
+    token: accepted.data?.token, body: { additionalUsers: 1 },
+  });
+  check("capacity", "an admin cannot create a second pending request",
+    duplicateRequest.status === 409, `status ${duplicateRequest.status}`);
+
+  const review = await call("PATCH", `/superadmin/capacity-requests/${capacity.data?.id}/review`, {
+    token: operator.token,
+    body: { decision: "approve", userLimit: 2, confirmPassword: PASSWORD },
+  });
+  check("capacity", "approval cannot grant less than the requested additional seats",
+    review.status === 409 &&
+      sqlValue(`SELECT user_limit FROM users WHERE id=${tenantAdminId}`) === "1",
+    `status ${review.status}`);
+  const approvedReview = await call("PATCH", `/superadmin/capacity-requests/${capacity.data?.id}/review`, {
+    token: operator.token,
+    body: { decision: "approve", userLimit: 3, confirmPassword: PASSWORD },
+  });
+  check("capacity", "approval applies only the explicit new user limit",
+    approvedReview.status === 200 && approvedReview.data?.status === "approved" &&
+      approvedReview.data?.grantedUserLimit === 3 &&
+      sqlValue(`SELECT user_limit FROM users WHERE id=${tenantAdminId}`) === "3",
+    `status ${approvedReview.status}; limit ${approvedReview.data?.grantedUserLimit}`);
+  const afterApproval = await call("POST", "/users", {
+    token: accepted.data?.token,
+    body: { name: "After Approval", email: `after-approval-${uniq}@example.test`, password: childPassword, role: "user" },
+  });
+  check("capacity", "the approved allowance permits creation within the new limit",
+    afterApproval.status === 201, `status ${afterApproval.status}`);
+
+  const otherAdmin = await register("othercapacity");
+  sqlExec(`UPDATE users SET role='admin', user_limit=1 WHERE id=${otherAdmin.userId}`);
+  const otherChild = await call("POST", "/users", {
+    token: otherAdmin.token,
+    body: { name: "Other Tenant User", email: `other-child-${uniq}@example.test`, password: childPassword, role: "user" },
+  });
+  check("ownership", "the second admin can create its own child account",
+    otherChild.status === 201, `status ${otherChild.status}`);
+  const otherRequest = await call("POST", "/superadmin/capacity-requests", {
+    token: otherAdmin.token, body: { additionalUsers: 1 },
+  });
+  check("capacity", "a different admin can submit its own request at its limit",
+    otherRequest.status === 201 && otherRequest.data?.adminId === otherAdmin.userId);
+  const isolatedList = await call("GET", "/users", { token: accepted.data?.token });
+  const ownIds = [firstChild.data?.id, ...concurrent.filter((item) => item.status === 201).map((item) => item.data?.id), afterApproval.data?.id];
+  check("ownership", "user lists contain only the caller's own tenant",
+    isolatedList.status === 200 && isolatedList.data?.users.length === 3 &&
+      ownIds.every((id) => isolatedList.data.users.some((user) => user.id === id)) &&
+      !isolatedList.data.users.some((user) => user.id === otherChild.data?.id),
+    `status ${isolatedList.status}; users ${isolatedList.data?.users?.length}`);
+  const adminList = await call("GET", "/admin/users", { token: accepted.data?.token });
+  check("ownership", "the admin dashboard list is tenant-scoped too",
+    adminList.status === 200 && adminList.data?.users.length === 3 &&
+      !adminList.data.users.some((user) => user.id === otherChild.data?.id));
+  const foreignRead = await call("GET", `/users/${otherChild.data?.id}`, { token: accepted.data?.token });
+  check("ownership", "a tenant admin cannot read another admin's user",
+    foreignRead.status === 404, `status ${foreignRead.status}`);
+  const foreignDetail = await call("GET", `/admin/users/${otherChild.data?.id}`, { token: accepted.data?.token });
+  check("ownership", "a tenant admin cannot read another tenant's detail view",
+    foreignDetail.status === 404, `status ${foreignDetail.status}`);
+  const foreignEdit = await call("PATCH", `/users/${otherChild.data?.id}`, {
+    token: accepted.data?.token, body: { name: "Should not change" },
+  });
+  check("ownership", "a tenant admin cannot edit another tenant's user",
+    foreignEdit.status === 404, `status ${foreignEdit.status}`);
+  const foreignStatus = await call("PATCH", `/users/${otherChild.data?.id}/toggle-status`, {
+    token: accepted.data?.token, body: { isActive: false },
+  });
+  check("ownership", "a tenant admin cannot deactivate another tenant's user",
+    foreignStatus.status === 404, `status ${foreignStatus.status}`);
+  const foreignDelete = await call("DELETE", `/users/${otherChild.data?.id}`, {
+    token: accepted.data?.token,
+  });
+  check("ownership", "a tenant admin cannot delete another tenant's user",
+    foreignDelete.status === 404, `status ${foreignDelete.status}`);
+  const foreignReset = await call("POST", `/users/${otherChild.data?.id}/reset-password`, {
+    token: accepted.data?.token,
+    body: { newPassword: "reset-child-passphrase-88", confirmPassword: ADMIN_PASSWORD },
+  });
+  check("ownership", "a tenant admin cannot reset another tenant's password",
+    foreignReset.status === 404, `status ${foreignReset.status}`);
+  const childLogin = await call("POST", "/auth/login", {
+    body: { email: `tenant-child-${uniq}@example.test`, password: childPassword },
+  });
+  const userCannotReadRequests = await call("GET", "/superadmin/capacity-requests", { token: childLogin.data?.token });
+  check("capacity", "ordinary users cannot read capacity requests",
+    userCannotReadRequests.status === 403, `status ${userCannotReadRequests.status}`);
+
+  const decline = await call("PATCH", `/superadmin/capacity-requests/${otherRequest.data?.id}/review`, {
+    token: operator.token,
+    body: { decision: "decline", confirmPassword: PASSWORD },
+  });
+  check("capacity", "declining a request leaves the admin limit unchanged",
+    decline.status === 200 && decline.data?.status === "declined" &&
+      sqlValue(`SELECT user_limit FROM users WHERE id=${otherAdmin.userId}`) === "1",
+    `status ${decline.status}`);
+
+  const inviteRaceEmail = `invite-race-${uniq}@example.test`;
+  const inviteRace = await call("POST", "/superadmin/admin-invitations", {
+    token: operator.token,
+    body: { name: "Single Use Race", email: inviteRaceEmail, userLimit: 2, confirmPassword: PASSWORD },
+  });
+  const raceToken = adminInvitationToken(inviteRaceEmail);
+  const raceAcceptances = await Promise.all([1, 2].map(async () => {
+    const jar = newJar();
+    await call("GET", "/healthz", { jar });
+    return call("POST", "/auth/accept-admin-invite", {
+      jar,
+      body: { token: raceToken, password: ADMIN_PASSWORD },
+    });
+  }));
+  const acceptanceStatuses = raceAcceptances.map((response) => response.status).sort((a, b) => a - b);
+  check("superadmin", "concurrent redemption creates exactly one admin account",
+    inviteRace.status === 201 && acceptanceStatuses[0] === 201 && acceptanceStatuses[1] === 400,
+    `invite ${inviteRace.status}; accepts ${acceptanceStatuses.join(", ")}`);
 }
 
 // ---------------------------------------------------------------------------

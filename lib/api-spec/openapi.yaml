@@ -1343,6 +1343,150 @@ paths:
                 properties: { success: { type: boolean } }
                 required: [success]
 
+  # Superadmin account provisioning and capacity management
+  /superadmin/admins:
+    get:
+      operationId: listSuperadminAdmins
+      tags: [superadmin]
+      summary: List admin accounts and their managed-user usage
+      responses:
+        "200":
+          description: Admin accounts and user allowances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAccountsResponse"
+
+  /superadmin/admin-invitations:
+    get:
+      operationId: listAdminInvitations
+      tags: [superadmin]
+      summary: List outstanding administrator invitations
+      responses:
+        "200":
+          description: Invitations without secret tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminInvitationListResponse"
+    post:
+      operationId: createAdminInvitation
+      tags: [superadmin]
+      summary: Invite an administrator to set up their account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminInvitationInput"
+      responses:
+        "201":
+          description: Invitation email sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminInvitation"
+        "409": { description: An account or active invitation already exists for this email }
+        "503": { description: Email delivery is not configured }
+        "502": { description: The invitation email could not be sent }
+
+  /superadmin/admins/{id}/limit:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    patch:
+      operationId: updateSuperadminAdminLimit
+      tags: [superadmin]
+      summary: Explicitly change an administrator's user allowance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminLimitInput"
+      responses:
+        "200":
+          description: Updated admin account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAccount"
+        "404": { description: Admin account not found }
+
+  /superadmin/capacity-requests:
+    get:
+      operationId: listCapacityRequests
+      tags: [superadmin]
+      summary: List capacity requests for the current admin or all admins
+      responses:
+        "200":
+          description: Requests remain unpaid and do not change allowances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapacityRequestListResponse"
+    post:
+      operationId: createCapacityRequest
+      tags: [superadmin]
+      summary: Request additional managed-user capacity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CapacityRequestInput"
+      responses:
+        "201":
+          description: Pending request with a fixed INR 1,000 per-user quote
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapacityRequest"
+        "409": { description: No pending request is needed or one already exists }
+  /superadmin/capacity-requests/{id}/review:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    patch:
+      operationId: reviewCapacityRequest
+      tags: [superadmin]
+      summary: Approve with an explicit new limit or decline a pending request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CapacityRequestReviewInput"
+      responses:
+        "200":
+          description: Reviewed request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapacityRequest"
+        "404": { description: Pending request not found }
+        "409": { description: The explicit new allowance does not cover the requested seats }
+
+  /auth/accept-admin-invite:
+    post:
+      operationId: acceptAdminInvitation
+      security: []
+      tags: [auth]
+      summary: Set a password and activate an invited administrator account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptAdminInvitationInput"
+      responses:
+        "201":
+          description: Admin account created and signed in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400": { description: "Invitation token invalid or expired, or password rejected" }
+        "409": { description: The invitation could not be redeemed }
+
   /admin/stats:
     get:
       operationId: getAdminStats
@@ -1568,6 +1712,110 @@ components:
           type: ["integer", "null"]
         createdAt:
           type: string
+
+    AdminAccount:
+      type: object
+      required: [id, name, email, isActive, userLimit, userCount, availableSlots, createdAt]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        isActive: { type: boolean }
+        userLimit: { type: integer }
+        userCount: { type: integer }
+        availableSlots: { type: integer }
+        createdAt: { type: string }
+        additionalUserPriceInr: { type: integer }
+
+    AdminAccountsResponse:
+      type: object
+      required: [admins, defaultUserLimit, additionalUserPriceInr]
+      properties:
+        admins:
+          type: array
+          items: { $ref: "#/components/schemas/AdminAccount" }
+        defaultUserLimit: { type: integer }
+        additionalUserPriceInr: { type: integer }
+
+    AdminInvitation:
+      type: object
+      required: [id, name, email, userLimit, expiresAt, createdAt]
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        userLimit: { type: integer }
+        expiresAt: { type: string }
+        createdAt: { type: string }
+
+    AdminInvitationListResponse:
+      type: object
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          items: { $ref: "#/components/schemas/AdminInvitation" }
+
+    AdminInvitationInput:
+      type: object
+      required: [name, email, confirmPassword]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email, maxLength: 320 }
+        userLimit: { type: integer, minimum: 0, maximum: 100000, default: 15 }
+        confirmPassword: { type: string, minLength: 1, maxLength: 1024 }
+
+    AdminLimitInput:
+      type: object
+      required: [userLimit, confirmPassword]
+      properties:
+        userLimit: { type: integer, minimum: 0, maximum: 100000 }
+        confirmPassword: { type: string, minLength: 1, maxLength: 1024 }
+
+    CapacityRequest:
+      type: object
+      required: [id, adminId, adminName, adminEmail, additionalUsers, amountInr, status, createdAt]
+      properties:
+        id: { type: integer }
+        adminId: { type: integer }
+        adminName: { type: string }
+        adminEmail: { type: string }
+        additionalUsers: { type: integer }
+        amountInr: { type: integer }
+        status: { type: string, enum: [pending, approved, declined] }
+        reviewedAt: { type: ["string", "null"] }
+        grantedUserLimit: { type: ["integer", "null"] }
+        createdAt: { type: string }
+
+    CapacityRequestListResponse:
+      type: object
+      required: [requests, additionalUserPriceInr]
+      properties:
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/CapacityRequest" }
+        additionalUserPriceInr: { type: integer }
+
+    CapacityRequestInput:
+      type: object
+      required: [additionalUsers]
+      properties:
+        additionalUsers: { type: integer, minimum: 1, maximum: 100000 }
+
+    CapacityRequestReviewInput:
+      type: object
+      required: [decision, confirmPassword]
+      properties:
+        decision: { type: string, enum: [approve, decline] }
+        userLimit: { type: integer, minimum: 0, maximum: 100000 }
+        confirmPassword: { type: string, minLength: 1, maxLength: 1024 }
+
+    AcceptAdminInvitationInput:
+      type: object
+      required: [token, password]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 512 }
+        password: { type: string, minLength: 12, maxLength: 1024 }
 
     UserListResponse:
       type: object

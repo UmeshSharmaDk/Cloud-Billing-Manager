@@ -38,7 +38,7 @@ export interface Mailer {
 class LogMailer implements Mailer {
   async send(message: Message): Promise<void> {
     logger.info(
-      { to: message.to, subject: message.subject, body: message.text },
+      { to: message.to, subject: message.subject },
       "Mail (development transport — not actually sent)",
     );
   }
@@ -148,6 +148,25 @@ export function alreadyRegisteredMessage(to: string): Message {
       "If it was not you, someone may be checking whether you have an account",
       "here. Your account is unaffected, but it is worth making sure the password",
       "on it is one you do not use anywhere else.",
+    ].join("\n"),
+  };
+}
+
+/** Sent to an invited administrator so they can set their own password. */
+export function adminInvitationMessage(to: string, name: string, link: string): Message {
+  return {
+    to,
+    subject: "Set up your GST Pro administrator account",
+    text: [
+      `Hello ${plainLine(name)},`,
+      "",
+      "You have been invited to manage users in GST Pro.",
+      "Open the one-time link below to choose a password and activate your account:",
+      "",
+      link,
+      "",
+      "The link expires in 24 hours and can only be used once.",
+      "If you were not expecting this invitation, you can ignore this email.",
     ].join("\n"),
   };
 }

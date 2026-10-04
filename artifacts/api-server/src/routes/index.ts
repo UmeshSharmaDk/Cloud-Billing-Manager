@@ -13,6 +13,7 @@ import paymentsRouter from "./payments";
 import dashboardRouter from "./dashboard";
 import reportsRouter from "./reports";
 import ewayBillsRouter from "./eway-bills";
+import superadminRouter from "./superadmin";
 
 const router: IRouter = Router();
 
@@ -20,6 +21,7 @@ router.use(healthRouter);
 router.use("/auth", authRouter);
 router.use("/users", usersRouter);
 router.use("/admin", adminRouter);
+router.use("/superadmin", superadminRouter);
 router.use("/business", businessRouter);
 router.use("/customers", customersRouter);
 router.use("/vendors", vendorsRouter);
