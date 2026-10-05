@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, numeric, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, numeric, boolean, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -27,7 +27,11 @@ export const purchasesTable = pgTable("purchases", {
   notes: text("notes"),
   items: jsonb("items").notNull().default([]),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Every query is for one business; without this each one scans the table, and
+  // the row-level-security filter is applied after the scan rather than before.
+  index("purchases_business_idx").on(t.businessId),
+]);
 
 export const insertPurchaseSchema = createInsertSchema(purchasesTable).omit({ id: true, createdAt: true });
 export type InsertPurchase = z.infer<typeof insertPurchaseSchema>;

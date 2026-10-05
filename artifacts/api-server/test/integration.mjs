@@ -136,7 +136,7 @@ function outbox() {
 function verificationToken(email) {
   for (const message of [...outbox()].reverse()) {
     if (message.to !== email) continue;
-    const match = /verify\?token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
+    const match = /verify[?#]token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
     if (match) return match[1];
   }
   return null;
@@ -145,7 +145,7 @@ function verificationToken(email) {
 function adminInvitationToken(email) {
   for (const message of [...outbox()].reverse()) {
     if (message.to !== email) continue;
-    const match = /accept-admin-invite\?token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
+    const match = /accept-admin-invite[?#]token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
     if (match) return match[1];
   }
   return null;
@@ -862,6 +862,221 @@ const adminEmail = `admin${uniq}@example.test`;
     String(stockOf("Movable")));
 }
 
+// === check-up: stock follows the stored product and the document type =====
+{
+  const st = await register("stockfix");
+  const T = { token: st.token };
+  const bizId = sqlValue(`SELECT id FROM businesses WHERE user_id = ${st.userId}`);
+  const stockById = (id) => Number(sqlValue(`SELECT stock_quantity FROM products WHERE id=${id}`));
+  const line = (prod, qty, extra = {}) => ({ productId: prod?.id, description: prod?.name ?? "Ghost", quantity: qty, unitPrice: 100, gstRate: 18, ...extra });
+  const mk = async (name, qty) => (await call("POST", "/products", { ...T,
+    body: { name, unit: "Nos", sellingPrice: 100, gstRate: 18, stockQuantity: qty } })).data;
+  const sale = (items, type) => call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27", ...(type ? { type } : {}), items } });
+
+  // Renaming a product after a sale must not strand the reversal.
+  const renamed = await mk("Before Rename", 100);
+  const inv1 = (await sale([line(renamed, 10)])).data.invoice;
+  await call("PATCH", `/products/${renamed.id}`, { ...T, body: { name: "After Rename", unit: "Nos", sellingPrice: 100, gstRate: 18 } });
+  await call("PATCH", `/invoices/${inv1.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling after the product was renamed still restores its stock",
+    stockById(renamed.id) === 100, String(stockById(renamed.id)));
+
+  // A name that matched nothing at sale time must not match a product created later.
+  const inv2 = (await sale([{ description: "Late Product", quantity: 5, unitPrice: 100, gstRate: 18 }])).data.invoice;
+  const late = await mk("Late Product", 20);
+  await call("PATCH", `/invoices/${inv2.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling does not credit a product created after the sale",
+    stockById(late.id) === 20, String(stockById(late.id)));
+
+  // A product id from another business is not stored on the line.
+  const foreign = (await call("POST", "/products", { token: alice.token,
+    body: { name: "Foreign", unit: "Nos", sellingPrice: 1, gstRate: 0, stockQuantity: 50 } })).data;
+  const inv3 = (await sale([{ productId: foreign.id, description: "Not Mine", quantity: 1, unitPrice: 100, gstRate: 18 }])).data.invoice;
+  check("stock-fix", "a foreign product id is replaced, not stored",
+    (inv3.items?.[0]?.productId ?? null) === null, JSON.stringify(inv3.items?.[0]));
+  check("stock-fix", "and the foreign product's stock is untouched", stockById(foreign.id) === 50, String(stockById(foreign.id)));
+
+  // Proforma moves nothing; a credit note brings goods back.
+  const goods = await mk("Directional", 100);
+  const pro = (await sale([line(goods, 10)], "Proforma Invoice")).data.invoice;
+  check("stock-fix", "a proforma invoice does not deduct stock", stockById(goods.id) === 100, String(stockById(goods.id)));
+  const cn = (await sale([line(goods, 4)], "Credit Note")).data.invoice;
+  check("stock-fix", "a credit note returns goods to stock", stockById(goods.id) === 104, String(stockById(goods.id)));
+  await call("PATCH", `/invoices/${cn.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling a credit note takes them out again", stockById(goods.id) === 100, String(stockById(goods.id)));
+  await call("PATCH", `/invoices/${pro.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling a proforma moves no stock", stockById(goods.id) === 100, String(stockById(goods.id)));
+
+  // Changing the type moves stock to match.
+  const flip = (await sale([line(goods, 10)])).data.invoice;
+  check("stock-fix", "a tax invoice deducts", stockById(goods.id) === 90, String(stockById(goods.id)));
+  await call("PATCH", `/invoices/${flip.id}`, { ...T, body: { type: "Proforma Invoice" } });
+  check("stock-fix", "turning it into a proforma gives the goods back", stockById(goods.id) === 100, String(stockById(goods.id)));
+
+  // No receipts against a quotation or a credit note.
+  const pro2 = (await sale([line(goods, 1)], "Proforma Invoice")).data.invoice;
+  const payPro = await call("POST", "/payments", { ...T, body: { type: "received", amount: 10, date: "2026-08-06", mode: "cash", invoiceId: pro2.id } });
+  check("stock-fix", "a receipt against a proforma is refused", payPro.status === 409, `status ${payPro.status}`);
+  const cn2 = (await sale([line(goods, 1)], "Credit Note")).data.invoice;
+  const payCn = await call("POST", "/payments", { ...T, body: { type: "received", amount: 10, date: "2026-08-06", mode: "cash", invoiceId: cn2.id } });
+  check("stock-fix", "a receipt against a credit note is refused", payCn.status === 409, `status ${payCn.status}`);
+
+  // Whole paise only.
+  const real = (await sale([line(goods, 1)])).data.invoice;
+  const frac = await call("POST", "/payments", { ...T, body: { type: "received", amount: 0.001, date: "2026-08-06", mode: "cash", invoiceId: real.id } });
+  check("stock-fix", "a payment finer than a paisa is refused", frac.status === 400, `status ${frac.status}`);
+  const fracPaid = await call("PATCH", `/invoices/${real.id}/status`, { ...T, body: { status: "partial", paidAmount: 10.005 } });
+  check("stock-fix", "a paid amount finer than a paisa is refused", fracPaid.status === 400, `status ${fracPaid.status}`);
+
+  // Once money has been received the figures are frozen.
+  await call("POST", "/payments", { ...T, body: { type: "received", amount: 10, date: "2026-08-06", mode: "cash", invoiceId: real.id } });
+  const frozen = await call("PATCH", `/invoices/${real.id}`, { ...T, body: { items: [line(goods, 3)] } });
+  check("stock-fix", "a part-paid invoice's lines cannot be edited", frozen.status === 409, `status ${frozen.status}`);
+
+  // Two concurrent deletes of one purchase return the goods once.
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "SF Vendor", gstin: "27SVSVS0000V1Z5" } })).data;
+  const bill = (await call("POST", "/purchases", { ...T,
+    body: { vendorId: vend.id, billDate: "2026-08-05", items: [{ productId: goods.id, description: goods.name, quantity: 30, unitPrice: 10, gstRate: 18 }] } })).data;
+  const before = stockById(goods.id);
+  await Promise.all([call("DELETE", `/purchases/${bill.id}`, T), call("DELETE", `/purchases/${bill.id}`, T)]);
+  check("stock-fix", "concurrent deletes of a bill reverse its goods once",
+    stockById(goods.id) === before - 30, `${before} -> ${stockById(goods.id)}`);
+
+  // Concurrent edits leave totals that match the lines that won.
+  const racer = await mk("Racer", 1000);
+  const rinv = (await sale([line(racer, 1)])).data.invoice;
+  await Promise.all([2, 3, 4, 5].map((q) => call("PATCH", `/invoices/${rinv.id}`, { ...T, body: { items: [line(racer, q)] } })));
+  const final = (await call("GET", `/invoices/${rinv.id}`, T)).data;
+  const qty = final.items[0].quantity;
+  check("stock-fix", "after racing edits the total matches the surviving line",
+    Math.abs(final.subtotal - qty * 100) < 0.005, `qty ${qty} subtotal ${final.subtotal}`);
+  check("stock-fix", "and stock matches the surviving quantity", stockById(racer.id) === 1000 - qty,
+    `qty ${qty} stock ${stockById(racer.id)}`);
+}
+
+// === check-up: one business cannot hold the whole pool ====================
+{
+  const burst = await register("burst");
+  const T = { token: burst.token };
+  const rs = await Promise.all(Array.from({ length: 80 }, () => call("GET", "/dashboard/stats", T)));
+  const codes = new Set(rs.map((r) => r.status));
+  check("in-flight", "a burst of 80 concurrent requests gets only 200s and 429s",
+    [...codes].every((c) => c === 200 || c === 429), [...codes].join(","));
+  check("in-flight", "some of the burst was served", rs.some((r) => r.status === 200));
+  const after = await call("GET", "/dashboard/stats", T);
+  check("in-flight", "the slots are released when the burst is over", after.status === 200, `status ${after.status}`);
+  // Another tenant is unaffected while this one is saturated.
+  const other = await register("burstother");
+  const mixed = await Promise.all([
+    ...Array.from({ length: 40 }, () => call("GET", "/dashboard/stats", T)),
+    call("GET", "/dashboard/stats", { token: other.token }),
+  ]);
+  check("in-flight", "a different business is served during another's burst",
+    mixed[mixed.length - 1].status === 200, `status ${mixed[mixed.length - 1].status}`);
+  // Authentication comes before the policy-free scope on admin routes.
+  const anon = await call("GET", "/admin/stats", {});
+  check("in-flight", "an unauthenticated admin request is refused", anon.status === 401, `status ${anon.status}`);
+  const nonAdmin = await call("GET", "/admin/stats", T);
+  check("in-flight", "a non-admin admin request is refused", nonAdmin.status === 403, `status ${nonAdmin.status}`);
+}
+
+// === check-up: parallel password guesses are counted before they are checked ==
+{
+  const g = await register("parallelguess");
+  const guess = (i) => call("POST", "/auth/change-password", {
+    token: g.token, body: { currentPassword: `wrong-guess-number-${i}-zz`, newPassword: "an-entirely-new-passphrase-77" },
+  });
+  // Under the in-flight cap, so the refusals counted are the lockout's own.
+  const first = await Promise.all(Array.from({ length: 14 }, (_, i) => guess(i)));
+  const second = await Promise.all(Array.from({ length: 14 }, (_, i) => guess(i + 14)));
+  const codes = [...first, ...second].map((r) => r.status);
+  const evaluated = codes.filter((c) => c === 403).length;
+  check("parallel-guess", "no more guesses are evaluated than the threshold allows",
+    evaluated <= 10, `${evaluated} evaluated of ${codes.length}`);
+  check("parallel-guess", "the rest are refused as locked out", codes.filter((c) => c === 429).length >= codes.length - 10,
+    codes.join(","));
+  check("parallel-guess", "even the correct password is refused while locked",
+    (await call("POST", "/auth/change-password", { token: g.token, body: { currentPassword: PASSWORD, newPassword: "an-entirely-new-passphrase-77" } })).status === 429);
+}
+
+// === check-up: superadmin router and identity changes ======================
+{
+  const anon = await call("GET", "/superadmin/admins", {});
+  check("superadmin-gate", "an anonymous request to the superadmin router is refused", anon.status === 401, `status ${anon.status}`);
+  const anonUnknown = await call("GET", "/superadmin/no-such-route", {});
+  check("superadmin-gate", "so is an unknown path under it", anonUnknown.status === 401, `status ${anonUnknown.status}`);
+  const plain = await register("sagateuser");
+  const plainAdmins = await call("GET", "/superadmin/admins", { token: plain.token });
+  check("superadmin-gate", "a plain user is refused", plainAdmins.status === 403, `status ${plainAdmins.status}`);
+
+  const sa = await register("saidentity");
+  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${sa.userId}`);
+  const holder = await register("saholder");
+  const subject = await register("sasubject");
+  const clash = await call("PATCH", `/users/${subject.userId}`, { token: sa.token, body: { email: holder.email } });
+  check("superadmin-identity", "changing a user's email to a taken address is a 409, not a 500", clash.status === 409, `status ${clash.status}`);
+
+  const adm = await register("saadmintarget");
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${adm.userId}`);
+  const newEmail = `renamed${Date.now()}@example.test`;
+  const bare = await call("PATCH", `/users/${adm.userId}`, { token: sa.token, body: { email: newEmail } });
+  check("superadmin-identity", "changing an administrator's email needs password confirmation", bare.status === 403, `status ${bare.status}`);
+  const confirmed = await call("PATCH", `/users/${adm.userId}`, { token: sa.token, body: { email: newEmail, confirmPassword: PASSWORD } });
+  check("superadmin-identity", "and succeeds with it", confirmed.status === 200 && confirmed.data?.email === newEmail, `status ${confirmed.status}`);
+}
+
+// === check-up: login counts attempts first; aborted requests hold no slot; no deadlocks ===
+{
+  const v = await register("loginrace");
+  const bad = (i) => call("POST", "/auth/login", { body: { email: v.email, password: `not-the-password-${i}-xx` } });
+  const burst = await Promise.all(Array.from({ length: 30 }, (_, i) => bad(i)));
+  const codes = burst.map((r) => r.status);
+  check("login-race", "parallel wrong logins are evaluated no more often than the threshold allows",
+    codes.filter((c) => c === 401).length <= 10, codes.join(","));
+  check("login-race", "the rest are refused as locked out", codes.filter((c) => c === 429).length >= 20, codes.join(","));
+  const locked = await call("POST", "/auth/login", { body: { email: v.email, password: PASSWORD } });
+  check("login-race", "and even the right password is refused while locked", locked.status === 429, `status ${locked.status}`);
+
+  // Requests the client abandons while authentication is still running must not
+  // leave an in-flight slot behind.
+  const ab = await register("abortslots");
+  await Promise.allSettled(Array.from({ length: 48 }, (_, i) => {
+    const controller = new AbortController();
+    const sent = fetch(`${B}/dashboard/stats`, { signal: controller.signal, headers: { authorization: `Bearer ${ab.token}` } });
+    setTimeout(() => controller.abort(), i % 4);
+    return sent;
+  }));
+  await new Promise((r) => setTimeout(r, 300));
+  const after = await Promise.all(Array.from({ length: 16 }, () => call("GET", "/dashboard/stats", { token: ab.token })));
+  check("abort-slots", "after 48 aborted requests all 16 slots are still available",
+    after.every((r) => r.status === 200), after.map((r) => r.status).join(","));
+}
+{
+  const dl = await register("deadlock");
+  const T = { token: dl.token };
+  const mk = async (name) => (await call("POST", "/products", { ...T,
+    body: { name, unit: "Nos", sellingPrice: 10, gstRate: 18, stockQuantity: 1000 } })).data;
+  const A = await mk("Lock A"); const Bp = await mk("Lock B"); const C = await mk("Lock C");
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "DL Vendor", gstin: "27SVSVS0000V1Z5" } })).data;
+  const line = (p, q) => ({ productId: p.id, description: p.name, quantity: q, unitPrice: 10, gstRate: 18 });
+  const sale = async (items) => (await call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27", items } })).data.invoice;
+  const inv = await sale([line(A, 1), line(Bp, 1)]);
+  const bill = (await call("POST", "/purchases", { ...T, body: { vendorId: vend.id, billDate: "2026-08-05", items: [line(Bp, 1), line(A, 1)] } })).data;
+  const rounds = [];
+  for (let i = 0; i < 6; i++) {
+    rounds.push(...await Promise.all([
+      call("PATCH", `/invoices/${inv.id}`, { ...T, body: { items: i % 2 ? [line(Bp, 2), line(A, 2)] : [line(C, 2), line(A, 3)] } }),
+      call("PATCH", `/purchases/${bill.id}`, { ...T, body: { items: i % 2 ? [line(A, 2), line(C, 2)] : [line(Bp, 2), line(A, 2)] } }),
+      call("PATCH", `/invoices/${inv.id}`, { ...T, body: { items: [line(A, 1), line(Bp, 1)] } }),
+    ]));
+  }
+  const fives = rounds.filter((r) => r.status >= 500).length;
+  check("deadlock", "racing edits that touch the same products in opposite orders never fail with a server error",
+    fives === 0, `${fives} of ${rounds.length} were 5xx`);
+}
+
 // === review: marking an invoice paid settles it and records the payment ====
 {
   const pd = await register("paid");
@@ -1145,8 +1360,10 @@ const adminEmail = `admin${uniq}@example.test`;
   const write = () => call("PATCH", "/business", { token: fl.token, body: { stateCode: "29" } });
 
   const codes = [];
-  for (let batch = 0; batch < 8; batch++) {
-    codes.push(...(await Promise.all(Array.from({ length: 40 }, write))).map((r) => r.status));
+  // Batches stay under the per-business in-flight cap, so what is counted here
+  // is the per-minute ceiling alone.
+  for (let batch = 0; batch < 27; batch++) {
+    codes.push(...(await Promise.all(Array.from({ length: 12 }, write))).map((r) => r.status));
   }
   const accepted = codes.filter((c) => c === 200).length;
   const throttled = codes.filter((c) => c === 429).length;
@@ -1247,8 +1464,8 @@ const adminEmail = `admin${uniq}@example.test`;
     setTimeout(() => controller.abort(), 2);
     return sent;
   }));
-  const after = await Promise.all(Array.from({ length: 25 }, () => call("GET", "/customers", T)));
-  check("abandoned", "after 30 abandoned requests the pool still serves 25 at once",
+  const after = await Promise.all(Array.from({ length: 16 }, () => call("GET", "/customers", T)));
+  check("abandoned", "after 30 abandoned requests the pool still serves 16 at once",
     after.every((r) => r.status === 200), after.map((r) => r.status).join(","));
 
   // A request left holding its transaction shows up here as `idle in transaction`.
@@ -1261,6 +1478,66 @@ const adminEmail = `admin${uniq}@example.test`;
   check("abandoned", "and none of them is left holding a transaction open", open === 0, `${open} open`);
 }
 
+
+// === review: hostile input is a 400, never a 500 ===========================
+//
+// Found by sending malformed input to every write route: a NUL character in any
+// text field, a PATCH that validates down to nothing, ids written as `0x10` or
+// `1e3`, ids beyond the integer column, dates that do not exist, and amounts that
+// each fit a field but overflow the column when multiplied. All were 500s.
+{
+  const hi = await register("hostile");
+  const T = { token: hi.token };
+  await call("PATCH", "/business", { ...T, body: { stateCode: "29" } });
+  const cust = (await call("POST", "/customers", { ...T, body: { name: "Real Customer" } })).data;
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "Real Vendor" } })).data;
+  const prod = (await call("POST", "/products", { ...T, body: { name: "Real Product", unit: "Nos", gstRate: 18 } })).data;
+  const line = (extra = {}) => ({ description: "x", quantity: 1, unitPrice: 10, gstRate: 18, ...extra });
+  const inv = (body) => call("POST", "/invoices", { ...T, body: { invoiceDate: "2026-08-10", customerName: "C", placeOfSupply: "29", items: [line()], ...body } });
+  const is400 = (r) => r.status === 400;
+
+  check("hostile", "a NUL character in a body field is refused", is400(await call("POST", "/customers", { ...T, body: { name: "a\u0000b" } })));
+  check("hostile", "in a nested value too", is400(await inv({ items: [line({ description: "x\u0000" })] })));
+  check("hostile", "in a query string", is400(await call("GET", "/customers?search=%00", T)));
+  check("hostile", "and in a path parameter", is400(await call("GET", "/customers/%00", T)));
+
+  for (const [label, path, body] of [["customers", `/customers/${cust.id}`, {}], ["vendors", `/vendors/${vend.id}`, {}],
+                                       ["products", `/products/${prod.id}`, {}], ["a body of only unknown keys", `/customers/${cust.id}`, { nope: 1 }]]) {
+    const r = await call("PATCH", path, { ...T, body });
+    check("hostile", `an update that changes nothing is a 400 (${label})`, is400(r), `status ${r.status}`);
+  }
+
+  check("hostile", "an id written as hex is not an id", is400(await call("GET", `/customers/0x${cust.id.toString(16)}`, T)));
+  check("hostile", "nor one written with an exponent", is400(await call("GET", "/customers/1e3", T)));
+  check("hostile", "an id past the integer column in a query is a 400", is400(await call("GET", "/invoices?customerId=99999999999", T)));
+  check("hostile", "in a body", is400(await call("POST", "/payments", { ...T, body: { type: "received", amount: 1, date: "2026-08-10", mode: "cash", customerId: 99999999999 } })));
+  check("hostile", "in a line item", is400(await inv({ items: [line({ productId: 99999999999 })] })));
+
+  for (const bad of ["2026-04-31", "2026-02-29", "2026-13-01", "2026-00-10", "1999-12-31", "2101-01-01"]) {
+    check("hostile", `${bad} is not accepted as an invoice date`, is400(await inv({ invoiceDate: bad })), bad);
+  }
+  check("hostile", "a leap day that exists is accepted", (await inv({ invoiceDate: "2028-02-29" })).status === 201);
+
+  check("hostile", "a single line that overflows the money column is a 400",
+    is400(await inv({ items: [line({ quantity: 1e9, unitPrice: 1e12 })] })));
+  check("hostile", "so is a document whose lines add up past it",
+    is400(await inv({ items: Array.from({ length: 20 }, () => line({ quantity: 1, unitPrice: 9e10 })) })));
+
+  // An empty due date means "no due date" — it was stored as "" and counted as overdue for ever.
+  const noDue = await inv({ dueDate: "" });
+  check("hostile", "an empty due date is stored as none", noDue.status === 201 && noDue.data.invoice.dueDate === null,
+    JSON.stringify(noDue.data?.invoice?.dueDate));
+  const overdue = (await call("GET", "/dashboard/stats", T)).data.overdueInvoiceCount;
+  check("hostile", "and does not make the invoice overdue", overdue === 0, String(overdue));
+
+  // An administrator marking an account expired has to mean something.
+  sqlExec(`UPDATE users SET subscription_status='expired', subscription_end=NULL WHERE id=${hi.userId}`);
+  const blocked = await call("GET", "/customers", T);
+  check("hostile", "an account marked expired is refused, with no end date set", blocked.status === 403, `status ${blocked.status}`);
+  const relog = await call("POST", "/auth/login", { body: { email: hi.email, password: PASSWORD } });
+  check("hostile", "and cannot sign in again", relog.status === 403, `status ${relog.status}`);
+  sqlExec(`UPDATE users SET subscription_status='trial' WHERE id=${hi.userId}`);
+}
 
 // === F-14: registration tells you nothing about an address =================
 //
@@ -1297,9 +1574,9 @@ const adminEmail = `admin${uniq}@example.test`;
   const toFree = outbox().filter((m) => m.to === freeEmail);
   const toTaken = outbox().filter((m) => m.to === alice.email);
   check("F-14", "the free address is sent a link",
-    toFree.some((m) => /verify\?token=/.test(m.text ?? "")));
+    toFree.some((m) => /verify[?#]token=/.test(m.text ?? "")));
   check("F-14", "the taken address is told someone tried, with no link",
-    toTaken.some((m) => /already has one/.test(m.text ?? "") && !/verify\?token=/.test(m.text ?? "")));
+    toTaken.some((m) => /already has one/.test(m.text ?? "") && !/verify[?#]token=/.test(m.text ?? "")));
 
   // Submitting does not create anything: otherwise anyone could reserve an
   // address they do not control simply by naming it.
@@ -1504,11 +1781,13 @@ const adminEmail = `admin${uniq}@example.test`;
   });
   const message = outbox().filter((m) => m.to === target).at(-1);
   const lines = (message?.text ?? "").split("\n");
-  check("mail-injection", "the greeting stays on a single line",
-    lines[0]?.startsWith("Hello Eve") && lines[0].endsWith(",") && lines[1] === "", lines.slice(0, 2).join(" | "));
+  check("mail-injection", "the greeting is fixed text",
+    lines[0] === "Hello," && lines[1] === "", lines.slice(0, 2).join(" | "));
+  check("mail-injection", "nothing the stranger typed appears in the message",
+    !/Eve|suspended|99999|Bcc/i.test(message?.text ?? ""));
   check("mail-injection", "no carriage return survives into the message", !/\r/.test(message?.text ?? ""));
   check("mail-injection", "and the message still carries the verification link",
-    /verify\?token=/.test(message?.text ?? ""));
+    /verify[?#]token=/.test(message?.text ?? ""));
 }
 
 // === review: a page on another site cannot sign a visitor in ================
@@ -2128,6 +2407,10 @@ const adminEmail = `admin${uniq}@example.test`;
   const acceptedMe = await call("GET", "/auth/me", { jar: inviteJar });
   check("superadmin", "the accepted session resolves to the new admin account",
     acceptedMe.status === 200 && acceptedMe.data?.email === adminEmail);
+  check("superadmin", "accepting an invitation is audited",
+    Number(sqlValue(`SELECT count(*) FROM audit_log WHERE action='admin.created' AND target_id=${accepted.data?.user?.id}`)) === 1);
+  check("superadmin", "the invitation link carries its token in the fragment",
+    /accept-admin-invite#token=/.test(outbox().filter((m) => m.to === adminEmail).at(-1)?.text ?? ""));
   const reused = await call("POST", "/auth/accept-admin-invite", {
     body: { token: adminToken, password: ADMIN_PASSWORD },
   });
@@ -2170,6 +2453,9 @@ const adminEmail = `admin${uniq}@example.test`;
 
   // Two simultaneous creates contend for the same locked admin row. Exactly
   // one consumes the remaining seat; the other gets the request-capacity path.
+  // The allowance is one, and the first child above holds it, so open exactly
+  // one more seat for the race and put the allowance back afterwards.
+  sqlExec(`UPDATE users SET user_limit=2 WHERE id=${tenantAdminId}`);
   const concurrent = await Promise.all([1, 2].map((n) => call("POST", "/users", {
     token: accepted.data?.token,
     body: {
@@ -2179,6 +2465,7 @@ const adminEmail = `admin${uniq}@example.test`;
       role: "user",
     },
   })));
+  sqlExec(`UPDATE users SET user_limit=1 WHERE id=${tenantAdminId}`);
   const statuses = concurrent.map((response) => response.status).sort((a, b) => a - b);
   check("capacity", "concurrent user creation cannot exceed the allowance",
     statuses[0] === 201 && statuses[1] === 402, statuses.join(", "));
@@ -2186,7 +2473,7 @@ const adminEmail = `admin${uniq}@example.test`;
   check("capacity", "quota errors include the fixed INR 1,000 per-user quote",
     quotaResponse?.data?.amountInr === 1000 &&
       quotaResponse?.data?.currency === "INR" &&
-      quotaResponse?.data?.userLimit === 1);
+      quotaResponse?.data?.userLimit === 2);
   check("capacity", "exactly one concurrent account owns the final seat",
     sqlValue(`SELECT count(*) FROM users WHERE created_by_admin_id=${tenantAdminId} AND role='user' AND deleted_at IS NULL`) === "2");
 

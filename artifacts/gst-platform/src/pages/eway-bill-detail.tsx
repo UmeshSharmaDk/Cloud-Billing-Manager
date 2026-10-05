@@ -53,18 +53,22 @@ function Row({ label, value }: { label: string; value?: string | null }) {
 
 export default function EwayBillDetailPage() {
   const [, params] = useRoute("/eway-bills/:id");
-  const id = params?.id;
+  // The route parameter comes straight from the address bar (e.g. "..%2Finvoices%2F5"), so it must not
+  // be spliced into an API path as-is. Only a plain run of digits is accepted; anything else leaves `id` undefined, which disables the
+  // query and renders the not-found state below, so no request is made and no PATCH can be sent.
+  const id = params?.id && /^\d+$/.test(params.id) ? params.id : undefined;
+  const idPath = id === undefined ? "" : encodeURIComponent(id);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const { data: bill, isLoading } = useQuery({
     queryKey: ["eway-bill", id],
-    queryFn: () => authFetch(`/api/eway-bills/${id}`).then(r => r.json()),
+    queryFn: () => authFetch(`/api/eway-bills/${idPath}`).then(r => r.json()),
     enabled: !!id,
   });
 
   const cancelMutation = useMutation({
-    mutationFn: () => authFetch(`/api/eway-bills/${id}`, { method: "PATCH", body: JSON.stringify({ status: "cancelled" }) }).then(r => r.json()),
+    mutationFn: () => authFetch(`/api/eway-bills/${idPath}`, { method: "PATCH", body: JSON.stringify({ status: "cancelled" }) }).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["eway-bill", id] });
       queryClient.invalidateQueries({ queryKey: ["eway-bills"] });
@@ -73,7 +77,7 @@ export default function EwayBillDetailPage() {
   });
 
   const generateMutation = useMutation({
-    mutationFn: () => authFetch(`/api/eway-bills/${id}`, {
+    mutationFn: () => authFetch(`/api/eway-bills/${idPath}`, {
       method: "PATCH",
       body: JSON.stringify({
         status: "generated",

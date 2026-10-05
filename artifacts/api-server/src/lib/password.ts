@@ -106,6 +106,11 @@ export async function verifyPassword(
     const candidate = legacyHash(password);
     // Both buffers are a fixed 32 bytes, so timingSafeEqual cannot throw here.
     const valid = crypto.timingSafeEqual(candidate, stored);
+    // A wrong password against a legacy hash answered in microseconds, while a
+    // wrong one against an Argon2 hash takes tens of milliseconds, so response
+    // time told an attacker which accounts had not yet migrated. Spend the same
+    // work on a mismatch.
+    if (!valid) await spendVerificationTime(password);
     return { valid, needsRehash: valid };
   }
 

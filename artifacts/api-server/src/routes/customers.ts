@@ -54,6 +54,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   for (const f of fields) {
     if (req.body[f] !== undefined) updates[f] = f === "creditLimit" ? req.body[f]?.toString() : req.body[f];
   }
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
   const [customer] = await db.update(customersTable).set(updates).where(and(eq(customersTable.id, req.validatedParams.id), eq(customersTable.businessId, businessId))).returning();
   if (!customer) return res.status(404).json({ error: "Not found" });
   return res.json(customer);

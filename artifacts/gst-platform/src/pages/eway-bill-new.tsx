@@ -128,7 +128,7 @@ export default function EwayBillNewPage() {
 
   const { data: invoiceDetail, isLoading: invoiceLoading } = useQuery({
     queryKey: ["invoice-detail-ewb", form.invoiceId],
-    queryFn: () => authFetch(`/api/invoices/${form.invoiceId}`).then(r => r.json()),
+    queryFn: () => authFetch(`/api/invoices/${encodeURIComponent(form.invoiceId)}`).then(r => r.json()),
     enabled: !!form.invoiceId,
   });
 

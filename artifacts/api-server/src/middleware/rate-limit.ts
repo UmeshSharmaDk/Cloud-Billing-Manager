@@ -21,7 +21,11 @@
  */
 
 import rateLimit from "express-rate-limit";
-import { db, loginAttemptsTable } from "@workspace/db";
+// The lockout counters use `rootDb`, never the request-scoped `db`: inside a request
+// transaction a counter write would be held until the whole request committed,
+// serialising every attempt on one account behind the first and parking a pooled
+// connection for each, and it would be rolled back along with a 5xx.
+import { rootDb as db, loginAttemptsTable } from "@workspace/db";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 
 /** Failures tolerated inside the window before an account starts locking. */
@@ -159,6 +163,52 @@ export const tenantApiLimiter: ReturnType<typeof rateLimit> = rateLimit({
 });
 
 /**
+ * Requests one business may have being handled at once.
+ *
+ * The per-minute limits bound how many requests arrive; they say nothing about
+ * how many are running. Each tenant request holds a pooled database connection
+ * until it has answered, and the pool is small and shared, so one business
+ * sending slow requests (a large report, an oversized document) in parallel
+ * could take every connection and leave every other tenant waiting on the
+ * pool. Capping what one business may hold keeps the rest of the pool for
+ * everyone else. The default is 16 of the default pool of 20; set
+ * `TENANT_MAX_IN_FLIGHT` alongside `DB_POOL_MAX`.
+ */
+const tenantMaxInFlight = positiveIntFromEnv("TENANT_MAX_IN_FLIGHT", 16);
+const inFlight = new Map<number, number>();
+
+export function tenantConcurrencyLimiter(req: any, res: any, next: any): void {
+  const businessId = Number(req.businessId);
+  // A client that left while authentication was still running has already had
+  // its one `close` event; counting it now would register a release that never
+  // fires, and sixteen of those would lock the business out until a restart.
+  // The request carries on and is answered into the void, as an abandoned one
+  // always has been, but it holds no slot.
+  if (res.destroyed || res.writableEnded || req.socket?.destroyed) {
+    next();
+    return;
+  }
+  const current = inFlight.get(businessId) ?? 0;
+  if (current >= tenantMaxInFlight) {
+    res.setHeader("Retry-After", "1");
+    res.status(429).json({ error: "Too many requests in progress. Try again shortly." });
+    return;
+  }
+  inFlight.set(businessId, current + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const left = (inFlight.get(businessId) ?? 1) - 1;
+    if (left <= 0) inFlight.delete(businessId);
+    else inFlight.set(businessId, left);
+  };
+  // `close` fires whether the response finished or the client went away.
+  res.once("close", release);
+  next();
+}
+
+/**
  * Whether this subject is currently locked out, and until when.
  * A read failure returns `null` — the lockout must never become an outage.
  */
@@ -257,6 +307,49 @@ export async function recordFailures(keys: string[]): Promise<void> {
       }
     }),
   );
+}
+
+/**
+ * Spend an attempt *before* checking the password, and report whether it may go
+ * ahead: `null` to proceed, or the time the lock lifts if it is refused.
+ *
+ * Checking the lock, verifying, and only then recording the failure leaves a
+ * window as wide as one Argon2 verification: a caller who sends a hundred
+ * guesses at once has all of them pass the lock check before any failure is
+ * written. Taking the unit first makes the counter the gate — each request
+ * increments atomically and sees its own position — so the attempts allowed are
+ * the threshold, not the threshold plus whatever fits in flight. The attempt
+ * that reaches the threshold is still evaluated; the lock it sets applies to
+ * the next. A success must `clearFailures`, or ordinary use would add up.
+ *
+ * Fails open on a database error, like the rest of the lockout.
+ */
+export async function reserveAttempt(keys: string[]): Promise<Date | null> {
+  const existing = await anyLocked(keys);
+  if (existing) return existing;
+
+  let refusedUntil: Date | null = null;
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        const row = await incrementCounter(key);
+        const failures = row?.failures ?? 0;
+        const lockMs = lockDurationMs(failures);
+        if (lockMs === 0) return;
+        const until = new Date(Date.now() + lockMs);
+        await db
+          .update(loginAttemptsTable)
+          .set({ lockedUntil: until })
+          .where(eq(loginAttemptsTable.key, key));
+        if (failures > FAILURE_THRESHOLD && (!refusedUntil || until > refusedUntil)) {
+          refusedUntil = until;
+        }
+      } catch {
+        // Never let bookkeeping become an outage.
+      }
+    }),
+  );
+  return refusedUntil;
 }
 
 /**

@@ -51,6 +51,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   const fields = ["name","gstin","phone","email","address","city","state","stateCode","pincode"];
   const updates: any = {};
   for (const f of fields) if (req.body[f] !== undefined) updates[f] = req.body[f];
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
   const [vendor] = await db.update(vendorsTable).set(updates).where(and(eq(vendorsTable.id, req.validatedParams.id), eq(vendorsTable.businessId, businessId))).returning();
   if (!vendor) return res.status(404).json({ error: "Not found" });
   return res.json(vendor);

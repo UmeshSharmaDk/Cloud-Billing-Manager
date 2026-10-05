@@ -24,7 +24,9 @@ const router = Router();
  * policies is therefore explicit and router-wide rather than sprinkled per
  * query, and it means these handlers are trusting `requireAdmin` alone.
  */
-router.use(systemScope);
+// Authenticate first: an unauthenticated request must not take a pooled
+// connection and open a policy-free transaction just to be turned away.
+router.use(requireAuth, systemScope);
 
 /**
  * Handlers in this router run after `requireAuth`, so
@@ -35,7 +37,7 @@ router.use(systemScope);
 type Req = AuthedRequest<any, any, IdParams>;
 
 
-router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async (req: Req, res) => {
+router.get("/", requireAdmin, validateQuery(ListUsersQuery), async (req: Req, res) => {
   const { search, status, page, limit } = req.validatedQuery;
   const conditions: any[] = [];
   if (search) conditions.push(or(ilike(usersTable.name, `%${search}%`), ilike(usersTable.email, `%${search}%`)));
@@ -54,7 +56,7 @@ router.get("/", requireAuth, requireAdmin, validateQuery(ListUsersQuery), async 
   return res.json({ users: users.map(mapUser), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
+router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
 
@@ -147,7 +149,7 @@ router.post("/", requireAuth, requireAdmin, validateBody(CreateUserBody), async 
  * one the admin dashboard calls, and it is now the only one.
  */
 
-router.get("/:id", requireAuth, validateParams(IdParam), async (req: Req, res) => {
+router.get("/:id", validateParams(IdParam), async (req: Req, res) => {
   if (req.userRole !== "admin" && req.userRole !== "superadmin" && req.userId !== req.validatedParams.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
@@ -160,7 +162,7 @@ router.get("/:id", requireAuth, validateParams(IdParam), async (req: Req, res) =
   return res.json(mapUser(user));
 });
 
-router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody),
+router.patch("/:id", requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody),
   async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
@@ -186,9 +188,23 @@ router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validat
       if (guard) return res.status(409).json({ error: guard });
     }
 
+    // An email is the identity of the account. Changing a privileged account's
+    // takes the same password confirmation as the other privileged changes, and
+    // a collision is a 409 rather than a unique-index 500.
+    const newEmail = email ? String(email).toLowerCase() : undefined;
+    if (newEmail && newEmail !== before.email) {
+      if (before.role !== "user") {
+        const stepUp = await verifyStepUp(req);
+        if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+      }
+      const [taken] = await db.select({ id: usersTable.id }).from(usersTable)
+        .where(eq(usersTable.email, newEmail)).limit(1);
+      if (taken) return res.status(409).json({ error: "That email address is already registered" });
+    }
+
     const updates: any = {};
     if (name) updates.name = name;
-    if (email) updates.email = email.toLowerCase();
+    if (newEmail) updates.email = newEmail;
     if (role) updates.role = role;
     if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
     if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd;
@@ -210,7 +226,7 @@ router.patch("/:id", requireAuth, requireAdmin, validateParams(IdParam), validat
  * Soft-delete a user. The row and every business record attached to it stay
  * in place; a hard DELETE removed only the user and orphaned the rest.
  */
-router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
+router.delete("/:id", requireAdmin, validateParams(IdParam), async (req: Req, res) => {
   const targetId = req.validatedParams.id;
 
   const selfGuard = assertNotSelf(req.user.id, targetId);
@@ -236,7 +252,7 @@ router.delete("/:id", requireAuth, requireAdmin, validateParams(IdParam), async 
   return res.json({ success: true });
 });
 
-router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdParam), validateBody(ToggleStatusBody), async (req: Req, res) => {
+router.patch("/:id/toggle-status", requireAdmin, validateParams(IdParam), validateBody(ToggleStatusBody), async (req: Req, res) => {
   const targetId = req.validatedParams.id;
   const { isActive } = req.body;
 
@@ -275,7 +291,7 @@ router.patch("/:id/toggle-status", requireAuth, requireAdmin, validateParams(IdP
  * can take — it yields their account — so it needs the administrator's own
  * password, and it is recorded.
  */
-router.post("/:id/reset-password", requireAuth, requireAdmin, validateParams(IdParam),
+router.post("/:id/reset-password", requireAdmin, validateParams(IdParam),
   validateBody(ResetPasswordBody), requireStepUp, async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const { newPassword } = req.body;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useAcceptAdminInvitation } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
@@ -12,12 +12,25 @@ function getError(error: any) {
   return error?.data?.error ?? error?.data?.message ?? error?.message ?? "This invitation could not be accepted. Contact the person who invited you.";
 }
 
+/**
+ * The emailed link carries the token in the URL fragment (`#token=...`), which browsers never send to a
+ * server, so it stays out of host and CDN access logs. `?token=` is still accepted for links already sent.
+ */
+function readInvitationToken(): string | null {
+  const fromHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("token");
+  return fromHash || new URLSearchParams(window.location.search).get("token");
+}
+
 export default function AcceptAdminInvitePage() {
   const { login } = useAuth();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [formError, setFormError] = useState("");
-  const token = new URLSearchParams(window.location.search).get("token");
+  const [token] = useState(readInvitationToken);
+  // Once held in state, take the token out of the address bar, history and history sync.
+  useEffect(() => {
+    if (token) window.history.replaceState(window.history.state, "", window.location.pathname);
+  }, [token]);
   const accept = useAcceptAdminInvitation({
     mutation: {
       onSuccess: (response) => login(response.user),

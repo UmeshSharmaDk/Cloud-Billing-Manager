@@ -6,7 +6,7 @@ import { validateBody, validateQuery, validateParams } from "../middleware/valid
 import { Decimal, dec, paise, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListPurchasesQuery, CreatePurchaseBody, UpdatePurchaseBody, IdParam } from "../schemas";
 import { resolveInwardSupplyType } from "../lib/gst";
-import { applyStockMovement, findLineProduct, STOCK_IN } from "../lib/stock";
+import { applyStockChanges, applyStockMovement, findLineProduct, STOCK_IN } from "../lib/stock";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapPurchase } from "../lib/serialise";
 
@@ -99,6 +99,10 @@ function calcPurchaseTotals(items: any[], isInterstate: boolean) {
 async function resolveItemsToProducts(tx: any, businessId: number, items: any[]) {
   const catalog = await tx.select().from(productsTable).where(eq(productsTable.businessId, businessId));
   const resolved: any[] = [];
+  // Catalog updates are collected and written afterwards in ascending id order,
+  // not in line order: a bill listing product B before A took its row locks in
+  // the opposite order to a document locking A then B, and the two deadlocked.
+  const pending = new Map<number, any>();
   for (const item of items) {
     const name = String(item.description ?? "").trim();
     const unitPrice = dec(item.unitPrice ?? 0);
@@ -112,8 +116,7 @@ async function resolveItemsToProducts(tx: any, businessId: number, items: any[])
       if (item.hsnCode) updates.hsnCode = item.hsnCode;
       if (item.unit) updates.unit = item.unit;
       if (Object.keys(updates).length > 0) {
-        const [updated] = await tx.update(productsTable).set(updates).where(eq(productsTable.id, product.id)).returning();
-        product = updated;
+        pending.set(product.id, { ...(pending.get(product.id) ?? {}), ...updates });
       }
     } else if (name) {
       const [created] = await tx.insert(productsTable).values({
@@ -126,6 +129,10 @@ async function resolveItemsToProducts(tx: any, businessId: number, items: any[])
     }
 
     resolved.push({ ...item, productId: product?.id ?? null });
+  }
+  for (const [id, updates] of [...pending].sort(([a], [b]) => a - b)) {
+    await tx.update(productsTable).set(updates)
+      .where(and(eq(productsTable.id, id), eq(productsTable.businessId, businessId)));
   }
   return resolved;
 }
@@ -239,38 +246,6 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   if (notes !== undefined) updates.notes = notes;
   if (paymentStatus) updates.status = paymentStatus;
 
-  // The vendor decides the supply type, so the one that matters is the vendor
-  // this bill will have once the update lands — the new one, or the existing.
-  let vendor;
-  if (vendorId) {
-    [vendor] = await db.select().from(vendorsTable)
-      .where(and(eq(vendorsTable.id, vendorId), eq(vendorsTable.businessId, businessId)))
-      .limit(1);
-    if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
-    updates.vendorId = vendor.id;
-    updates.vendorName = vendor.name;
-    updates.vendorGstin = vendor.gstin ?? null;
-  } else {
-    [vendor] = await db.select().from(vendorsTable)
-      .where(and(eq(vendorsTable.id, existing.vendorId), eq(vendorsTable.businessId, businessId)))
-      .limit(1);
-  }
-
-  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
-  const lines = (items ?? existing.items) as any[];
-  const supply = resolveInwardSupplyType(
-    business, vendor, vendor?.gstin ?? existing.vendorGstin, billHasGst(lines),
-  );
-  if (!supply.ok) return res.status(400).json({ error: supply.error });
-
-  const assignTotals = (calc: ReturnType<typeof calcPurchaseTotals>, lineItems: any[]) => {
-    Object.assign(updates, {
-      items: lineItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst),
-      sgst: toColumn(calc.sgst), igst: toColumn(calc.igst), totalGst: toColumn(calc.totalGst),
-      grandTotal: toColumn(calc.grandTotal), isInterstate: supply.isInterstate,
-    });
-  };
-
   const purchase = await db.transaction(async (tx) => {
     // Under a row lock, so two concurrent cancels cannot both return the goods.
     const [locked] = await tx.select().from(purchasesTable)
@@ -279,6 +254,42 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
       .limit(1);
     if (!locked) return null;
     if (locked.status === "cancelled") return "cancelled" as const;
+
+    // Everything below is worked out from the locked row. It used to come from
+    // the read above the transaction, so two edits racing each other each built
+    // their totals from the same stale lines and the later one overwrote the
+    // earlier with figures that did not match its own items.
+    // The vendor decides the supply type, so the one that matters is the vendor
+    // this bill will have once the update lands — the new one, or the existing.
+    let vendor;
+    if (vendorId) {
+      [vendor] = await tx.select().from(vendorsTable)
+        .where(and(eq(vendorsTable.id, vendorId), eq(vendorsTable.businessId, businessId)))
+        .limit(1);
+      if (!vendor) return "unknown-vendor" as const;
+      updates.vendorId = vendor.id;
+      updates.vendorName = vendor.name;
+      updates.vendorGstin = vendor.gstin ?? null;
+    } else {
+      [vendor] = await tx.select().from(vendorsTable)
+        .where(and(eq(vendorsTable.id, locked.vendorId), eq(vendorsTable.businessId, businessId)))
+        .limit(1);
+    }
+
+    const [business] = await tx.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+    const lines = (items ?? locked.items) as any[];
+    const supply = resolveInwardSupplyType(
+      business, vendor, vendor?.gstin ?? locked.vendorGstin, billHasGst(lines),
+    );
+    if (!supply.ok) return { error: supply.error };
+
+    const assignTotals = (calc: ReturnType<typeof calcPurchaseTotals>, lineItems: any[]) => {
+      Object.assign(updates, {
+        items: lineItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst),
+        sgst: toColumn(calc.sgst), igst: toColumn(calc.igst), totalGst: toColumn(calc.totalGst),
+        grandTotal: toColumn(calc.grandTotal), isInterstate: supply.isInterstate,
+      });
+    };
 
     if (cancelling) {
       // The goods this bill received go back out.
@@ -290,18 +301,20 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
       const resolvedItems = await resolveItemsToProducts(tx, businessId, calc.items);
       // Undo what this bill previously put into stock, then apply what it says
       // now. Without the reversal, re-saving a bill for 10 units left 20.
-      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -STOCK_IN);
-      await applyStockMovement(tx, productsTable, eq, businessId, resolvedItems, STOCK_IN);
+      await applyStockChanges(tx, productsTable, eq, businessId, [
+        { lines: locked.items as any[], direction: -STOCK_IN },
+        { lines: resolvedItems, direction: STOCK_IN },
+      ]);
       assignTotals(calc, resolvedItems);
-    } else if (supply.isInterstate !== existing.isInterstate) {
+    } else if (supply.isInterstate !== locked.isInterstate) {
       // Only the tax split changes here; the same goods were received, so stock
       // is left exactly as it is.
-      const calc = calcPurchaseTotals(existing.items as any[], supply.isInterstate);
+      const calc = calcPurchaseTotals(locked.items as any[], supply.isInterstate);
       assignTotals(calc, calc.items);
     }
 
     // A request that changes nothing is not an error, but `set({})` is invalid SQL.
-    if (Object.keys(updates).length === 0) return existing;
+    if (Object.keys(updates).length === 0) return locked;
 
     const [updated] = await tx.update(purchasesTable).set(updates)
       .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
@@ -310,6 +323,8 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   });
   if (!purchase) return res.status(404).json({ error: "Not found" });
   if (purchase === "cancelled") return res.status(409).json({ error: "A cancelled bill cannot be changed." });
+  if (purchase === "unknown-vendor") return res.status(400).json({ error: "Unknown vendor" });
+  if ("error" in purchase) return res.status(400).json({ error: purchase.error });
   return res.json(mapPurchase(purchase));
 });
 
@@ -321,6 +336,7 @@ router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), asy
   await db.transaction(async (tx) => {
     const [existing] = await tx.select().from(purchasesTable)
       .where(and(eq(purchasesTable.id, req.validatedParams.id), eq(purchasesTable.businessId, businessId)))
+      .for("update")
       .limit(1);
     if (!existing) return;
     // A cancelled bill already handed its goods back; reversing again would take

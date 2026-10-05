@@ -30,16 +30,46 @@ import { INVOICE_TYPES } from "../lib/tax-documents";
 const shortText = (max = 200) => z.string().max(max);
 const optionalText = (max = 200) => z.string().max(max).nullish();
 
+/**
+ * Whether `YYYY-MM-DD` names a day that exists. The shape alone accepted
+ * `2026-04-31`, which sorts after April's last day and before May's first: an
+ * invoice dated that way was counted by the dashboard and silently missing from
+ * the GSTR-1 for both months, because reports select by comparing date strings.
+ */
+function isCalendarDate(value: string): boolean {
+  const [y, m, d] = value.split("-").map(Number) as [number, number, number];
+  if (y < 2000 || y > 2100) return false;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
 /** `YYYY-MM-DD`. Every date column in this schema is text, not `date`. */
 const dateString = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a YYYY-MM-DD date");
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a YYYY-MM-DD date")
+  .refine(isCalendarDate, "Not a real calendar date");
+
+/**
+ * An optional date that may be cleared. An empty string means "none" and is
+ * stored as null: it used to be stored as `""`, and `"" < today` made the
+ * dashboard count that invoice as overdue for ever.
+ */
+const optionalDate = z
+  .union([dateString, z.literal(""), z.null()])
+  .transform((value) => (value === "" ? null : value))
+  .optional();
+
+/** A row id. Bounded to `integer` so a larger one is a 400, not a driver error. */
+const entityId = z.coerce.number().int().positive().max(2_147_483_647);
 
 /**
  * Money. The numeric columns are `numeric(15, 2)`, so anything at or above
  * 10^13 is a write error rather than a validation error; stop short of that.
  */
 const money = z.coerce.number().finite().min(0).max(1e12);
+/** A sum of money actually received or paid: whole paise, nothing finer. */
+const isWholePaise = (n: number) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+const WHOLE_PAISE = { message: "Amounts cannot have more than 2 decimal places" };
 
 /** `numeric(15, 3)` stock column. */
 const quantity = z.coerce.number().finite().min(0).max(1e9);
@@ -123,7 +153,7 @@ export const roleEnum = z.enum(["user", "admin"]);
 
 const subscriptionShape = {
   subscriptionStatus: z.enum(["trial", "monthly", "yearly", "expired"]).nullish(),
-  subscriptionEnd: z.union([dateString, z.literal(""), z.null()]).optional(),
+  subscriptionEnd: optionalDate,
 };
 
 export const ListUsersQuery = z.object({
@@ -299,7 +329,7 @@ export const UpdateProductBody = CreateProductBody.partial().extend({
  */
 const lineItem = z
   .object({
-    productId: z.coerce.number().int().positive().nullish(),
+    productId: entityId.nullish(),
     description: shortText(500).optional(),
     productName: shortText(500).optional(),
     hsnCode: optionalText(12),
@@ -317,15 +347,35 @@ const lineItem = z
     message: "Each item needs a description",
   });
 
+/**
+ * The most a document's lines may add up to before tax. The money columns are
+ * `numeric(15, 2)`, so a total at or above 10^13 is a write error — and a
+ * quantity of 10^9 at a price of 10^12 is each individually valid. Stop short
+ * of the column with room for the highest GST slab on top.
+ */
+const MAX_DOCUMENT_AMOUNT = 1e12;
+
+const lineAmount = (i: { quantity: number; unitPrice?: number; rate?: number }) =>
+  i.quantity * (i.unitPrice ?? i.rate ?? 0);
+
 /** A bill with no lines is almost always a client bug; a 500-line one is a payload attack. */
-const lineItems = z.array(lineItem).min(1).max(500);
+const lineItems = z
+  .array(lineItem)
+  .min(1)
+  .max(500)
+  .refine((items) => items.every((i) => lineAmount(i) <= MAX_DOCUMENT_AMOUNT), {
+    message: "A line amount is too large",
+  })
+  .refine((items) => items.reduce((sum, i) => sum + lineAmount(i), 0) <= MAX_DOCUMENT_AMOUNT, {
+    message: "The document total is too large",
+  });
 
 export const ListInvoicesQuery = z.object({
   ...paginationShape,
   ...searchShape,
   type: z.string().max(50).optional(),
   status: z.string().max(30).optional(),
-  customerId: z.coerce.number().int().positive().optional(),
+  customerId: entityId.optional(),
   fromDate: dateString.optional(),
   toDate: dateString.optional(),
 });
@@ -340,11 +390,11 @@ const invoiceType = z.enum(INVOICE_TYPES);
 export const CreateInvoiceBody = z
   .object({
     type: invoiceType.optional(),
-    customerId: z.coerce.number().int().positive().optional(),
+    customerId: entityId.optional(),
     customerName: shortText(200).optional(),
     customerGstin: gstin,
     invoiceDate: dateString,
-    dueDate: z.union([dateString, z.literal(""), z.null()]).optional(),
+    dueDate: optionalDate,
     placeOfSupply: optionalText(2),
     notes: optionalText(2000),
     items: lineItems,
@@ -355,9 +405,9 @@ export const CreateInvoiceBody = z
 
 export const UpdateInvoiceBody = z.object({
   type: invoiceType.optional(),
-  customerId: z.coerce.number().int().positive().optional(),
+  customerId: entityId.optional(),
   invoiceDate: dateString.optional(),
-  dueDate: z.union([dateString, z.literal(""), z.null()]).optional(),
+  dueDate: optionalDate,
   placeOfSupply: optionalText(2),
   isInterstate: z.boolean().optional(),
   notes: optionalText(2000),
@@ -369,7 +419,7 @@ export const UpdateInvoiceStatusBody = z
     // The route reads `paymentStatus ?? status`; accept either name.
     status: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
     paymentStatus: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
-    paidAmount: money.optional(),
+    paidAmount: money.refine(isWholePaise, WHOLE_PAISE).optional(),
     // How the money arrived, recorded on the payment this creates.
     mode: z.string().max(50).optional(),
     referenceNumber: z.string().max(200).optional(),
@@ -385,7 +435,7 @@ export const UpdateInvoiceStatusBody = z
 export const ListPurchasesQuery = z.object({
   ...paginationShape,
   ...searchShape,
-  vendorId: z.coerce.number().int().positive().optional(),
+  vendorId: entityId.optional(),
   fromDate: dateString.optional(),
   toDate: dateString.optional(),
 });
@@ -393,12 +443,12 @@ export const ListPurchasesQuery = z.object({
 /** `billNumber`/`billDate` are the client's names; the DB columns are invoice*. */
 export const CreatePurchaseBody = z
   .object({
-    vendorId: z.coerce.number().int().positive(),
+    vendorId: entityId,
     billNumber: optionalText(60),
     invoiceNumber: optionalText(60),
     billDate: dateString.optional(),
     invoiceDate: dateString.optional(),
-    dueDate: z.union([dateString, z.literal(""), z.null()]).optional(),
+    dueDate: optionalDate,
     notes: optionalText(2000),
     items: lineItems,
   })
@@ -407,12 +457,12 @@ export const CreatePurchaseBody = z
   });
 
 export const UpdatePurchaseBody = z.object({
-  vendorId: z.coerce.number().int().positive().optional(),
+  vendorId: entityId.optional(),
   billNumber: optionalText(60),
   invoiceNumber: optionalText(60),
   billDate: dateString.optional(),
   invoiceDate: dateString.optional(),
-  dueDate: z.union([dateString, z.literal(""), z.null()]).optional(),
+  dueDate: optionalDate,
   notes: optionalText(2000),
   items: lineItems.optional(),
   paymentStatus: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
@@ -431,13 +481,13 @@ export const CreatePaymentBody = z.object({
   type: z.enum(["received", "paid", "in", "out"]),
   // Strictly positive: direction is the `type`, not the sign. A negative amount
   // let a "received" payment subtract, and zero recorded nothing.
-  amount: z.coerce.number().finite().positive().max(1e12),
+  amount: z.coerce.number().finite().positive().max(1e12).refine(isWholePaise, WHOLE_PAISE),
   date: dateString,
   mode: shortText(30),
   referenceNumber: optionalText(100),
-  invoiceId: z.coerce.number().int().positive().nullish(),
-  customerId: z.coerce.number().int().positive().nullish(),
-  vendorId: z.coerce.number().int().positive().nullish(),
+  invoiceId: entityId.nullish(),
+  customerId: entityId.nullish(),
+  vendorId: entityId.nullish(),
   notes: optionalText(2000),
 });
 
@@ -515,7 +565,7 @@ export const CreateEwayBillBody = z.object({
   transporterName: optionalText(200),
   transporterId: optionalText(20),
   transDocNo: optionalText(60),
-  transDocDate: z.union([dateString, z.literal(""), z.null()]).optional(),
+  transDocDate: optionalDate,
   vehicleNo: optionalText(20),
   vehicleType: optionalText(5),
   totalValue: money.nullish(),
@@ -532,7 +582,7 @@ export const CreateEwayBillBody = z.object({
       message: `items may not exceed ${MAX_EWAY_ITEMS_BYTES} bytes`,
     })
     .default([]),
-  invoiceId: z.coerce.number().int().positive().nullish(),
+  invoiceId: entityId.nullish(),
 });
 
 export const UpdateEwayBillBody = z.object({
@@ -545,7 +595,7 @@ export const UpdateEwayBillBody = z.object({
   transporterName: optionalText(200),
   transporterId: optionalText(20),
   transDocNo: optionalText(60),
-  transDocDate: z.union([dateString, z.literal(""), z.null()]).optional(),
+  transDocDate: optionalDate,
   vehicleNo: optionalText(20),
   vehicleType: optionalText(5),
 });
@@ -559,5 +609,7 @@ export const UpdateEwayBillBody = z.object({
  * and a driver-level error rather than a 400.
  */
 export const IdParam = z.object({
-  id: z.coerce.number().int().positive().max(2_147_483_647),
+  // Plain decimal digits. `z.coerce.number()` read "0x10" as 16 and "1e3" as
+  // 1000, so `/customers/0x10` addressed customer 16.
+  id: z.string().regex(/^\d{1,10}$/, "Expected a numeric id").transform(Number).pipe(entityId),
 });

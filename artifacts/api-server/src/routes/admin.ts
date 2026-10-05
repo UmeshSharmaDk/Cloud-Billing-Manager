@@ -19,7 +19,9 @@ const router = Router();
  * policies is therefore explicit and router-wide rather than sprinkled per
  * query, and it means these handlers are trusting `requireAdmin` alone.
  */
-router.use(systemScope);
+// Authenticate and authorise first: a request that is not an admin must not
+// take a pooled connection and open a policy-free transaction.
+router.use(requireAuth, requireAdmin, systemScope);
 
 /**
  * Handlers in this router run after `requireAuth`, so
@@ -37,7 +39,7 @@ type Req = AuthedRequest<any, any, IdParams>;
  * filtered the arrays eight times. The cost grew with the size of the platform
  * — the endpoint got slower exactly as the product succeeded.
  */
-router.get("/stats", requireAuth, requireAdmin, async (req: Req, res) => {
+router.get("/stats", async (req: Req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
@@ -106,7 +108,7 @@ router.get("/stats", requireAuth, requireAdmin, async (req: Req, res) => {
 });
 
 // GET /admin/users — list all users with business info
-router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuery), async (req: Req, res) => {
+router.get("/users", validateQuery(AdminListUsersQuery), async (req: Req, res) => {
   const { search, page, limit } = req.validatedQuery;
   // Filtering, counting and paging happen in SQL. This handler used to read
   // every user row into memory on each request and slice the array, so its
@@ -125,7 +127,7 @@ router.get("/users", requireAuth, requireAdmin, validateQuery(AdminListUsersQuer
 });
 
 // GET /admin/users/:id — get a user with all their business data
-router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), async (req: Req, res) => {
+router.get("/users/:id", validateParams(IdParam), async (req: Req, res) => {
   const userId = req.validatedParams.id;
   const conditions = [eq(usersTable.id, userId), eq(usersTable.role, "user"), isNull(usersTable.deletedAt)];
   if (req.userRole === "admin") conditions.push(eq(usersTable.createdByAdminId, req.user.id));
@@ -158,7 +160,7 @@ router.get("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), asy
 });
 
 // PATCH /admin/users/:id — update user subscription/status
-router.patch("/users/:id", requireAuth, requireAdmin, validateParams(IdParam), validateBody(AdminUpdateUserBody),
+router.patch("/users/:id", validateParams(IdParam), validateBody(AdminUpdateUserBody),
   async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const { isActive, subscriptionStatus, subscriptionEnd, role } = req.body;

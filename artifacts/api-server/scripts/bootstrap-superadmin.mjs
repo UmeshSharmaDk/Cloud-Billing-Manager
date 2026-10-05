@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { pool, rootDb, usersTable } from "@workspace/db";
 import { hashPassword } from "../src/lib/password.ts";
 import { validatePassword } from "../src/lib/password-policy.ts";
@@ -22,7 +22,7 @@ try {
     // no superadmin row to lock yet.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(571431992)`);
     const [existingSuperadmin] = await tx.select({ id: usersTable.id }).from(usersTable)
-      .where(eq(usersTable.role, "superadmin")).limit(1);
+      .where(and(eq(usersTable.role, "superadmin"), isNull(usersTable.deletedAt))).limit(1);
     if (existingSuperadmin) throw new Error("A superadmin already exists; bootstrap is one-time only.");
 
     const [existingEmail] = await tx.select({ id: usersTable.id }).from(usersTable)

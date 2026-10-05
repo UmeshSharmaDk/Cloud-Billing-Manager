@@ -15,6 +15,24 @@
 import type { NextFunction, Request, Response } from "express";
 import type { ZodType } from "zod";
 
+/**
+ * Whether any string in `value` — or any key — contains a NUL character.
+ *
+ * Postgres text cannot hold one. It reaches the driver as a failed query and
+ * comes back as a 500, so every text field on every route was a way to make the
+ * server error on demand. Refused here, once, for body, query and params alike.
+ */
+function containsNul(value: unknown, depth = 0): boolean {
+  if (typeof value === "string") return value.includes("\u0000");
+  if (value === null || typeof value !== "object" || depth > 32) return false;
+  if (Array.isArray(value)) return value.some((item) => containsNul(item, depth + 1));
+  return Object.entries(value).some(([key, item]) => key.includes("\u0000") || containsNul(item, depth + 1));
+}
+
+function respondNul(res: Response): void {
+  res.status(400).json({ error: "Invalid request", details: [{ message: "Text may not contain NUL characters" }] });
+}
+
 function respondInvalid(res: Response, error: { issues: unknown[] }): void {
   res.status(400).json({
     error: "Invalid request",
@@ -25,6 +43,7 @@ function respondInvalid(res: Response, error: { issues: unknown[] }): void {
 /** Validate and replace `req.body`. */
 export function validateBody(schema: ZodType) {
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (containsNul(req.body)) return respondNul(res);
     const result = schema.safeParse(req.body);
     if (!result.success) return respondInvalid(res, result.error);
     req.body = result.data;
@@ -42,6 +61,7 @@ export function validateBody(schema: ZodType) {
  */
 export function validateQuery(schema: ZodType) {
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (containsNul(req.query)) return respondNul(res);
     const result = schema.safeParse(req.query);
     if (!result.success) return respondInvalid(res, result.error);
     (req as unknown as { validatedQuery: unknown }).validatedQuery = result.data;
@@ -52,6 +72,7 @@ export function validateQuery(schema: ZodType) {
 /** Validate `:id`-style route parameters. */
 export function validateParams(schema: ZodType) {
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (containsNul(req.params)) return respondNul(res);
     const result = schema.safeParse(req.params);
     if (!result.success) return respondInvalid(res, result.error);
     (req as unknown as { validatedParams: unknown }).validatedParams = result.data;

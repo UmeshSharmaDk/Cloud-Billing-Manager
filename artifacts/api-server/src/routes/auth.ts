@@ -13,6 +13,7 @@ import {
 } from "../lib/password";
 import { validateBody } from "../middleware/validate";
 import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody } from "../schemas";
+import { recordAudit } from "../lib/audit";
 import { validatePassword } from "../lib/password-policy";
 import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
@@ -21,9 +22,9 @@ import {
   authIpLimiter,
   registerIpLimiter,
   tenantApiLimiter,
+  tenantConcurrencyLimiter,
   REGISTER_RECIPIENT_LIMIT,
-  anyLocked,
-  recordFailures,
+  reserveAttempt,
   clearFailures,
   consumeBudget,
   userKey,
@@ -62,13 +63,14 @@ function generateToken(userId: number, role: string, tokenVersion: number): stri
   // `revoked_tokens` rather than bumping `v`, so signing out on a phone does
   // not sign the same person out on their laptop.
   return jwt.sign({ userId, role, v: tokenVersion, jti: crypto.randomUUID() }, JWT_SECRET, {
+    algorithm: "HS256",
     expiresIn: TOKEN_TTL_SECONDS,
   });
 }
 
 export function verifyToken(token: string): TokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as TokenPayload;
+    return jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as TokenPayload;
   } catch (err) {
     // An expired token is routine; anything else usually means the signing key
     // changed or the token was tampered with, and a bare `catch {}` hid the
@@ -138,8 +140,12 @@ const PLAN_EXPIRED_MESSAGE =
 export function isSubscriptionExpired(user: {
   role: string;
   subscriptionEnd: string | null;
+  subscriptionStatus?: string | null;
 }): boolean {
   if (user.role === "admin" || user.role === "superadmin") return false;
+  // Marking an account "expired" used to do nothing unless an end date was also
+  // set and had passed: the status was stored and never read.
+  if (user.subscriptionStatus === "expired") return true;
   if (!user.subscriptionEnd) return false;
   const end = new Date(`${user.subscriptionEnd}T23:59:59.999Z`);
   if (Number.isNaN(end.getTime())) return false;
@@ -247,10 +253,13 @@ export function requireBusiness(req: any, res: any, next: any) {
   // connection: the limiter exists to protect them.
   tenantApiLimiter(req, res, (err?: unknown) => {
     if (err) return next(err);
-    // Resolving the tenant and pinning it to the database session are the same
-    // decision, so they happen in the same place. No route opts in, and none can
-    // forget to.
-    openTenantScope(req, res, next, businessId);
+    tenantConcurrencyLimiter(req, res, (err2?: unknown) => {
+      if (err2) return next(err2);
+      // Resolving the tenant and pinning it to the database session are the same
+      // decision, so they happen in the same place. No route opts in, and none can
+      // forget to.
+      openTenantScope(req, res, next, businessId);
+    });
   });
 }
 
@@ -262,9 +271,11 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   // lock keyed on the email alone lets anyone lock anyone out.
   const attemptKey = loginKey(normalisedEmail, req.ip);
 
-  // Checked before any work is done, so a locked-out attacker cannot even make
-  // us hash a candidate password.
-  const locked = await anyLocked([attemptKey]);
+  // The attempt is counted before anything is checked, so a burst of parallel
+  // guesses cannot all pass the lock test before the first failure is written,
+  // and a locked-out attacker cannot even make us hash a candidate password. A
+  // success clears the count below.
+  const locked = await reserveAttempt([attemptKey]);
   if (locked) {
     const retryAfter = Math.ceil((locked.getTime() - Date.now()) / 1000);
     res.setHeader("Retry-After", String(retryAfter));
@@ -278,7 +289,6 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
     // Spend the same work as a real verification so the response time does not
     // reveal whether the address has an account.
     await spendVerificationTime(password);
-    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
@@ -286,7 +296,6 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   if (!valid) {
     // Not `userKey`: that one guards step-up and change-password, and a failed
     // login is by definition made by someone who is not the account's owner.
-    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
@@ -436,8 +445,11 @@ router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (r
     return res.status(202).json(REGISTRATION_ACCEPTED);
   }
 
-  const link = `${config.appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
-  await sendQuietly(verificationMessage(normalisedEmail, name, link));
+  // In the fragment, which browsers never send to a server: a query string ends
+  // up in access logs, proxy logs and the Referer of anything the page loads,
+  // and the token is a credential until it is used.
+  const link = `${config.appBaseUrl}/verify#token=${encodeURIComponent(token)}`;
+  await sendQuietly(verificationMessage(normalisedEmail, link));
   return res.status(202).json(REGISTRATION_ACCEPTED);
 });
 
@@ -585,6 +597,12 @@ router.post("/accept-admin-invite", authIpLimiter, validateBody(AcceptAdminInvit
       return res.status(400).json({ error: "That invitation is invalid or has expired." });
     }
 
+    await recordAudit({
+      actorId: admin.id, actorEmail: admin.email, action: "admin.created",
+      targetType: "user", targetId: admin.id, sourceIp: req.ip,
+      details: { invitationId: pending.id, invitedByAdminId: pending.invitedByAdminId, userLimit: admin.userLimit },
+    });
+
     const session = generateToken(admin.id, admin.role, admin.tokenVersion);
     setSessionCookies(res, session);
     return res.status(201).json({
@@ -643,7 +661,9 @@ router.post(
     // account's own password at unlimited rate, each attempt costing a 19 MiB
     // Argon2 hash. The `user:<id>` counter below has always been written here;
     // this is the read that makes it mean something.
-    const lockedUntil = await anyLocked([userKey(req.user.id)]);
+    // The attempt is counted before the password is checked, so guesses sent in
+    // parallel cannot all pass the lock test before any failure is recorded.
+    const lockedUntil = await reserveAttempt([userKey(req.user.id)]);
     if (lockedUntil) {
       res.setHeader("Retry-After", String(Math.ceil((lockedUntil.getTime() - Date.now()) / 1000)));
       return res.status(429).json({ error: "Too many failed attempts. Try again later." });
@@ -651,9 +671,9 @@ router.post(
 
     const { valid } = await verifyPassword(req.user.passwordHash, currentPassword);
     if (!valid) {
-      await recordFailures([userKey(req.user.id)]);
       return res.status(403).json({ error: "Current password is incorrect" });
     }
+    await clearFailures([userKey(req.user.id)]);
 
     if (currentPassword === newPassword) {
       return res.status(400).json({ error: "New password must differ from the current one" });

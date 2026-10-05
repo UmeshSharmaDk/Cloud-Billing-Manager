@@ -7,7 +7,7 @@
  */
 
 import { db, usersTable } from "@workspace/db";
-import { eq, and, isNull, ne, count } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 
 /**
  * Returns an error message when the change would remove the final admin, or
@@ -20,19 +20,26 @@ export async function assertNotLastAdmin(
   // Only losing an admin can be a problem.
   if (target.role !== "admin" || newRole === "admin") return null;
 
-  const [{ count: remaining }] = await db
-    .select({ count: count() })
+  // Lock every active admin row, the target's included, in id order. Two
+  // administrators demoting each other at once each counted the other as the
+  // admin who would remain, because neither saw the other's change: each lock
+  // would have excluded its own target and so never conflicted. Locking the
+  // whole set makes the second request wait for the first and then count again.
+  const admins = await db
+    .select({ id: usersTable.id })
     .from(usersTable)
     .where(
       and(
         eq(usersTable.role, "admin"),
         eq(usersTable.isActive, true),
         isNull(usersTable.deletedAt),
-        ne(usersTable.id, target.id),
       ),
-    );
+    )
+    .orderBy(usersTable.id)
+    .for("update");
+  const remaining = admins.filter((a) => a.id !== target.id).length;
 
-  return Number(remaining) > 0
+  return remaining > 0
     ? null
     : "This is the last active administrator. Promote another account first.";
 }

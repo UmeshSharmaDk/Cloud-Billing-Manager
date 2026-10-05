@@ -9,7 +9,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes";
-import { logger } from "./lib/logger";
+import { logger, scrubError } from "./lib/logger";
 import { config } from "./lib/config";
 import { csrfProtection, issueCsrfCookie, requireAllowedOrigin } from "./middleware/csrf";
 
@@ -19,14 +19,26 @@ const app: Express = express();
  * The API sits behind the platform's router, so the socket address is always
  * the proxy. Without this the per-IP rate limiter sees one client for the
  * whole world and either locks everyone out at once or nobody at all.
- * One hop — never `true`, which would let a caller forge the chain.
+ * One hop by default (`TRUST_PROXY` sets it) — never `true`, which would let a
+ * caller forge the chain.
  */
-app.set("trust proxy", 1);
+app.set("trust proxy", config.trustProxyHops);
+
+// Everything here is per-account or per-business data, and some of it is
+// financial: no shared cache or browser back/forward cache should keep a copy.
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 app.use(
   pinoHttp({
     logger,
     serializers: {
+      // pino-http builds each request's logger with its own serializers, which
+      // replace the parent's; without this the scrubbed error serializer is lost
+      // for `req.log` and a database error logs its bound parameters again.
+      err: scrubError,
       req(req) {
         return {
           id: req.id,
