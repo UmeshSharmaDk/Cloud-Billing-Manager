@@ -23,35 +23,82 @@ export interface ParsedPdfResult {
   source?: "text-pdf" | "scanned-pdf" | "image" | "word" | "spreadsheet" | "text";
 }
 
-async function extractPdfText(file: File): Promise<string> {
+/**
+ * Hard limits so a single hostile or pathological file cannot burn the tab. They are far above what a
+ * real purchase bill needs; hitting one raises an ImportLimitError, which the import page shows as a toast.
+ */
+export const MAX_PDF_PAGES = 50;
+export const MAX_EXTRACTED_TEXT_CHARS = 2_000_000;
+/** Rows (non-empty lines) handed to the table / line-item extractors. */
+export const MAX_TEXT_ROWS = 20_000;
+/** Lines longer than this are not line items; the heuristic skips them instead of scanning them. */
+const MAX_HEURISTIC_ROW_CHARS = 5_000;
+/** Pair search in the heuristic is O(k^2) in the numbers on a row; only the first k are considered. */
+const MAX_PAIR_SEARCH_NUMBERS = 40;
+
+export class ImportLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ImportLimitError";
+  }
+}
+
+async function openPdf(file: File) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  if (pdf.numPages > MAX_PDF_PAGES) {
+    throw new ImportLimitError(
+      `This PDF has ${pdf.numPages} pages; the importer reads at most ${MAX_PDF_PAGES}. Split the file or add the items manually.`,
+    );
+  }
+  return pdf;
+}
+
+function textTooLongError(): ImportLimitError {
+  return new ImportLimitError(
+    `This file contains more than ${MAX_EXTRACTED_TEXT_CHARS.toLocaleString("en-US")} characters of text, which is more than the importer will process. Use a smaller file or add the items manually.`,
+  );
+}
+
+async function extractPdfText(file: File): Promise<string> {
+  const pdf = await openPdf(file);
   const lines: string[] = [];
+  let totalChars = 0;
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
-    // Group text items by their y-position to reconstruct lines
+    // Group text items by their y-position to reconstruct lines. A item joins the earliest-created
+    // bucket whose y is within 2 of its own; `order` records creation order so that lookup stays O(1)
+    // (the keys are integers, so only y-2..y+2 can qualify) instead of scanning every bucket per item.
     const rows = new Map<number, { x: number; str: string }[]>();
+    const order = new Map<number, number>();
     for (const item of content.items as any[]) {
       if (!item.str || !item.str.trim()) continue;
       const y = Math.round(item.transform[5]);
       const x = item.transform[4];
-      const bucket = [...rows.keys()].find(k => Math.abs(k - y) <= 2) ?? y;
-      if (!rows.has(bucket)) rows.set(bucket, []);
+      let bucket = y;
+      let bucketOrder = Infinity;
+      for (let d = -2; d <= 2; d++) {
+        const o = order.get(y + d);
+        if (o !== undefined && o < bucketOrder) { bucket = y + d; bucketOrder = o; }
+      }
+      if (!rows.has(bucket)) { rows.set(bucket, []); order.set(bucket, order.size); }
       rows.get(bucket)!.push({ x, str: item.str });
     }
     const sortedY = [...rows.keys()].sort((a, b) => b - a);
     for (const y of sortedY) {
       const parts = rows.get(y)!.sort((a, b) => a.x - b.x);
-      lines.push(parts.map(p => p.str).join(" ").replace(/\s+/g, " ").trim());
+      const line = parts.map(p => p.str).join(" ").replace(/\s+/g, " ").trim();
+      totalChars += line.length + 1;
+      if (totalChars > MAX_EXTRACTED_TEXT_CHARS) throw textTooLongError();
+      lines.push(line);
     }
   }
   return lines.filter(Boolean).join("\n");
 }
 
 async function renderPdfPages(file: File): Promise<HTMLCanvasElement[]> {
-  const buf = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pdf = await openPdf(file);
   const canvases: HTMLCanvasElement[] = [];
 
   for (let p = 1; p <= pdf.numPages; p++) {
@@ -127,14 +174,20 @@ function isPlainInt(tok: string): boolean {
 }
 
 function isDecimalToken(tok: string): boolean {
-  return /^\d[\d,]*\.?\d*$/.test(tok);
+  // Same language as /^\d[\d,]*\.?\d*$/ but unambiguous: the original let [\d,]* and \d* split a digit run
+  // many ways, so a long digit token followed by a non-digit backtracked quadratically.
+  return /^\d[\d,]*(?:\.\d*)?$/.test(tok);
 }
 
 function detectHeader(text: string): ParsedPdfResult["detected"] {
   const detected: ParsedPdfResult["detected"] = {};
-  const billMatch = text.match(/(?:proforma|invoice|bill|challan)\s*(?:no|number|#)?\s*[:.\-]?\s*([A-Za-z0-9\-\/]+)/i);
+  // Collapse every whitespace run to a single character (a newline if the run held one, else a space)
+  // and keep the whitespace gaps below bounded. Adjacent unbounded `\s*` quantifiers made the old
+  // patterns backtrack polynomially on a long run of spaces ("invoice" + 5,000 spaces + "!" took ~40 s).
+  const flat = text.replace(/\s+/g, run => (run.includes("\n") ? "\n" : " "));
+  const billMatch = flat.match(/(?:proforma|invoice|bill|challan)\s{0,3}(?:no|number|#)?\s{0,3}[:.\-]?\s{0,3}([A-Za-z0-9\-\/]+)/i);
   if (billMatch) detected.billNumber = billMatch[1];
-  const dateMatch = text.match(/(?:date)\s*[:.\-]?\s*(\d{1,2}[\/\-.][A-Za-z]{3}[\/\-.]\d{2,4}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2})/i);
+  const dateMatch = flat.match(/(?:date)\s{0,3}[:.\-]?\s{0,3}(\d{1,2}[\/\-.][A-Za-z]{3}[\/\-.]\d{2,4}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{4}-\d{2}-\d{2})/i);
   if (dateMatch) {
     const raw = dateMatch[1];
     const iso = raw.match(/^\d{4}-\d{2}-\d{2}$/) ? raw : null;
@@ -158,7 +211,9 @@ function detectHeader(text: string): ParsedPdfResult["detected"] {
       }
     }
   }
-  const vendorMatch = text.match(/(?:for)\s+([A-Za-z0-9 &.,\-]{3,60})\s*\n?\s*Authorised/i) || text.match(/(?:from|vendor|supplier|seller)\s*[:.\-]?\s*([A-Za-z0-9 &.,\-]{3,60})/i);
+  const vendorMatch =
+    (/authorised/i.test(flat) ? flat.match(/for\s{1,3}([A-Za-z0-9 &.,\-]{3,60})\s{0,3}Authorised/i) : null) ||
+    flat.match(/(?:from|vendor|supplier|seller)\s{0,3}[:.\-]?\s{0,3}([A-Za-z0-9 &.,\-]{3,60})/i);
   if (vendorMatch) detected.vendorName = vendorMatch[1].trim();
   return detected;
 }
@@ -286,6 +341,8 @@ function extractLineItemsHeuristic(text: string): { items: ParsedPdfItem[]; warn
     if (skipPatterns.test(line.trim())) continue;
     if (line.length < 4) continue;
 
+    if (line.length > MAX_HEURISTIC_ROW_CHARS) continue;
+
     // OCR and spreadsheets often include a leading serial number before the description.
     const row = line.replace(/^\s*\d{1,3}[.)-]?\s+/, "").trim();
 
@@ -312,8 +369,9 @@ function extractLineItemsHeuristic(text: string): { items: ParsedPdfItem[]; warn
 
     if (candidates.length >= 3) {
       const amount = candidates[candidates.length - 1];
-      for (let qi = 0; qi < candidates.length; qi++) {
-        for (let ri = 0; ri < candidates.length; ri++) {
+      const searched = Math.min(candidates.length, MAX_PAIR_SEARCH_NUMBERS);
+      for (let qi = 0; qi < searched; qi++) {
+        for (let ri = 0; ri < searched; ri++) {
           if (qi === ri) continue;
           const q = candidates[qi], r = candidates[ri];
           if (Math.abs(q * r - amount) < 1) { quantity = q; unitPrice = r; break; }
@@ -366,9 +424,15 @@ function annotateResult(
   source: ParsedPdfResult["source"],
   initialWarnings: string[] = [],
 ): ParsedPdfResult {
+  if (rawText.length > MAX_EXTRACTED_TEXT_CHARS) throw textTooLongError();
+  const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
+  if (lines.length > MAX_TEXT_ROWS) {
+    throw new ImportLimitError(
+      `This file has ${lines.length.toLocaleString("en-US")} rows of text; the importer reads at most ${MAX_TEXT_ROWS.toLocaleString("en-US")}. Use a smaller file or add the items manually.`,
+    );
+  }
   const warnings = [...initialWarnings];
   const detected = detectHeader(rawText);
-  const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
 
   let { items, warnings: tableWarnings } = extractTableItems(lines);
   warnings.push(...tableWarnings);

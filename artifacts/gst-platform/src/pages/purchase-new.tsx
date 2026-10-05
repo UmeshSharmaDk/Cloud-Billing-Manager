@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useListVendors, useListProducts, useCreatePurchase } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
-import { parsePurchaseBill, MAX_IMPORT_FILE_BYTES, ImportFileTooLargeError } from "@/lib/pdf-parser";
+import { parsePurchaseBill, MAX_IMPORT_FILE_BYTES, ImportFileTooLargeError, ImportLimitError } from "@/lib/pdf-parser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -91,6 +91,10 @@ export default function PurchaseNewPage() {
     } catch (err) {
       if (err instanceof ImportFileTooLargeError) {
         toast({ title: "File is too large", description: err.message, variant: "destructive" });
+        return;
+      }
+      if (err instanceof ImportLimitError) {
+        toast({ title: "File is too large to import", description: err.message, variant: "destructive" });
         return;
       }
       toast({ title: "Failed to read file", description: "The file may be corrupted, password-protected, or in an unsupported format", variant: "destructive" });
