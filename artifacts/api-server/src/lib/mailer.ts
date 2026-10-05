@@ -13,7 +13,7 @@
  */
 
 import fs from "node:fs";
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 import { config } from "./config";
 import { logger } from "./logger";
 
@@ -61,7 +61,7 @@ class FileMailer implements Mailer {
 }
 
 class SmtpMailer implements Mailer {
-  private readonly transport: nodemailer.Transporter;
+  private readonly transport: Transporter;
 
   constructor(private readonly url: string, private readonly from: string) {
     this.transport = nodemailer.createTransport(url);
