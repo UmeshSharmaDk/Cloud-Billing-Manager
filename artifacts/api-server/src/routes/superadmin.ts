@@ -127,7 +127,13 @@ router.post("/admin-invitations", requireSuperadmin, validateBody(CreateAdminInv
   try {
     await mailer.send(adminInvitationMessage(normalisedEmail, link));
   } catch (err) {
-    req.log?.error({ error: (err as Error)?.name }, "Could not send administrator invitation");
+    const mailError = (err && typeof err === "object" ? err : {}) as Record<string, unknown>;
+    req.log?.error({
+      errorName: typeof mailError["name"] === "string" ? mailError["name"] : "UnknownError",
+      smtpCode: typeof mailError["code"] === "string" ? mailError["code"] : undefined,
+      smtpResponseCode: typeof mailError["responseCode"] === "number" ? mailError["responseCode"] : undefined,
+      smtpCommand: typeof mailError["command"] === "string" ? mailError["command"] : undefined,
+    }, "Could not send administrator invitation");
     await rootDb.delete(adminInvitationsTable).where(eq(adminInvitationsTable.id, invite.id));
     return res.status(502).json({ error: "The invitation email could not be sent. You can try again." });
   }
