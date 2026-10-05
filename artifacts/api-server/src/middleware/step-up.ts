@@ -9,7 +9,7 @@
 
 import type { NextFunction, Request, Response } from "express";
 import { verifyPassword } from "../lib/password";
-import { anyLocked, recordFailures, userKey } from "./rate-limit";
+import { anyLocked, clearFailures, reserveAttempt, userKey } from "./rate-limit";
 
 export interface StepUpResult {
   ok: boolean;
@@ -77,14 +77,27 @@ export async function verifyStepUp(req: Request): Promise<StepUpResult> {
     };
   }
 
+  // The attempt is counted before the password is checked, so guesses sent in
+  // parallel cannot all pass the lock test above before any failure is written.
+  const refusedUntil = await reserveAttempt([userKey(user.id)]);
+  if (refusedUntil) {
+    if (body) delete body["confirmPassword"];
+    return {
+      ok: false,
+      status: 429,
+      retryAfter: Math.ceil((refusedUntil.getTime() - Date.now()) / 1000),
+      body: { error: "Too many failed attempts. Try again later." },
+    };
+  }
+
   const { valid } = await verifyPassword(user.passwordHash, confirmPassword);
   if (body) delete body["confirmPassword"];
 
   if (!valid) {
-    await recordFailures([userKey(user.id)]);
     return { ok: false, status: 403, body: { error: "Password confirmation failed." } };
   }
 
+  await clearFailures([userKey(user.id)]);
   return { ok: true };
 }
 

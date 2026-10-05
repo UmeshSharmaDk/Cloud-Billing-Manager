@@ -177,11 +177,37 @@ function appBaseUrl(origins: readonly string[]): string {
   return value.replace(/\/$/, "");
 }
 
+/**
+ * How many reverse proxies sit between the internet and this process.
+ *
+ * Every per-address control — the login lockout key, the auth and registration
+ * limiters, the audit log's source address — reads `req.ip`, which Express
+ * derives from `X-Forwarded-For` by skipping this many trusted hops from the
+ * right. Too low and every client looks like the proxy (one address locks out
+ * everyone); too high and a caller can write the address they want to be seen
+ * as. A deployment with a CDN in front of the platform router has two hops, not
+ * one. Never `true`: that trusts the whole header.
+ */
+function trustProxyHops(): number {
+  const raw = process.env["TRUST_PROXY"]?.trim();
+  if (raw === undefined || raw === "") return 1;
+  const hops = Number(raw);
+  if (!Number.isInteger(hops) || hops < 0 || hops > 10) {
+    throw new Error(
+      `TRUST_PROXY must be a whole number of proxy hops between 0 and 10 (got "${raw}").`,
+    );
+  }
+  return hops;
+}
+
 export const config = {
   /** Signing key for session tokens. No default — see the note above. */
   jwtSecret: requiredSecret("SESSION_SECRET"),
 
   isDevelopment,
+
+  /** Reverse-proxy hops to trust when reading the client address. */
+  trustProxyHops: trustProxyHops(),
 
   /** Browser origins permitted by CORS. */
   allowedOrigins: requiredOrigins("ALLOWED_ORIGINS"),

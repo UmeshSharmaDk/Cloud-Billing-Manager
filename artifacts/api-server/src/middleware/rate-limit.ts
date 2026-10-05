@@ -297,6 +297,49 @@ export async function recordFailures(keys: string[]): Promise<void> {
 }
 
 /**
+ * Spend an attempt *before* checking the password, and report whether it may go
+ * ahead: `null` to proceed, or the time the lock lifts if it is refused.
+ *
+ * Checking the lock, verifying, and only then recording the failure leaves a
+ * window as wide as one Argon2 verification: a caller who sends a hundred
+ * guesses at once has all of them pass the lock check before any failure is
+ * written. Taking the unit first makes the counter the gate — each request
+ * increments atomically and sees its own position — so the attempts allowed are
+ * the threshold, not the threshold plus whatever fits in flight. The attempt
+ * that reaches the threshold is still evaluated; the lock it sets applies to
+ * the next. A success must `clearFailures`, or ordinary use would add up.
+ *
+ * Fails open on a database error, like the rest of the lockout.
+ */
+export async function reserveAttempt(keys: string[]): Promise<Date | null> {
+  const existing = await anyLocked(keys);
+  if (existing) return existing;
+
+  let refusedUntil: Date | null = null;
+  await Promise.all(
+    keys.map(async (key) => {
+      try {
+        const row = await incrementCounter(key);
+        const failures = row?.failures ?? 0;
+        const lockMs = lockDurationMs(failures);
+        if (lockMs === 0) return;
+        const until = new Date(Date.now() + lockMs);
+        await db
+          .update(loginAttemptsTable)
+          .set({ lockedUntil: until })
+          .where(eq(loginAttemptsTable.key, key));
+        if (failures > FAILURE_THRESHOLD && (!refusedUntil || until > refusedUntil)) {
+          refusedUntil = until;
+        }
+      } catch {
+        // Never let bookkeeping become an outage.
+      }
+    }),
+  );
+  return refusedUntil;
+}
+
+/**
  * Delete counters that can no longer affect anyone.
  *
  * The key is the address the *caller* supplied, so every failed login for an

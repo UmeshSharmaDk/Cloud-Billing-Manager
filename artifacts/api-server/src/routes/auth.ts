@@ -25,6 +25,7 @@ import {
   REGISTER_RECIPIENT_LIMIT,
   anyLocked,
   recordFailures,
+  reserveAttempt,
   clearFailures,
   consumeBudget,
   userKey,
@@ -63,13 +64,14 @@ function generateToken(userId: number, role: string, tokenVersion: number): stri
   // `revoked_tokens` rather than bumping `v`, so signing out on a phone does
   // not sign the same person out on their laptop.
   return jwt.sign({ userId, role, v: tokenVersion, jti: crypto.randomUUID() }, JWT_SECRET, {
+    algorithm: "HS256",
     expiresIn: TOKEN_TTL_SECONDS,
   });
 }
 
 export function verifyToken(token: string): TokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as TokenPayload;
+    return jwt.verify(token, JWT_SECRET, { algorithms: ["HS256"] }) as TokenPayload;
   } catch (err) {
     // An expired token is routine; anything else usually means the signing key
     // changed or the token was tampered with, and a bare `catch {}` hid the
@@ -437,8 +439,11 @@ router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (r
     return res.status(202).json(REGISTRATION_ACCEPTED);
   }
 
-  const link = `${config.appBaseUrl}/verify?token=${encodeURIComponent(token)}`;
-  await sendQuietly(verificationMessage(normalisedEmail, name, link));
+  // In the fragment, which browsers never send to a server: a query string ends
+  // up in access logs, proxy logs and the Referer of anything the page loads,
+  // and the token is a credential until it is used.
+  const link = `${config.appBaseUrl}/verify#token=${encodeURIComponent(token)}`;
+  await sendQuietly(verificationMessage(normalisedEmail, link));
   return res.status(202).json(REGISTRATION_ACCEPTED);
 });
 
@@ -574,7 +579,9 @@ router.post(
     // account's own password at unlimited rate, each attempt costing a 19 MiB
     // Argon2 hash. The `user:<id>` counter below has always been written here;
     // this is the read that makes it mean something.
-    const lockedUntil = await anyLocked([userKey(req.user.id)]);
+    // The attempt is counted before the password is checked, so guesses sent in
+    // parallel cannot all pass the lock test before any failure is recorded.
+    const lockedUntil = await reserveAttempt([userKey(req.user.id)]);
     if (lockedUntil) {
       res.setHeader("Retry-After", String(Math.ceil((lockedUntil.getTime() - Date.now()) / 1000)));
       return res.status(429).json({ error: "Too many failed attempts. Try again later." });
@@ -582,9 +589,9 @@ router.post(
 
     const { valid } = await verifyPassword(req.user.passwordHash, currentPassword);
     if (!valid) {
-      await recordFailures([userKey(req.user.id)]);
       return res.status(403).json({ error: "Current password is incorrect" });
     }
+    await clearFailures([userKey(req.user.id)]);
 
     if (currentPassword === newPassword) {
       return res.status(400).json({ error: "New password must differ from the current one" });

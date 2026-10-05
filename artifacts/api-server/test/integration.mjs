@@ -136,7 +136,7 @@ function outbox() {
 function verificationToken(email) {
   for (const message of [...outbox()].reverse()) {
     if (message.to !== email) continue;
-    const match = /verify\?token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
+    const match = /verify[?#]token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
     if (match) return match[1];
   }
   return null;
@@ -965,6 +965,25 @@ const adminEmail = `admin${uniq}@example.test`;
   check("in-flight", "a non-admin admin request is refused", nonAdmin.status === 403, `status ${nonAdmin.status}`);
 }
 
+// === check-up: parallel password guesses are counted before they are checked ==
+{
+  const g = await register("parallelguess");
+  const guess = (i) => call("POST", "/auth/change-password", {
+    token: g.token, body: { currentPassword: `wrong-guess-number-${i}-zz`, newPassword: "an-entirely-new-passphrase-77" },
+  });
+  // Under the in-flight cap, so the refusals counted are the lockout's own.
+  const first = await Promise.all(Array.from({ length: 14 }, (_, i) => guess(i)));
+  const second = await Promise.all(Array.from({ length: 14 }, (_, i) => guess(i + 14)));
+  const codes = [...first, ...second].map((r) => r.status);
+  const evaluated = codes.filter((c) => c === 403).length;
+  check("parallel-guess", "no more guesses are evaluated than the threshold allows",
+    evaluated <= 10, `${evaluated} evaluated of ${codes.length}`);
+  check("parallel-guess", "the rest are refused as locked out", codes.filter((c) => c === 429).length >= codes.length - 10,
+    codes.join(","));
+  check("parallel-guess", "even the correct password is refused while locked",
+    (await call("POST", "/auth/change-password", { token: g.token, body: { currentPassword: PASSWORD, newPassword: "an-entirely-new-passphrase-77" } })).status === 429);
+}
+
 // === review: marking an invoice paid settles it and records the payment ====
 {
   const pd = await register("paid");
@@ -1462,9 +1481,9 @@ const adminEmail = `admin${uniq}@example.test`;
   const toFree = outbox().filter((m) => m.to === freeEmail);
   const toTaken = outbox().filter((m) => m.to === alice.email);
   check("F-14", "the free address is sent a link",
-    toFree.some((m) => /verify\?token=/.test(m.text ?? "")));
+    toFree.some((m) => /verify[?#]token=/.test(m.text ?? "")));
   check("F-14", "the taken address is told someone tried, with no link",
-    toTaken.some((m) => /already has one/.test(m.text ?? "") && !/verify\?token=/.test(m.text ?? "")));
+    toTaken.some((m) => /already has one/.test(m.text ?? "") && !/verify[?#]token=/.test(m.text ?? "")));
 
   // Submitting does not create anything: otherwise anyone could reserve an
   // address they do not control simply by naming it.
@@ -1669,11 +1688,13 @@ const adminEmail = `admin${uniq}@example.test`;
   });
   const message = outbox().filter((m) => m.to === target).at(-1);
   const lines = (message?.text ?? "").split("\n");
-  check("mail-injection", "the greeting stays on a single line",
-    lines[0]?.startsWith("Hello Eve") && lines[0].endsWith(",") && lines[1] === "", lines.slice(0, 2).join(" | "));
+  check("mail-injection", "the greeting is fixed text",
+    lines[0] === "Hello," && lines[1] === "", lines.slice(0, 2).join(" | "));
+  check("mail-injection", "nothing the stranger typed appears in the message",
+    !/Eve|suspended|99999|Bcc/i.test(message?.text ?? ""));
   check("mail-injection", "no carriage return survives into the message", !/\r/.test(message?.text ?? ""));
   check("mail-injection", "and the message still carries the verification link",
-    /verify\?token=/.test(message?.text ?? ""));
+    /verify[?#]token=/.test(message?.text ?? ""));
 }
 
 // === review: a page on another site cannot sign a visitor in ================
