@@ -51,6 +51,10 @@ the dangerous state again — RLS apparently configured, actually inert. Adding 
 new tenant-scoped table additionally needs it listed in `TENANT_TABLE_COLUMNS`
 in `src/rls.ts`.
 
+The same `push` also creates the `*_business_idx` indexes on every tenant table
+(and `payments_invoice_idx`). On a large existing database, create them first with
+`CREATE INDEX CONCURRENTLY` so the build does not block writes.
+
 The API server checks policy coverage at boot as well as the role, so a push
 that stripped them is reported rather than assumed away, and `test:rls` fails
 outright.

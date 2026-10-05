@@ -18,11 +18,16 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   accountability, invoice numbering, transaction rollback). Needs a running server and a real
   Postgres; see the header of `artifacts/api-server/test/integration.mjs`.
 - Required env (all fail the boot if unset — there are no defaults; see `.env.example`):
-  - `DATABASE_URL` — Postgres connection string
+  - `DATABASE_URL` — Postgres connection string; must be a role without `BYPASSRLS` (see `lib/db/README-rls.md`)
   - `SESSION_SECRET` — session signing key, minimum 32 chars (`openssl rand -base64 48`)
   - `ALLOWED_ORIGINS` — comma-separated browser origins permitted by CORS; never `*`
-- Optional env: `COOKIE_SAME_SITE` (lax | strict | none), `AUTH_RATE_LIMIT_MAX` (default 30),
-  `DISABLE_BREACH_CHECK` (skips the Have I Been Pwned lookup on new passwords), `NODE_ENV`
+  - `SMTP_URL` + `MAIL_FROM` — registration is confirmed by emailed link, so production refuses to boot without a mail transport
+- Optional env: `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
+  for the client address, default 1), `AUTH_RATE_LIMIT_MAX` (default 30), `REGISTER_RATE_LIMIT_MAX`,
+  `TENANT_WRITE_RATE_LIMIT_MAX`, `TENANT_READ_RATE_LIMIT_MAX`, `TENANT_MAX_IN_FLIGHT` (default 16, keep below
+  `DB_POOL_MAX`), `DISABLE_BREACH_CHECK` (skips the Have I Been Pwned lookup on new passwords), `NODE_ENV`
+- After any `push`, run `pnpm --filter @workspace/db run rls:apply` with the owner connection
+  (`scripts/post-merge.sh` does both)
 
 ## Stack
 

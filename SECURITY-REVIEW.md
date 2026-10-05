@@ -808,6 +808,75 @@ the API does; a route that starts to should not use a scope, or should write its
 The integration suite's 20 ms wait after every write — added as a workaround for this — is removed, and
 three consecutive full runs pass without it.
 
+### Second check-up — thirty findings, fixed or accepted
+
+A full re-review was run after the work above (three independent read-only reviews plus a black-box
+probe of a running server). It found nothing that gave a remote attacker control of the platform, but
+it did find a number of Medium issues, and the dependency-audit job on `main` had gone red because of
+advisories published after the last merge. Everything below is fixed in code and covered by the
+integration suite unless marked *accepted*.
+
+**Supply chain.** `nodemailer` upgraded to 10.0.14 and `ip-address` pinned `>=10.7.1`, which clears
+`pnpm audit --prod --audit-level=high`. SMTP delivery was re-tested against a local server after the
+upgrade.
+
+**Hostile input answered with 500 instead of 400.** NUL bytes anywhere in a body, query or path
+parameter, ids beyond the `integer` range, dates that are syntactically valid but not real days
+(`2026-02-30`, year 275760), and document lines or totals too large for the money columns now
+return `400`. `PATCH` with no recognised field is refused rather than sent to the database as an empty
+update. A subscription whose status is `expired` is treated as expired even when its end date is in
+the future.
+
+**Money and stock.**
+- Stock reversal follows the product id stored on each line, not today's catalog. Renaming a product,
+  or creating a new product with a name an old invoice used, can no longer make a cancel credit stock
+  that was never deducted. A product id from another business is replaced when the line is stored.
+- A proforma invoice moves no stock; a credit note returns goods; changing an invoice's type moves
+  stock to match. Receipts against a proforma or a credit note are refused.
+- Invoice figures can be edited only while the invoice is unpaid, and an edit is computed from the
+  row-locked state, so two edits racing each other can no longer leave totals that disagree with the
+  surviving lines. The same applies to purchase edits, and purchase deletes now lock the row so two
+  concurrent deletes return the goods once.
+- Payment amounts and `paidAmount` are whole paise, and the settled target is rounded to paise.
+
+**Response gate and scopes.** The rollback decision uses the status at the moment the handler
+answered; a second `end` is ignored; once a request's transaction is over, the `db` proxy throws for any
+async work that outlived it instead of sending queries down a connection already lent to another
+request. The `users` and `admin` routers authenticate (and, for admin, authorise) *before* opening the
+policy-free scope, so an anonymous request no longer takes a connection and a transaction.
+
+**Availability.** `business_id` indexes on every tenant table, and one business may hold at most
+`TENANT_MAX_IN_FLIGHT` (default 16, of a pool of 20) requests in progress, so a tenant sending slow
+requests in parallel cannot starve the pool.
+
+**Authentication.**
+- Step-up and change-password count the attempt *before* verifying the password. Previously the lock
+  was checked, the (slow) Argon2 verification ran, and only then was the failure recorded, so a hundred
+  parallel guesses all passed the check. After the change, 28 parallel wrong guesses evaluate at most
+  ten.
+- The verification email no longer contains the name typed at signup (it is sent to an address the
+  submitter chose), and the link carries the token in the URL fragment so it stays out of server logs
+  and `Referer` headers; the page still accepts `?token=` for links already sent.
+- Legacy-hash mismatches spend the same time as Argon2 mismatches; JWTs are signed and verified as
+  `HS256` only; the last-admin guard locks the whole admin set so two admins cannot demote each other
+  simultaneously; database errors are logged without bound parameters or row detail; the number of
+  trusted proxy hops is configurable (`TRUST_PROXY`, default 1).
+
+**Other.** The full forged admin token printed in F-01's write-up is redacted. `scripts/post-merge.sh`
+now runs `rls:apply` after `push` (it previously did neither correctly: `--filter db` matched no
+package). `.env.example` documents the mail, proxy and role settings.
+
+**Accepted, and why.**
+- *Distributed password guessing* across many source addresses against one account is slowed by the
+  per-address and per-account limits but not prevented; multi-factor authentication is the real fix.
+- *Budget exhaustion of one signup address* (five registration mails per address per window) can be
+  used to delay a specific person's signup. The alternative — unlimited mail to any address — is worse.
+- Double-submit CSRF cookies are not signed or `__Host-` prefixed; the Origin check and `SameSite`
+  already cover the cases this would.
+- `audit_log` is append-only by convention. Revoke `UPDATE` and `DELETE` on it from `gst_app` at the
+  database to make that a guarantee.
+- The frontend loads fonts from a third party and its CSP allows inline styles.
+
 ### Operator actions that code cannot perform
 
 **Configure a mail transport before deploying.** The server refuses to start in production without
@@ -918,7 +987,7 @@ that is public in this repo. Nothing logs a warning; the application starts and 
 
 ```
 Forged admin token:
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInJvbGUiOiJhZG1pbiIsImlhdCI6MTc4ODIwMDY2OSwiZXhwIjoxNzg4ODA1NDY5fQ.Jq-2iGiI4eIJlfXPMiXRQSAvg-nXA1-SlxE7-pCS5jQ
+<redacted: a complete HS256 admin token signed with the old committed secret>
 
 Signature verifies against default secret: true
 ```
