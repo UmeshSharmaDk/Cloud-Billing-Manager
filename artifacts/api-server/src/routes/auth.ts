@@ -138,8 +138,12 @@ const PLAN_EXPIRED_MESSAGE =
 export function isSubscriptionExpired(user: {
   role: string;
   subscriptionEnd: string | null;
+  subscriptionStatus?: string | null;
 }): boolean {
   if (user.role === "admin") return false;
+  // Marking an account "expired" used to do nothing unless an end date was also
+  // set and had passed: the status was stored and never read.
+  if (user.subscriptionStatus === "expired") return true;
   if (!user.subscriptionEnd) return false;
   const end = new Date(`${user.subscriptionEnd}T23:59:59.999Z`);
   if (Number.isNaN(end.getTime())) return false;

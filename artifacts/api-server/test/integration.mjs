@@ -1246,6 +1246,66 @@ const adminEmail = `admin${uniq}@example.test`;
 }
 
 
+// === review: hostile input is a 400, never a 500 ===========================
+//
+// Found by sending malformed input to every write route: a NUL character in any
+// text field, a PATCH that validates down to nothing, ids written as `0x10` or
+// `1e3`, ids beyond the integer column, dates that do not exist, and amounts that
+// each fit a field but overflow the column when multiplied. All were 500s.
+{
+  const hi = await register("hostile");
+  const T = { token: hi.token };
+  await call("PATCH", "/business", { ...T, body: { stateCode: "29" } });
+  const cust = (await call("POST", "/customers", { ...T, body: { name: "Real Customer" } })).data;
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "Real Vendor" } })).data;
+  const prod = (await call("POST", "/products", { ...T, body: { name: "Real Product", unit: "Nos", gstRate: 18 } })).data;
+  const line = (extra = {}) => ({ description: "x", quantity: 1, unitPrice: 10, gstRate: 18, ...extra });
+  const inv = (body) => call("POST", "/invoices", { ...T, body: { invoiceDate: "2026-08-10", customerName: "C", placeOfSupply: "29", items: [line()], ...body } });
+  const is400 = (r) => r.status === 400;
+
+  check("hostile", "a NUL character in a body field is refused", is400(await call("POST", "/customers", { ...T, body: { name: "a\u0000b" } })));
+  check("hostile", "in a nested value too", is400(await inv({ items: [line({ description: "x\u0000" })] })));
+  check("hostile", "in a query string", is400(await call("GET", "/customers?search=%00", T)));
+  check("hostile", "and in a path parameter", is400(await call("GET", "/customers/%00", T)));
+
+  for (const [label, path, body] of [["customers", `/customers/${cust.id}`, {}], ["vendors", `/vendors/${vend.id}`, {}],
+                                       ["products", `/products/${prod.id}`, {}], ["a body of only unknown keys", `/customers/${cust.id}`, { nope: 1 }]]) {
+    const r = await call("PATCH", path, { ...T, body });
+    check("hostile", `an update that changes nothing is a 400 (${label})`, is400(r), `status ${r.status}`);
+  }
+
+  check("hostile", "an id written as hex is not an id", is400(await call("GET", `/customers/0x${cust.id.toString(16)}`, T)));
+  check("hostile", "nor one written with an exponent", is400(await call("GET", "/customers/1e3", T)));
+  check("hostile", "an id past the integer column in a query is a 400", is400(await call("GET", "/invoices?customerId=99999999999", T)));
+  check("hostile", "in a body", is400(await call("POST", "/payments", { ...T, body: { type: "received", amount: 1, date: "2026-08-10", mode: "cash", customerId: 99999999999 } })));
+  check("hostile", "in a line item", is400(await inv({ items: [line({ productId: 99999999999 })] })));
+
+  for (const bad of ["2026-04-31", "2026-02-29", "2026-13-01", "2026-00-10", "1999-12-31", "2101-01-01"]) {
+    check("hostile", `${bad} is not accepted as an invoice date`, is400(await inv({ invoiceDate: bad })), bad);
+  }
+  check("hostile", "a leap day that exists is accepted", (await inv({ invoiceDate: "2028-02-29" })).status === 201);
+
+  check("hostile", "a single line that overflows the money column is a 400",
+    is400(await inv({ items: [line({ quantity: 1e9, unitPrice: 1e12 })] })));
+  check("hostile", "so is a document whose lines add up past it",
+    is400(await inv({ items: Array.from({ length: 20 }, () => line({ quantity: 1, unitPrice: 9e10 })) })));
+
+  // An empty due date means "no due date" — it was stored as "" and counted as overdue for ever.
+  const noDue = await inv({ dueDate: "" });
+  check("hostile", "an empty due date is stored as none", noDue.status === 201 && noDue.data.invoice.dueDate === null,
+    JSON.stringify(noDue.data?.invoice?.dueDate));
+  const overdue = (await call("GET", "/dashboard/stats", T)).data.overdueInvoiceCount;
+  check("hostile", "and does not make the invoice overdue", overdue === 0, String(overdue));
+
+  // An administrator marking an account expired has to mean something.
+  sqlExec(`UPDATE users SET subscription_status='expired', subscription_end=NULL WHERE id=${hi.userId}`);
+  const blocked = await call("GET", "/customers", T);
+  check("hostile", "an account marked expired is refused, with no end date set", blocked.status === 403, `status ${blocked.status}`);
+  const relog = await call("POST", "/auth/login", { body: { email: hi.email, password: PASSWORD } });
+  check("hostile", "and cannot sign in again", relog.status === 403, `status ${relog.status}`);
+  sqlExec(`UPDATE users SET subscription_status='trial' WHERE id=${hi.userId}`);
+}
+
 // === F-14: registration tells you nothing about an address =================
 //
 // The endpoint used to answer 400 "Email already registered" for a taken

@@ -70,6 +70,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   for (const f of moneyFields) if (req.body[f] !== undefined) updates[f] = req.body[f] === null ? null : toColumn(req.body[f]);
   for (const f of quantityFields) if (req.body[f] !== undefined) updates[f] = req.body[f] === null ? null : dec(req.body[f]).toFixed(3);
   if (req.body.gstRate !== undefined) updates.gstRate = dec(req.body.gstRate).toFixed(2);
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "Nothing to update" });
   const [product] = await db.update(productsTable).set(updates).where(and(eq(productsTable.id, req.validatedParams.id), eq(productsTable.businessId, businessId))).returning();
   if (!product) return res.status(404).json({ error: "Not found" });
   return res.json(mapProduct(product));
