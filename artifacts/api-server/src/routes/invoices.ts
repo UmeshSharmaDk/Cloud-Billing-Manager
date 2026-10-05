@@ -5,7 +5,7 @@ import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { resolveSupplyType } from "../lib/gst";
-import { applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
+import { applyStockChanges, applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
 import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
@@ -315,8 +315,10 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     const before = stockDirectionFor(locked.type);
     const after = stockDirectionFor(updates.type ?? locked.type);
     if (items || before !== after) {
-      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -before);
-      await applyStockMovement(tx, productsTable, eq, businessId, (updates.items ?? locked.items) as any[], after);
+      await applyStockChanges(tx, productsTable, eq, businessId, [
+        { lines: locked.items as any[], direction: -before },
+        { lines: (updates.items ?? locked.items) as any[], direction: after },
+      ]);
     }
 
     const [updated] = await tx.update(invoicesTable).set(updates)

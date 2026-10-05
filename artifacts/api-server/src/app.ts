@@ -9,7 +9,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes";
-import { logger } from "./lib/logger";
+import { logger, scrubError } from "./lib/logger";
 import { config } from "./lib/config";
 import { csrfProtection, issueCsrfCookie, requireAllowedOrigin } from "./middleware/csrf";
 
@@ -24,10 +24,21 @@ const app: Express = express();
  */
 app.set("trust proxy", config.trustProxyHops);
 
+// Everything here is per-account or per-business data, and some of it is
+// financial: no shared cache or browser back/forward cache should keep a copy.
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
 app.use(
   pinoHttp({
     logger,
     serializers: {
+      // pino-http builds each request's logger with its own serializers, which
+      // replace the parent's; without this the scrubbed error serializer is lost
+      // for `req.log` and a database error logs its bound parameters again.
+      err: scrubError,
       req(req) {
         return {
           id: req.id,

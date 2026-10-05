@@ -1026,6 +1026,57 @@ const adminEmail = `admin${uniq}@example.test`;
   check("superadmin-identity", "and succeeds with it", confirmed.status === 200 && confirmed.data?.email === newEmail, `status ${confirmed.status}`);
 }
 
+// === check-up: login counts attempts first; aborted requests hold no slot; no deadlocks ===
+{
+  const v = await register("loginrace");
+  const bad = (i) => call("POST", "/auth/login", { body: { email: v.email, password: `not-the-password-${i}-xx` } });
+  const burst = await Promise.all(Array.from({ length: 30 }, (_, i) => bad(i)));
+  const codes = burst.map((r) => r.status);
+  check("login-race", "parallel wrong logins are evaluated no more often than the threshold allows",
+    codes.filter((c) => c === 401).length <= 10, codes.join(","));
+  check("login-race", "the rest are refused as locked out", codes.filter((c) => c === 429).length >= 20, codes.join(","));
+  const locked = await call("POST", "/auth/login", { body: { email: v.email, password: PASSWORD } });
+  check("login-race", "and even the right password is refused while locked", locked.status === 429, `status ${locked.status}`);
+
+  // Requests the client abandons while authentication is still running must not
+  // leave an in-flight slot behind.
+  const ab = await register("abortslots");
+  await Promise.allSettled(Array.from({ length: 48 }, (_, i) => {
+    const controller = new AbortController();
+    const sent = fetch(`${B}/dashboard/stats`, { signal: controller.signal, headers: { authorization: `Bearer ${ab.token}` } });
+    setTimeout(() => controller.abort(), i % 4);
+    return sent;
+  }));
+  await new Promise((r) => setTimeout(r, 300));
+  const after = await Promise.all(Array.from({ length: 16 }, () => call("GET", "/dashboard/stats", { token: ab.token })));
+  check("abort-slots", "after 48 aborted requests all 16 slots are still available",
+    after.every((r) => r.status === 200), after.map((r) => r.status).join(","));
+}
+{
+  const dl = await register("deadlock");
+  const T = { token: dl.token };
+  const mk = async (name) => (await call("POST", "/products", { ...T,
+    body: { name, unit: "Nos", sellingPrice: 10, gstRate: 18, stockQuantity: 1000 } })).data;
+  const A = await mk("Lock A"); const Bp = await mk("Lock B"); const C = await mk("Lock C");
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "DL Vendor", gstin: "27SVSVS0000V1Z5" } })).data;
+  const line = (p, q) => ({ productId: p.id, description: p.name, quantity: q, unitPrice: 10, gstRate: 18 });
+  const sale = async (items) => (await call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27", items } })).data.invoice;
+  const inv = await sale([line(A, 1), line(Bp, 1)]);
+  const bill = (await call("POST", "/purchases", { ...T, body: { vendorId: vend.id, billDate: "2026-08-05", items: [line(Bp, 1), line(A, 1)] } })).data;
+  const rounds = [];
+  for (let i = 0; i < 6; i++) {
+    rounds.push(...await Promise.all([
+      call("PATCH", `/invoices/${inv.id}`, { ...T, body: { items: i % 2 ? [line(Bp, 2), line(A, 2)] : [line(C, 2), line(A, 3)] } }),
+      call("PATCH", `/purchases/${bill.id}`, { ...T, body: { items: i % 2 ? [line(A, 2), line(C, 2)] : [line(Bp, 2), line(A, 2)] } }),
+      call("PATCH", `/invoices/${inv.id}`, { ...T, body: { items: [line(A, 1), line(Bp, 1)] } }),
+    ]));
+  }
+  const fives = rounds.filter((r) => r.status >= 500).length;
+  check("deadlock", "racing edits that touch the same products in opposite orders never fail with a server error",
+    fives === 0, `${fives} of ${rounds.length} were 5xx`);
+}
+
 // === review: marking an invoice paid settles it and records the payment ====
 {
   const pd = await register("paid");

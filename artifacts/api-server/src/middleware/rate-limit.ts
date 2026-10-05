@@ -21,7 +21,11 @@
  */
 
 import rateLimit from "express-rate-limit";
-import { db, loginAttemptsTable } from "@workspace/db";
+// The lockout counters use `rootDb`, never the request-scoped `db`: inside a request
+// transaction a counter write would be held until the whole request committed,
+// serialising every attempt on one account behind the first and parking a pooled
+// connection for each, and it would be rolled back along with a 5xx.
+import { rootDb as db, loginAttemptsTable } from "@workspace/db";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 
 /** Failures tolerated inside the window before an account starts locking. */
@@ -175,6 +179,15 @@ const inFlight = new Map<number, number>();
 
 export function tenantConcurrencyLimiter(req: any, res: any, next: any): void {
   const businessId = Number(req.businessId);
+  // A client that left while authentication was still running has already had
+  // its one `close` event; counting it now would register a release that never
+  // fires, and sixteen of those would lock the business out until a restart.
+  // The request carries on and is answered into the void, as an abandoned one
+  // always has been, but it holds no slot.
+  if (res.destroyed || res.writableEnded || req.socket?.destroyed) {
+    next();
+    return;
+  }
   const current = inFlight.get(businessId) ?? 0;
   if (current >= tenantMaxInFlight) {
     res.setHeader("Retry-After", "1");

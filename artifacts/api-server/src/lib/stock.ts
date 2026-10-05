@@ -20,7 +20,7 @@
  * — that five units are owed. A floor is a display decision, not a storage one.
  */
 
-import { and, sql } from "drizzle-orm";
+import { and, inArray, sql } from "drizzle-orm";
 import { dec, toColumn } from "./money";
 import { isCreditNoteType, isProformaType } from "./tax-documents";
 
@@ -123,6 +123,62 @@ function netByProduct(catalog: CatalogProduct[], lines: StockLine[], direction: 
 }
 
 /**
+ * Apply one or more movements as a single pass.
+ *
+ * An edit reverses what a document did and applies what it does now. Done as
+ * two separate passes, each sorted on its own, the combined order in which rows
+ * were locked was not sorted: a document whose old and new products differ took
+ * locks out of order against another document touching the same products, and
+ * Postgres aborted one of them as a deadlock. Netting every movement into one
+ * map, locking the affected rows in ascending id order up front, and writing in
+ * that same order means two documents can only ever wait for each other, never
+ * in a cycle. It also writes each product once.
+ */
+export async function applyStockChanges(
+  tx: any,
+  productsTable: any,
+  eq: (a: any, b: any) => any,
+  businessId: number,
+  changes: Array<{ lines: StockLine[]; direction: number }>,
+): Promise<void> {
+  const active = changes.filter((c) => c.lines && c.lines.length > 0 && c.direction !== 0);
+  if (active.length === 0) return;
+
+  const catalog: CatalogProduct[] = await tx
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.businessId, businessId));
+
+  const total = new Map<number, ReturnType<typeof dec>>();
+  for (const { lines, direction } of active) {
+    for (const [id, delta] of netByProduct(catalog, lines, direction)) {
+      total.set(id, (total.get(id) ?? dec(0)).plus(delta));
+    }
+  }
+  const deltas = [...total].filter(([, d]) => !d.isZero()).sort(([a], [b]) => a - b);
+  if (deltas.length === 0) return;
+
+  await tx
+    .select({ id: productsTable.id })
+    .from(productsTable)
+    .where(and(eq(productsTable.businessId, businessId), inArray(productsTable.id, deltas.map(([id]) => id))))
+    .orderBy(productsTable.id)
+    .for("update");
+
+  for (const [productId, delta] of deltas) {
+    // The addition happens in the database. This used to write back
+    // `catalogValue + delta`, where the catalog value had been read moments
+    // earlier without a lock: two concurrent invoices for one product both
+    // started from the same quantity and the last write won, so goods were sold
+    // twice and stock fell once.
+    await tx
+      .update(productsTable)
+      .set({ stockQuantity: sql`${productsTable.stockQuantity} + ${delta.toFixed(3)}::numeric` })
+      .where(and(eq(productsTable.id, productId), eq(productsTable.businessId, businessId)));
+  }
+}
+
+/**
  * Apply a document's effect on stock.
  *
  * Pass `STOCK_OUT` for a sale and `STOCK_IN` for a purchase; pass the opposite
@@ -137,29 +193,7 @@ export async function applyStockMovement(
   lines: StockLine[],
   direction: number,
 ): Promise<void> {
-  if (!lines || lines.length === 0 || direction === 0) return;
-
-  const catalog: CatalogProduct[] = await tx
-    .select()
-    .from(productsTable)
-    .where(eq(productsTable.businessId, businessId));
-
-  // Ascending by id, so two concurrent documents touching the same products
-  // take their row locks in the same order and cannot deadlock each other.
-  const deltas = [...netByProduct(catalog, lines, direction)].sort(([a], [b]) => a - b);
-
-  for (const [productId, delta] of deltas) {
-    if (delta.isZero()) continue;
-    // The addition happens in the database. This used to write back
-    // `catalogValue + delta`, where the catalog value had been read moments
-    // earlier without a lock: two concurrent invoices for one product both
-    // started from the same quantity and the last write won, so goods were sold
-    // twice and stock fell once.
-    await tx
-      .update(productsTable)
-      .set({ stockQuantity: sql`${productsTable.stockQuantity} + ${delta.toFixed(3)}::numeric` })
-      .where(and(eq(productsTable.id, productId), eq(productsTable.businessId, businessId)));
-  }
+  await applyStockChanges(tx, productsTable, eq, businessId, [{ lines, direction }]);
 }
 
 /** Re-export so callers writing a stock column use the same rounding. */

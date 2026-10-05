@@ -24,8 +24,6 @@ import {
   tenantApiLimiter,
   tenantConcurrencyLimiter,
   REGISTER_RECIPIENT_LIMIT,
-  anyLocked,
-  recordFailures,
   reserveAttempt,
   clearFailures,
   consumeBudget,
@@ -273,9 +271,11 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   // lock keyed on the email alone lets anyone lock anyone out.
   const attemptKey = loginKey(normalisedEmail, req.ip);
 
-  // Checked before any work is done, so a locked-out attacker cannot even make
-  // us hash a candidate password.
-  const locked = await anyLocked([attemptKey]);
+  // The attempt is counted before anything is checked, so a burst of parallel
+  // guesses cannot all pass the lock test before the first failure is written,
+  // and a locked-out attacker cannot even make us hash a candidate password. A
+  // success clears the count below.
+  const locked = await reserveAttempt([attemptKey]);
   if (locked) {
     const retryAfter = Math.ceil((locked.getTime() - Date.now()) / 1000);
     res.setHeader("Retry-After", String(retryAfter));
@@ -289,7 +289,6 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
     // Spend the same work as a real verification so the response time does not
     // reveal whether the address has an account.
     await spendVerificationTime(password);
-    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
@@ -297,7 +296,6 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
   if (!valid) {
     // Not `userKey`: that one guards step-up and change-password, and a failed
     // login is by definition made by someone who is not the account's owner.
-    await recordFailures([attemptKey]);
     return res.status(401).json({ error: "Invalid credentials" });
   }
 

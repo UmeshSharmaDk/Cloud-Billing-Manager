@@ -19,7 +19,6 @@ import {
 } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
-import { systemScope } from "../middleware/tenant-scope";
 import { mapUser } from "../lib/serialise";
 import type { AuthedRequest, IdParams } from "../lib/http";
 import { mailer, adminInvitationMessage } from "../lib/mailer";
@@ -30,10 +29,12 @@ export const ADDITIONAL_USER_PRICE_INR = 1000;
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 const router = Router();
-// Authenticate first: an anonymous request must not take a pooled connection and
-// open a policy-free transaction. Admins reach the capacity-request routes, so the
-// router admits admins and each privileged route adds `requireSuperadmin`.
-router.use(requireAuth, requireAdmin, systemScope);
+// Authenticate first. Nothing here touches a tenant-scoped table, so the router
+// takes no policy-free scope: each handler that writes more than one row uses its
+// own transaction, and none holds a request-long connection open while it waits
+// on mail. Admins reach the capacity-request routes, so the router admits admins
+// and each privileged route adds `requireSuperadmin`.
+router.use(requireAuth, requireAdmin);
 
 type Req = AuthedRequest<any, any, IdParams>;
 const tokenHash = (token: string) => crypto.createHash("sha256").update(token).digest("hex");

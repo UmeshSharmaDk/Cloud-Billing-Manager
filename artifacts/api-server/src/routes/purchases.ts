@@ -6,7 +6,7 @@ import { validateBody, validateQuery, validateParams } from "../middleware/valid
 import { Decimal, dec, paise, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { ListPurchasesQuery, CreatePurchaseBody, UpdatePurchaseBody, IdParam } from "../schemas";
 import { resolveInwardSupplyType } from "../lib/gst";
-import { applyStockMovement, findLineProduct, STOCK_IN } from "../lib/stock";
+import { applyStockChanges, applyStockMovement, findLineProduct, STOCK_IN } from "../lib/stock";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapPurchase } from "../lib/serialise";
 
@@ -99,6 +99,10 @@ function calcPurchaseTotals(items: any[], isInterstate: boolean) {
 async function resolveItemsToProducts(tx: any, businessId: number, items: any[]) {
   const catalog = await tx.select().from(productsTable).where(eq(productsTable.businessId, businessId));
   const resolved: any[] = [];
+  // Catalog updates are collected and written afterwards in ascending id order,
+  // not in line order: a bill listing product B before A took its row locks in
+  // the opposite order to a document locking A then B, and the two deadlocked.
+  const pending = new Map<number, any>();
   for (const item of items) {
     const name = String(item.description ?? "").trim();
     const unitPrice = dec(item.unitPrice ?? 0);
@@ -112,8 +116,7 @@ async function resolveItemsToProducts(tx: any, businessId: number, items: any[])
       if (item.hsnCode) updates.hsnCode = item.hsnCode;
       if (item.unit) updates.unit = item.unit;
       if (Object.keys(updates).length > 0) {
-        const [updated] = await tx.update(productsTable).set(updates).where(eq(productsTable.id, product.id)).returning();
-        product = updated;
+        pending.set(product.id, { ...(pending.get(product.id) ?? {}), ...updates });
       }
     } else if (name) {
       const [created] = await tx.insert(productsTable).values({
@@ -126,6 +129,10 @@ async function resolveItemsToProducts(tx: any, businessId: number, items: any[])
     }
 
     resolved.push({ ...item, productId: product?.id ?? null });
+  }
+  for (const [id, updates] of [...pending].sort(([a], [b]) => a - b)) {
+    await tx.update(productsTable).set(updates)
+      .where(and(eq(productsTable.id, id), eq(productsTable.businessId, businessId)));
   }
   return resolved;
 }
@@ -294,8 +301,10 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
       const resolvedItems = await resolveItemsToProducts(tx, businessId, calc.items);
       // Undo what this bill previously put into stock, then apply what it says
       // now. Without the reversal, re-saving a bill for 10 units left 20.
-      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -STOCK_IN);
-      await applyStockMovement(tx, productsTable, eq, businessId, resolvedItems, STOCK_IN);
+      await applyStockChanges(tx, productsTable, eq, businessId, [
+        { lines: locked.items as any[], direction: -STOCK_IN },
+        { lines: resolvedItems, direction: STOCK_IN },
+      ]);
       assignTotals(calc, resolvedItems);
     } else if (supply.isInterstate !== locked.isInterstate) {
       // Only the tax split changes here; the same goods were received, so stock

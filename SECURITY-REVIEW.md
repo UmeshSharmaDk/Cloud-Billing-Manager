@@ -877,6 +877,55 @@ package). `.env.example` documents the mail, proxy and role settings.
   database to make that a guarantee.
 - The frontend loads fonts from a third party and its CSP allows inline styles.
 
+### Third check-up — after the superadmin hierarchy landed on `main`
+
+`main` gained a superadmin role, admin invitations, per-admin user limits and capacity requests
+(committed directly, with `main`'s own CI red: the dependency audit on the old nodemailer, and an
+integration test that asserted a concurrent create succeeding past an allowance of one — the server
+was right and the test could not pass; it now opens exactly one seat for the race). Two independent
+read-only reviews of the merged tree found no way to read or change another admin's users, to reach a
+superadmin route without being one, or to redeem an invitation twice. They did find the following,
+all fixed and covered by tests that fail on the previous code:
+
+- **Availability — a leaked in-flight slot.** A client that disconnected while authentication was
+  still running had already had its one `close` event, so the per-business concurrency limiter
+  registered a release that never fired; sixteen such requests locked a business out until a restart.
+  The limiter now skips requests already closed.
+- **Login still raced the lockout.** `/auth/login` checked the lock, verified the password, and only
+  then recorded the failure, so thirty parallel guesses were all evaluated. It now reserves the
+  attempt first, as step-up and change-password already did (`30 → ≤10 evaluated`).
+- **Database errors logged bound parameters again** for anything written through `req.log`, because
+  `pino-http` replaces the parent's serializers; the scrubbed `err` serializer is now passed to it,
+  with a unit test.
+- **Deadlocks.** Editing a document reversed and re-applied stock as two separately sorted passes, and
+  a bill updated catalog rows in line order. Movements are now netted into one pass that locks the
+  affected products in ascending id order, and catalog updates are written in id order.
+- **Lockout counters** are written outside the request transaction, so they no longer hold a pooled
+  connection until commit and are not rolled back with a 5xx.
+- **`/api/superadmin` opened a policy-free transaction before authenticating**, and held it while
+  sending mail. It authenticates first and takes no request-long scope (nothing in it touches a
+  tenant table; its multi-row writes use their own transactions).
+- **Invitation link** now carries its token in the URL fragment and the page clears it; its email no
+  longer uses the typed name; accepting an invitation writes an `admin.created` audit entry.
+- Changing a user's email returns `409` on a clash instead of a unique-index `500`, and needs password
+  confirmation when the target is an administrator.
+- `Cache-Control: no-store` on every API response; checkout steps no longer persist credentials; the
+  bootstrap script ignores a soft-deleted superadmin so a lost one can be replaced.
+
+**Accepted or left to the operator.**
+- Invitations cannot be revoked, only left to expire (24 hours) or replaced after expiry. A mistyped
+  address therefore holds a valid link for a day.
+- There is no password-reset route for the sole superadmin; recovery is to soft-delete the row in the
+  database and run `bootstrap:superadmin` again.
+- A tenant admin can learn whether an email exists on the platform by trying to create a user with it
+  (inherent to the feature).
+- `TRUST_PROXY` defaults to one hop. With no proxy in front, set it to `0`.
+- `invoice_counters` has no row-level policy, deliberately (see `lib/db/src/rls.ts`); `admin_invitations`,
+  `capacity_requests`, `pending_registrations` and `revoked_tokens` are global tables reached only from
+  authentication and admin routes.
+- `live_test.py` at the repository root is an unrelated key-check script from another author and
+  should be removed.
+
 ### Operator actions that code cannot perform
 
 **Configure a mail transport before deploying.** The server refuses to start in production without

@@ -22,7 +22,7 @@ function scrubText(text: unknown): unknown {
   return typeof text === "string" ? text.replace(/\nparams:[\s\S]*$/m, "\nparams: [redacted]") : text;
 }
 
-function scrubError(err: any, depth = 0): any {
+export function scrubError(err: any, depth = 0): any {
   const serialised: any = pino.stdSerializers.err(err);
   if (!serialised || typeof serialised !== "object") return serialised;
   serialised.message = scrubText(serialised.message);
