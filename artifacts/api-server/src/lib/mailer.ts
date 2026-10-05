@@ -16,6 +16,7 @@ import fs from "node:fs";
 import nodemailer, { type Transporter } from "nodemailer";
 import { config } from "./config";
 import { logger } from "./logger";
+import { describeMailError } from "./mail-errors";
 
 export interface Message {
   to: string;
@@ -25,6 +26,8 @@ export interface Message {
 
 export interface Mailer {
   send(message: Message): Promise<void>;
+  /** Check that the transport can be reached and authenticated, without sending. */
+  verify?(): Promise<void>;
 }
 
 /**
@@ -64,7 +67,19 @@ class SmtpMailer implements Mailer {
   private readonly transport: Transporter;
 
   constructor(private readonly url: string, private readonly from: string) {
-    this.transport = nodemailer.createTransport(url);
+    // Bounded, so a mail server that accepts the connection and then says nothing
+    // fails in seconds rather than holding the request (and a database connection)
+    // open for nodemailer's two-minute defaults.
+    this.transport = nodemailer.createTransport({
+      url,
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 30_000,
+    });
+  }
+
+  async verify(): Promise<void> {
+    await this.transport.verify();
   }
 
   async send(message: Message): Promise<void> {
@@ -86,6 +101,53 @@ function selectMailer(): Mailer {
 }
 
 export const mailer: Mailer = selectMailer();
+
+export { describeMailError };
+
+/** Where SMTP is pointed, without the credentials, so a typo is visible in the log. */
+function describeSmtpTarget(url: string): Record<string, unknown> {
+  try {
+    const u = new URL(url);
+    const secure = u.protocol === "smtps:";
+    return {
+      host: u.hostname,
+      port: u.port || (secure ? "465" : "587 (default for smtp://)"),
+      secure,
+      authenticated: Boolean(u.username),
+    };
+  } catch {
+    return { problem: "SMTP_URL is not a valid URL" };
+  }
+}
+
+/**
+ * Check the mail transport once at startup and say plainly whether it works.
+ *
+ * Registration and administrator invitations are delivered by email, and a
+ * delivery failure is invisible to the person using the app — registration
+ * answers "check your email" either way, by design. Without this, a wrong
+ * password or blocked port surfaces only as mail that never arrives. Not fatal:
+ * a mail outage at boot must not become an API outage.
+ */
+export async function checkMailTransport(): Promise<void> {
+  if (config.mail.kind !== "smtp") {
+    logger.info({ transport: config.mail.kind }, "Mail transport is not SMTP; skipping the connectivity check");
+    return;
+  }
+  const target = describeSmtpTarget(config.mail.url);
+  try {
+    await mailer.verify?.();
+    logger.info(
+      { ...target, from: config.mail.from },
+      "SMTP connection verified (this checks the server and login, not that the sender address is allowed)",
+    );
+  } catch (err) {
+    logger.error(
+      { ...target, from: config.mail.from, ...describeMailError(err) },
+      "SMTP check failed: registration and administrator invitation emails will not be delivered",
+    );
+  }
+}
 
 /**
  * Sent when the address is free: here is the link that finishes your signup.
@@ -175,6 +237,6 @@ export async function sendQuietly(message: Message): Promise<void> {
   try {
     await mailer.send(message);
   } catch (err) {
-    logger.error({ err, subject: message.subject }, "Could not send mail");
+    logger.error({ ...describeMailError(err), subject: message.subject }, "Could not send mail");
   }
 }

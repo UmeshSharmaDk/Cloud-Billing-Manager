@@ -37,6 +37,6 @@ channel = "stable-25_05"
 [userenv]
 
 [userenv.shared]
-MAIL_FROM = "admin@cloudbillingmanager.com"
+MAIL_FROM = "support@outhillsmanali.com"
 
 [userenv.development]

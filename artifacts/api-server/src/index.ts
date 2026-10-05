@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startHousekeeping } from "./lib/housekeeping";
+import { checkMailTransport } from "./lib/mailer";
 import { rootDb, inspectRls, describeRlsProblem } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
@@ -48,6 +49,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 void reportRlsStatus();
+void checkMailTransport();
 startHousekeeping();
 
 app.listen(port, (err) => {

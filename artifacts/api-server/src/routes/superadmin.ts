@@ -21,7 +21,7 @@ import { recordAudit, actorFrom } from "../lib/audit";
 import { verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
 import { mapUser } from "../lib/serialise";
 import type { AuthedRequest, IdParams } from "../lib/http";
-import { mailer, adminInvitationMessage } from "../lib/mailer";
+import { mailer, adminInvitationMessage, describeMailError } from "../lib/mailer";
 import { config } from "../lib/config";
 
 export const DEFAULT_ADMIN_USER_LIMIT = 15;
@@ -127,13 +127,7 @@ router.post("/admin-invitations", requireSuperadmin, validateBody(CreateAdminInv
   try {
     await mailer.send(adminInvitationMessage(normalisedEmail, link));
   } catch (err) {
-    const mailError = (err && typeof err === "object" ? err : {}) as Record<string, unknown>;
-    req.log?.error({
-      errorName: typeof mailError["name"] === "string" ? mailError["name"] : "UnknownError",
-      smtpCode: typeof mailError["code"] === "string" ? mailError["code"] : undefined,
-      smtpResponseCode: typeof mailError["responseCode"] === "number" ? mailError["responseCode"] : undefined,
-      smtpCommand: typeof mailError["command"] === "string" ? mailError["command"] : undefined,
-    }, "Could not send administrator invitation");
+    req.log?.error(describeMailError(err), "Could not send administrator invitation");
     await rootDb.delete(adminInvitationsTable).where(eq(adminInvitationsTable.id, invite.id));
     return res.status(502).json({ error: "The invitation email could not be sent. You can try again." });
   }
