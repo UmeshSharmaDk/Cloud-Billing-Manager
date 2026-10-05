@@ -159,6 +159,43 @@ export const tenantApiLimiter: ReturnType<typeof rateLimit> = rateLimit({
 });
 
 /**
+ * Requests one business may have being handled at once.
+ *
+ * The per-minute limits bound how many requests arrive; they say nothing about
+ * how many are running. Each tenant request holds a pooled database connection
+ * until it has answered, and the pool is small and shared, so one business
+ * sending slow requests (a large report, an oversized document) in parallel
+ * could take every connection and leave every other tenant waiting on the
+ * pool. Capping what one business may hold keeps the rest of the pool for
+ * everyone else. The default is 16 of the default pool of 20; set
+ * `TENANT_MAX_IN_FLIGHT` alongside `DB_POOL_MAX`.
+ */
+const tenantMaxInFlight = positiveIntFromEnv("TENANT_MAX_IN_FLIGHT", 16);
+const inFlight = new Map<number, number>();
+
+export function tenantConcurrencyLimiter(req: any, res: any, next: any): void {
+  const businessId = Number(req.businessId);
+  const current = inFlight.get(businessId) ?? 0;
+  if (current >= tenantMaxInFlight) {
+    res.setHeader("Retry-After", "1");
+    res.status(429).json({ error: "Too many requests in progress. Try again shortly." });
+    return;
+  }
+  inFlight.set(businessId, current + 1);
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const left = (inFlight.get(businessId) ?? 1) - 1;
+    if (left <= 0) inFlight.delete(businessId);
+    else inFlight.set(businessId, left);
+  };
+  // `close` fires whether the response finished or the client went away.
+  res.once("close", release);
+  next();
+}
+
+/**
  * Whether this subject is currently locked out, and until when.
  * A read failure returns `null` — the lockout must never become an outage.
  */

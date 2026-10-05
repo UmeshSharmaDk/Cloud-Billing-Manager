@@ -69,7 +69,8 @@ class ResponseGate {
   private queued: Array<() => unknown> = [];
   private released = false;
   private started = false;
-  private statusAtStart = 200;
+  private ended = false;
+  statusAtStart = 200;
   private readonly sendEnd: (...args: unknown[]) => unknown;
   private signalStarted!: () => void;
 
@@ -88,12 +89,18 @@ class ResponseGate {
 
     (res as any).write = (...args: unknown[]) => {
       if (this.released) return write(...args);
+      // Nothing is accepted after the handler has ended the response.
+      if (this.ended) return true;
       this.queued.push(() => write(...args));
       this.start();
       return true;
     };
     (res as any).end = (...args: unknown[]) => {
       if (this.released) return end(...args);
+      // A second `end` — an error handler reacting to a throw after the handler
+      // had already answered — must not append to or replace the first answer.
+      if (this.ended) return res;
+      this.ended = true;
       this.queued.push(() => end(...args));
       this.start();
       return res;
@@ -127,6 +134,11 @@ class ResponseGate {
     this.released = true;
     if (this.started) this.res.statusCode = this.statusAtStart;
     for (const op of this.queued.splice(0)) op();
+  }
+
+  /** Whether the answer the handler produced is a server error. */
+  get isServerError(): boolean {
+    return this.started && this.statusAtStart >= 500;
   }
 
   /**
@@ -172,7 +184,9 @@ function runScoped(
     // ends when it first tries to answer — or, if the client left and the
     // handler never does, after the grace period.
     await Promise.race([gate.responseStarted, gate.abandoned]);
-    if (!gate.hasResponse || res.statusCode >= 500) throw new RollbackOnServerError();
+    // Decided on the status at the moment the handler answered, not whatever
+    // `res.statusCode` has since become.
+    if (!gate.hasResponse || gate.isServerError) throw new RollbackOnServerError();
   }).then(
     // Committed. Now, and not before, the client hears about it.
     () => gate.release(),

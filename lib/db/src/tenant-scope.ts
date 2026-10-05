@@ -22,6 +22,14 @@ import { sql } from "drizzle-orm";
 interface Scope {
   tx: any;
   businessId: number | null;
+  /**
+   * Set when the scope's transaction is over. Async work that outlives the
+   * request — a handler still running after the client left, a timer — keeps
+   * the scope in its async context, and its queries would otherwise be sent
+   * down a connection that has already gone back to the pool and been lent to
+   * someone else's request.
+   */
+  closed: boolean;
 }
 
 const storage = new AsyncLocalStorage<Scope>();
@@ -45,8 +53,11 @@ export function inTenantScope(): boolean {
 export function createScopedDb<T extends object>(base: T): T {
   return new Proxy(base, {
     get(target, prop, receiver) {
-      const scoped = storage.getStore()?.tx;
-      const actual: any = scoped ?? target;
+      const store = storage.getStore();
+      if (store?.closed) {
+        throw new Error("Database used after its request scope ended");
+      }
+      const actual: any = store?.tx ?? target;
       const value = Reflect.get(actual, prop, actual);
       return typeof value === "function" ? value.bind(actual) : value;
     },
@@ -71,7 +82,12 @@ export async function runInTenantScope<T>(
     await tx.execute(
       sql`SELECT set_config('app.business_id', ${String(businessId)}, true)`,
     );
-    return storage.run({ tx, businessId }, fn);
+    const scope: Scope = { tx, businessId, closed: false };
+    try {
+      return await storage.run(scope, fn);
+    } finally {
+      scope.closed = true;
+    }
   });
 }
 
@@ -86,6 +102,11 @@ export async function runInTenantScope<T>(
 export async function runInSystemScope<T>(base: any, fn: Runner<T>): Promise<T> {
   return base.transaction(async (tx: any) => {
     await tx.execute(sql`SELECT set_config('app.bypass_rls', 'on', true)`);
-    return storage.run({ tx, businessId: null }, fn);
+    const scope: Scope = { tx, businessId: null, closed: false };
+    try {
+      return await storage.run(scope, fn);
+    } finally {
+      scope.closed = true;
+    }
   });
 }

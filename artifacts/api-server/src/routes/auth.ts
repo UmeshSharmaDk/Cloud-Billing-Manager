@@ -21,6 +21,7 @@ import {
   authIpLimiter,
   registerIpLimiter,
   tenantApiLimiter,
+  tenantConcurrencyLimiter,
   REGISTER_RECIPIENT_LIMIT,
   anyLocked,
   recordFailures,
@@ -244,10 +245,13 @@ export function requireBusiness(req: any, res: any, next: any) {
   // connection: the limiter exists to protect them.
   tenantApiLimiter(req, res, (err?: unknown) => {
     if (err) return next(err);
-    // Resolving the tenant and pinning it to the database session are the same
-    // decision, so they happen in the same place. No route opts in, and none can
-    // forget to.
-    openTenantScope(req, res, next, businessId);
+    tenantConcurrencyLimiter(req, res, (err2?: unknown) => {
+      if (err2) return next(err2);
+      // Resolving the tenant and pinning it to the database session are the same
+      // decision, so they happen in the same place. No route opts in, and none can
+      // forget to.
+      openTenantScope(req, res, next, businessId);
+    });
   });
 }
 

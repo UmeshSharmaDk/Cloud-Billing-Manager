@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, numeric, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, numeric, timestamp, jsonb, index } from "drizzle-orm/pg-core";
 
 export const ewayBillsTable = pgTable("eway_bills", {
   id: serial("id").primaryKey(),
@@ -40,6 +40,10 @@ export const ewayBillsTable = pgTable("eway_bills", {
   items: jsonb("items").notNull().default([]),
   invoiceId: integer("invoice_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Every query is for one business; without this each one scans the table, and
+  // the row-level-security filter is applied after the scan rather than before.
+  index("eway_bills_business_idx").on(t.businessId),
+]);
 
 export type EwayBill = typeof ewayBillsTable.$inferSelect;

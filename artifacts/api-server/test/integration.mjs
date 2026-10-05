@@ -939,6 +939,32 @@ const adminEmail = `admin${uniq}@example.test`;
     `qty ${qty} stock ${stockById(racer.id)}`);
 }
 
+// === check-up: one business cannot hold the whole pool ====================
+{
+  const burst = await register("burst");
+  const T = { token: burst.token };
+  const rs = await Promise.all(Array.from({ length: 80 }, () => call("GET", "/dashboard/stats", T)));
+  const codes = new Set(rs.map((r) => r.status));
+  check("in-flight", "a burst of 80 concurrent requests gets only 200s and 429s",
+    [...codes].every((c) => c === 200 || c === 429), [...codes].join(","));
+  check("in-flight", "some of the burst was served", rs.some((r) => r.status === 200));
+  const after = await call("GET", "/dashboard/stats", T);
+  check("in-flight", "the slots are released when the burst is over", after.status === 200, `status ${after.status}`);
+  // Another tenant is unaffected while this one is saturated.
+  const other = await register("burstother");
+  const mixed = await Promise.all([
+    ...Array.from({ length: 40 }, () => call("GET", "/dashboard/stats", T)),
+    call("GET", "/dashboard/stats", { token: other.token }),
+  ]);
+  check("in-flight", "a different business is served during another's burst",
+    mixed[mixed.length - 1].status === 200, `status ${mixed[mixed.length - 1].status}`);
+  // Authentication comes before the policy-free scope on admin routes.
+  const anon = await call("GET", "/admin/stats", {});
+  check("in-flight", "an unauthenticated admin request is refused", anon.status === 401, `status ${anon.status}`);
+  const nonAdmin = await call("GET", "/admin/stats", T);
+  check("in-flight", "a non-admin admin request is refused", nonAdmin.status === 403, `status ${nonAdmin.status}`);
+}
+
 // === review: marking an invoice paid settles it and records the payment ====
 {
   const pd = await register("paid");
@@ -1222,8 +1248,10 @@ const adminEmail = `admin${uniq}@example.test`;
   const write = () => call("PATCH", "/business", { token: fl.token, body: { stateCode: "29" } });
 
   const codes = [];
-  for (let batch = 0; batch < 8; batch++) {
-    codes.push(...(await Promise.all(Array.from({ length: 40 }, write))).map((r) => r.status));
+  // Batches stay under the per-business in-flight cap, so what is counted here
+  // is the per-minute ceiling alone.
+  for (let batch = 0; batch < 27; batch++) {
+    codes.push(...(await Promise.all(Array.from({ length: 12 }, write))).map((r) => r.status));
   }
   const accepted = codes.filter((c) => c === 200).length;
   const throttled = codes.filter((c) => c === 429).length;
@@ -1324,8 +1352,8 @@ const adminEmail = `admin${uniq}@example.test`;
     setTimeout(() => controller.abort(), 2);
     return sent;
   }));
-  const after = await Promise.all(Array.from({ length: 25 }, () => call("GET", "/customers", T)));
-  check("abandoned", "after 30 abandoned requests the pool still serves 25 at once",
+  const after = await Promise.all(Array.from({ length: 16 }, () => call("GET", "/customers", T)));
+  check("abandoned", "after 30 abandoned requests the pool still serves 16 at once",
     after.every((r) => r.status === 200), after.map((r) => r.status).join(","));
 
   // A request left holding its transaction shows up here as `idle in transaction`.
