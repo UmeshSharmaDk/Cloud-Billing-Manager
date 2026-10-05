@@ -1,9 +1,13 @@
 # Secret scanning configuration.
 #
-# The scan runs over the full history, which is the right setting: a secret that
-# was ever committed is compromised whether or not the current tree still shows
-# it. The consequence is that findings which are already known and already being
-# dealt with would fail every build forever, and a check that always fails stops
+# What gets scanned depends on the event (gitleaks-action v2, which drives gitleaks
+# 8.24.3 unless GITLEAKS_VERSION says otherwise): a pull_request run scans the
+# commits in the PR, a push run scans the commits in that push, and only a manual
+# or scheduled run (neither is configured in security.yml) walks the whole
+# history. A secret that was ever committed is compromised whether or not the
+# current tree still shows it, so a full-history run is the right check to do by
+# hand; the consequence is that findings which are already known and already
+# being dealt with would fail it forever, and a check that always fails stops
 # being read — which is worse than not running it.
 #
 # So the allowlist below names exactly the values that were already published in
@@ -22,17 +26,21 @@ treated as compromised and rotated; baselining them here keeps the scan useful
 for detecting *new* leaks, it does not make these safe.
 """
 
+# Every pattern is anchored. gitleaks tests these against the detected secret and
+# an unanchored pattern matches anywhere inside it, so '''Admin@123''' would also
+# suppress a new, different secret such as Admin@123Prod! or xAdmin@123. Anchored,
+# only a finding whose secret is exactly the historic value is allowed.
 regexes = [
   # F-01 — the JWT signing secret committed as a literal fallback in
   # routes/auth.ts. Removed in the fix; the server now refuses to boot without
   # SESSION_SECRET. Anyone with the repository can mint valid tokens for any
   # deployment still running the old value, so rotating it is urgent.
-  '''gst-platform-secret-2024''',
+  '''^gst-platform-secret-2024$''',
 
   # F-02 — the demo administrator credentials printed on the public login page,
   # and the single global salt they were hashed with. Removed from the UI; the
   # accounts themselves still need new passwords.
-  '''Admin@123''',
-  '''admin@gstplatform\.in''',
-  '''gst_salt_v1''',
+  '''^Admin@123$''',
+  '''^admin@gstplatform\.in$''',
+  '''^gst_salt_v1$''',
 ]

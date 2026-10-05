@@ -32,6 +32,14 @@ node_modules
 .env.*
 !.env.example
 
+# private keys, certificate bundles, database dumps and backups
+*.pem
+*.key
+*.p12
+*.sql
+*.dump
+*.bak
+
 # misc
 /.sass-cache
 /connect.lock
