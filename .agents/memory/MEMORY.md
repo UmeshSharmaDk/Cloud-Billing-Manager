@@ -1,2 +1,4 @@
 - [PDF bill import parsing](pdf-purchase-import.md) — client-side pdfjs-dist heuristic line-item extraction for GST Pro purchase bills; no server upload needed.
 - [Preview API authentication](preview-api-auth.md) — cookie-authenticated preview APIs need an explicit origin allowlist and a fully synchronized development schema.
+- [Workspace CLI TypeScript runtime](workspace-cli-tsx.md) — run database/operator scripts with tsx when they import workspace TypeScript packages.
+- [Admin capacity governance](admin-capacity-governance.md) — capacity requests are not payments; only explicit superadmin review with a new limit grants seats.
