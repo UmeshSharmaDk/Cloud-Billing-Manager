@@ -5,7 +5,7 @@ import { requireAuth, requireBusiness } from "./auth";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
 import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } from "../lib/money";
 import { resolveSupplyType } from "../lib/gst";
-import { applyStockMovement, STOCK_OUT } from "../lib/stock";
+import { applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
 import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
@@ -31,6 +31,12 @@ function invoiceEditBlock(inv: { status: string; paidAmount: unknown }, editsFig
   if (inv.status === "cancelled") return "A cancelled invoice cannot be changed.";
   if (editsFigures && dec(inv.paidAmount).greaterThan(0)) {
     return "This invoice has payments recorded against it, so its figures can no longer be edited. Cancel it or issue a credit note instead.";
+  }
+  // A zero-value invoice can be "paid" with nothing recorded against it. Editing
+  // its lines to a real amount would leave it settled with no payment — so only
+  // an unpaid invoice has figures that can move, whatever has been paid.
+  if (editsFigures && inv.status !== "unpaid") {
+    return "Only an unpaid invoice's figures can be edited. Cancel it or issue a credit note instead.";
   }
   return null;
 }
@@ -193,20 +199,26 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
   const invoice = await db.transaction(async (tx) => {
     const invoiceNumber = await nextInvoiceNumber(tx, businessId, invoiceDate);
 
+    // Each line records which product it is, so cancelling or editing reverses
+    // exactly this movement rather than re-matching by name against whatever the
+    // catalog holds by then.
+    const lines = await resolveLineProducts(tx, productsTable, eq, businessId, gstCalc.items);
+
     const [created] = await tx.insert(invoicesTable).values({
       businessId, invoiceNumber, type: type ?? "Tax Invoice", status: "unpaid",
       customerId: resolvedCustomerId, customerName: resolvedCustomerName,
       customerGstin: resolvedCustomerGstin, invoiceDate, dueDate, placeOfSupply,
-      isInterstate: supply.isInterstate, notes, items: gstCalc.items,
+      isInterstate: supply.isInterstate, notes, items: lines,
       subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst),
       sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst),
       totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal),
       roundOff: toColumn(gstCalc.roundOff), paidAmount: "0.00",
     }).returning();
 
-    // Goods leave on a sale. Routed through the shared helper so an edit or a
-    // delete can reverse exactly this movement.
-    await applyStockMovement(tx, productsTable, eq, businessId, gstCalc.items, STOCK_OUT);
+    // Goods leave on a sale, come back on a credit note, and do not move at all
+    // for a proforma. Routed through the shared helper so an edit or a
+    // cancellation can reverse exactly this movement.
+    await applyStockMovement(tx, productsTable, eq, businessId, lines, stockDirectionFor(created.type));
 
     return created;
   });
@@ -229,13 +241,6 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   // mis-state the tax head on an invoice that still totals correctly.
   const { type, customerId, invoiceDate, dueDate, placeOfSupply, notes, items } = req.body;
 
-  // Read before writing: the effective place of supply may be one this request
-  // is not changing, and a 404 should not be discovered after building updates.
-  const [existing] = await db.select().from(invoicesTable)
-    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
-    .limit(1);
-  if (!existing) return res.status(404).json({ error: "Not found" });
-
   // An issued invoice is a tax document. Once it is cancelled it is final, and
   // once money has been recorded against it the figures it was paid against
   // cannot move — an edit could drop the total below what was received, and
@@ -245,68 +250,73 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   const editsFigures = Boolean(
     type || customerId || invoiceDate || placeOfSupply !== undefined || items,
   );
-  const blocked = invoiceEditBlock(existing, editsFigures);
-  if (blocked) return res.status(409).json({ error: blocked });
 
-  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
-  const effectivePlace = placeOfSupply !== undefined ? placeOfSupply : existing.placeOfSupply;
-  const supply = resolveSupplyType(business, effectivePlace);
-  if (!supply.ok) return res.status(400).json({ error: supply.error });
-
-  const updates: any = {};
-  if (type) updates.type = type;
-  if (dueDate !== undefined) updates.dueDate = dueDate;
-  if (placeOfSupply !== undefined) updates.placeOfSupply = placeOfSupply;
-  if (notes !== undefined) updates.notes = notes;
-
-  // Changing the customer or the date is applied whether or not the lines are
-  // being resent. Both used to sit inside the recompute branch below, so
-  // `PATCH {"customerId": 7}` on its own returned 200 having changed nothing —
-  // and a date change silently failed to move the invoice into the financial
-  // year that drives GSTR-1 period selection.
-  if (customerId) {
-    const [customer] = await db.select().from(customersTable)
-      .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
-      .limit(1);
-    if (!customer) return res.status(400).json({ error: "Unknown customer" });
-    updates.customerId = customer.id;
-    updates.customerName = customer.name;
-    updates.customerGstin = customer.gstin ?? null;
-  }
-  if (invoiceDate) updates.invoiceDate = invoiceDate;
-
-  // Recompute when the lines change, and also when the supply type does —
-  // moving the place of supply across a state line changes which tax applies to
-  // lines nobody edited, and leaving the stored split alone would keep charging
-  // the old one.
-  const supplyTypeChanged = supply.isInterstate !== existing.isInterstate;
-  const linesToPrice = items ?? (supplyTypeChanged ? (existing.items as any[]) : null);
-
-  if (linesToPrice) {
-    const gstCalc = calcGst(linesToPrice, supply.isInterstate);
-    Object.assign(updates, { items: gstCalc.items, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: supply.isInterstate });
-  }
-
-  // A request that changes nothing is not an error, but `set({})` is invalid SQL.
-  if (Object.keys(updates).length === 0) return res.json(mapInvoice(existing));
-
+  // Everything below is computed from the row as it is *under the lock*. This
+  // used to read the invoice first, build the update from that snapshot, and
+  // only then lock and write: two concurrent edits — one resending the lines, the
+  // other moving the place of supply — each priced from the same old lines, and
+  // the second silently re-split the first's.
   const outcome = await db.transaction(async (tx) => {
-    // Re-read under a row lock and re-apply the rule. The check above ran on a
-    // snapshot, and a payment or a cancellation can land between it and here.
     const [locked] = await tx.select().from(invoicesTable)
       .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
       .for("update")
       .limit(1);
     if (!locked) return { kind: "missing" as const };
-    const conflict = invoiceEditBlock(locked, editsFigures);
-    if (conflict) return { kind: "conflict" as const, error: conflict };
 
-    // Only a change of lines moves goods. A re-split for a changed place of
-    // supply rewrites the same quantities, so reversing and reapplying it would
-    // net to nothing — but doing neither keeps the stored movement honest.
-    if (items) {
-      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -STOCK_OUT);
-      await applyStockMovement(tx, productsTable, eq, businessId, updates.items, STOCK_OUT);
+    const blocked = invoiceEditBlock(locked, editsFigures);
+    if (blocked) return { kind: "reject" as const, status: 409, error: blocked };
+
+    const [business] = await tx.select().from(businessesTable).where(eq(businessesTable.id, businessId)).limit(1);
+    const effectivePlace = placeOfSupply !== undefined ? placeOfSupply : locked.placeOfSupply;
+    const supply = resolveSupplyType(business, effectivePlace);
+    if (!supply.ok) return { kind: "reject" as const, status: 400, error: supply.error };
+
+    const updates: any = {};
+    if (type) updates.type = type;
+    if (dueDate !== undefined) updates.dueDate = dueDate;
+    if (placeOfSupply !== undefined) updates.placeOfSupply = placeOfSupply;
+    if (notes !== undefined) updates.notes = notes;
+
+    // Changing the customer or the date is applied whether or not the lines are
+    // being resent. Both used to sit inside the recompute branch below, so
+    // `PATCH {"customerId": 7}` on its own returned 200 having changed nothing —
+    // and a date change silently failed to move the invoice into the financial
+    // year that drives GSTR-1 period selection.
+    if (customerId) {
+      const [customer] = await tx.select().from(customersTable)
+        .where(and(eq(customersTable.id, customerId), eq(customersTable.businessId, businessId)))
+        .limit(1);
+      if (!customer) return { kind: "reject" as const, status: 400, error: "Unknown customer" };
+      updates.customerId = customer.id;
+      updates.customerName = customer.name;
+      updates.customerGstin = customer.gstin ?? null;
+    }
+    if (invoiceDate) updates.invoiceDate = invoiceDate;
+
+    // Recompute when the lines change, and also when the supply type does —
+    // moving the place of supply across a state line changes which tax applies to
+    // lines nobody edited, and leaving the stored split alone would keep charging
+    // the old one.
+    const supplyTypeChanged = supply.isInterstate !== locked.isInterstate;
+    const linesToPrice = items ?? (supplyTypeChanged ? (locked.items as any[]) : null);
+    if (linesToPrice) {
+      const gstCalc = calcGst(linesToPrice, supply.isInterstate);
+      const lines = await resolveLineProducts(tx, productsTable, eq, businessId, gstCalc.items);
+      Object.assign(updates, { items: lines, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: supply.isInterstate });
+    }
+
+    // A request that changes nothing is not an error, but `set({})` is invalid SQL.
+    if (Object.keys(updates).length === 0) return { kind: "updated" as const, invoice: locked };
+
+    // Goods move when the lines change, and also when the type does — a tax
+    // invoice turned into a credit note changes which way the same goods go. A
+    // re-split for a changed place of supply rewrites the same quantities, so
+    // reversing and reapplying it would net to nothing and is skipped.
+    const before = stockDirectionFor(locked.type);
+    const after = stockDirectionFor(updates.type ?? locked.type);
+    if (items || before !== after) {
+      await applyStockMovement(tx, productsTable, eq, businessId, locked.items as any[], -before);
+      await applyStockMovement(tx, productsTable, eq, businessId, (updates.items ?? locked.items) as any[], after);
     }
 
     const [updated] = await tx.update(invoicesTable).set(updates)
@@ -316,7 +326,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   });
 
   if (outcome.kind === "missing") return res.status(404).json({ error: "Not found" });
-  if (outcome.kind === "conflict") return res.status(409).json({ error: outcome.error });
+  if (outcome.kind === "reject") return res.status(outcome.status).json({ error: outcome.error });
   return res.json(mapInvoice(outcome.invoice));
 });
 
@@ -382,7 +392,9 @@ router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam
     // Cancelling un-sells the goods, exactly once: a cancelled invoice is final,
     // so this cannot run twice for the same invoice.
     if (settled.ok && cancelling) {
-      await applyStockMovement(tx, productsTable, eq, businessId, settled.invoice.items as any[], -STOCK_OUT);
+      await applyStockMovement(
+        tx, productsTable, eq, businessId, settled.invoice.items as any[], -stockDirectionFor(settled.invoice.type),
+      );
     }
     return settled;
   });

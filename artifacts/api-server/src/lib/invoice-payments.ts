@@ -23,6 +23,7 @@
 import { and, eq } from "drizzle-orm";
 import { invoicesTable, paymentsTable } from "@workspace/db";
 import { Decimal, dec, toColumn } from "./money";
+import { isCreditNoteType, isProformaType } from "./tax-documents";
 
 export type InvoiceRow = typeof invoicesTable.$inferSelect;
 export type PaymentRow = typeof paymentsTable.$inferSelect;
@@ -97,7 +98,18 @@ export async function settleInvoice(
     if ("error" in decision) {
       return { ok: false, status: decision.status ?? 400, error: decision.error };
     }
-    target = decision.target;
+    // Whole paise: the column holds two decimals, so an unrounded target made
+    // the stored figure and the ledger delta disagree by a fraction.
+    target = decision.target.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+    if (!target.isZero() && (isProformaType(invoice.type) || isCreditNoteType(invoice.type))) {
+      return {
+        ok: false,
+        status: 409,
+        error: isProformaType(invoice.type)
+          ? "A proforma invoice is a quotation; convert it to a tax invoice before recording a payment."
+          : "A credit note cannot be paid; record the refund against the original invoice.",
+      };
+    }
     if (target.isNegative()) {
       return { ok: false, status: 400, error: "The amount paid cannot be negative." };
     }

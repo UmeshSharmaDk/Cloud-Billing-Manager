@@ -22,6 +22,7 @@
 
 import { and, sql } from "drizzle-orm";
 import { dec, toColumn } from "./money";
+import { isCreditNoteType, isProformaType } from "./tax-documents";
 
 export interface StockLine {
   productId?: number | null;
@@ -40,6 +41,20 @@ export const STOCK_OUT = -1;
 export const STOCK_IN = 1;
 
 /**
+ * Which way an invoice moves stock, by its type.
+ *
+ * Every invoice used to deduct stock. A proforma is a quotation, not a supply —
+ * reports already ignore it — so raising one took goods out of stock for a sale
+ * that never happened. A credit note is goods coming back, so it took them out a
+ * second time instead of returning them.
+ */
+export function stockDirectionFor(type: string | null | undefined): number {
+  if (isProformaType(type)) return 0;
+  if (isCreditNoteType(type)) return STOCK_IN;
+  return STOCK_OUT;
+}
+
+/**
  * Match a document line to a catalog product: by id when the line carries one,
  * otherwise by name. Kept in one place because invoices and purchases matched
  * on subtly different rules — one trimmed the name and the other did not.
@@ -48,13 +63,46 @@ export function findLineProduct<T extends CatalogProduct>(
   catalog: T[],
   line: StockLine,
 ): T | null {
-  if (line.productId) {
-    const byId = catalog.find((p) => p.id === Number(line.productId));
-    if (byId) return byId;
+  // A line that already says which product it is — or says it is none — is not
+  // matched again by name. Re-matching against *today's* catalog meant a name that
+  // belonged to nothing when the invoice was raised could belong to a product
+  // created later, so cancelling credited stock that was never deducted; and
+  // renaming a product made the reversal miss it. Only lines written before the
+  // id was stored (`undefined`) still fall back to the name.
+  if (line.productId === null) return null;
+  if (line.productId !== undefined) {
+    return catalog.find((p) => p.id === Number(line.productId)) ?? null;
   }
   const name = String(line.description ?? "").trim().toLowerCase();
   if (!name) return null;
   return catalog.find((p) => p.name.trim().toLowerCase() === name) ?? null;
+}
+
+/**
+ * Record, on each line, which catalog product it is — or `null` if it is none.
+ * Stored with the document, so a later edit, cancel or rename reverses exactly
+ * what this one moved. An id the caller supplied that is not in this business's
+ * catalog is replaced rather than kept: it would otherwise sit in the document
+ * naming another tenant's product.
+ */
+export async function resolveLineProducts<L extends StockLine>(
+  tx: any,
+  productsTable: any,
+  eq: (a: any, b: any) => any,
+  businessId: number,
+  lines: L[],
+): Promise<Array<L & { productId: number | null }>> {
+  const catalog: CatalogProduct[] = await tx
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.businessId, businessId));
+  return lines.map((line) => {
+    const byId = line.productId
+      ? catalog.find((p) => p.id === Number(line.productId))
+      : undefined;
+    const product = byId ?? findLineProduct(catalog, { ...line, productId: undefined });
+    return { ...line, productId: product?.id ?? null };
+  });
 }
 
 /**
@@ -89,7 +137,7 @@ export async function applyStockMovement(
   lines: StockLine[],
   direction: number,
 ): Promise<void> {
-  if (!lines || lines.length === 0) return;
+  if (!lines || lines.length === 0 || direction === 0) return;
 
   const catalog: CatalogProduct[] = await tx
     .select()

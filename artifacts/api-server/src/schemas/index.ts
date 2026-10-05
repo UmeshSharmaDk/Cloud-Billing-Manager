@@ -67,6 +67,9 @@ const entityId = z.coerce.number().int().positive().max(2_147_483_647);
  * 10^13 is a write error rather than a validation error; stop short of that.
  */
 const money = z.coerce.number().finite().min(0).max(1e12);
+/** A sum of money actually received or paid: whole paise, nothing finer. */
+const isWholePaise = (n: number) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+const WHOLE_PAISE = { message: "Amounts cannot have more than 2 decimal places" };
 
 /** `numeric(15, 3)` stock column. */
 const quantity = z.coerce.number().finite().min(0).max(1e9);
@@ -384,7 +387,7 @@ export const UpdateInvoiceStatusBody = z
     // The route reads `paymentStatus ?? status`; accept either name.
     status: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
     paymentStatus: z.enum(["paid", "unpaid", "partial", "cancelled"]).optional(),
-    paidAmount: money.optional(),
+    paidAmount: money.refine(isWholePaise, WHOLE_PAISE).optional(),
     // How the money arrived, recorded on the payment this creates.
     mode: z.string().max(50).optional(),
     referenceNumber: z.string().max(200).optional(),
@@ -446,7 +449,7 @@ export const CreatePaymentBody = z.object({
   type: z.enum(["received", "paid", "in", "out"]),
   // Strictly positive: direction is the `type`, not the sign. A negative amount
   // let a "received" payment subtract, and zero recorded nothing.
-  amount: z.coerce.number().finite().positive().max(1e12),
+  amount: z.coerce.number().finite().positive().max(1e12).refine(isWholePaise, WHOLE_PAISE),
   date: dateString,
   mode: shortText(30),
   referenceNumber: optionalText(100),

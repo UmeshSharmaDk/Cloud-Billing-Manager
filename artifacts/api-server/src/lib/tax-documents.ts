@@ -29,8 +29,8 @@ export const INVOICE_TYPES = [
   "Debit Note",
 ] as const;
 
-const isCreditNoteType = (type: unknown) => /^\s*credit note/i.test(String(type ?? ""));
-const isProformaType = (type: unknown) => /^\s*proforma/i.test(String(type ?? ""));
+export const isCreditNoteType = (type: unknown) => /^\s*credit note/i.test(String(type ?? ""));
+export const isProformaType = (type: unknown) => /^\s*proforma/i.test(String(type ?? ""));
 
 interface InvoiceColumns {
   status: any;

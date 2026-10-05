@@ -846,6 +846,99 @@ const adminEmail = `admin${uniq}@example.test`;
     String(stockOf("Movable")));
 }
 
+// === check-up: stock follows the stored product and the document type =====
+{
+  const st = await register("stockfix");
+  const T = { token: st.token };
+  const bizId = sqlValue(`SELECT id FROM businesses WHERE user_id = ${st.userId}`);
+  const stockById = (id) => Number(sqlValue(`SELECT stock_quantity FROM products WHERE id=${id}`));
+  const line = (prod, qty, extra = {}) => ({ productId: prod?.id, description: prod?.name ?? "Ghost", quantity: qty, unitPrice: 100, gstRate: 18, ...extra });
+  const mk = async (name, qty) => (await call("POST", "/products", { ...T,
+    body: { name, unit: "Nos", sellingPrice: 100, gstRate: 18, stockQuantity: qty } })).data;
+  const sale = (items, type) => call("POST", "/invoices", { ...T,
+    body: { invoiceDate: "2026-08-05", customerName: "C", placeOfSupply: "27", ...(type ? { type } : {}), items } });
+
+  // Renaming a product after a sale must not strand the reversal.
+  const renamed = await mk("Before Rename", 100);
+  const inv1 = (await sale([line(renamed, 10)])).data.invoice;
+  await call("PATCH", `/products/${renamed.id}`, { ...T, body: { name: "After Rename", unit: "Nos", sellingPrice: 100, gstRate: 18 } });
+  await call("PATCH", `/invoices/${inv1.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling after the product was renamed still restores its stock",
+    stockById(renamed.id) === 100, String(stockById(renamed.id)));
+
+  // A name that matched nothing at sale time must not match a product created later.
+  const inv2 = (await sale([{ description: "Late Product", quantity: 5, unitPrice: 100, gstRate: 18 }])).data.invoice;
+  const late = await mk("Late Product", 20);
+  await call("PATCH", `/invoices/${inv2.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling does not credit a product created after the sale",
+    stockById(late.id) === 20, String(stockById(late.id)));
+
+  // A product id from another business is not stored on the line.
+  const foreign = (await call("POST", "/products", { token: alice.token,
+    body: { name: "Foreign", unit: "Nos", sellingPrice: 1, gstRate: 0, stockQuantity: 50 } })).data;
+  const inv3 = (await sale([{ productId: foreign.id, description: "Not Mine", quantity: 1, unitPrice: 100, gstRate: 18 }])).data.invoice;
+  check("stock-fix", "a foreign product id is replaced, not stored",
+    (inv3.items?.[0]?.productId ?? null) === null, JSON.stringify(inv3.items?.[0]));
+  check("stock-fix", "and the foreign product's stock is untouched", stockById(foreign.id) === 50, String(stockById(foreign.id)));
+
+  // Proforma moves nothing; a credit note brings goods back.
+  const goods = await mk("Directional", 100);
+  const pro = (await sale([line(goods, 10)], "Proforma Invoice")).data.invoice;
+  check("stock-fix", "a proforma invoice does not deduct stock", stockById(goods.id) === 100, String(stockById(goods.id)));
+  const cn = (await sale([line(goods, 4)], "Credit Note")).data.invoice;
+  check("stock-fix", "a credit note returns goods to stock", stockById(goods.id) === 104, String(stockById(goods.id)));
+  await call("PATCH", `/invoices/${cn.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling a credit note takes them out again", stockById(goods.id) === 100, String(stockById(goods.id)));
+  await call("PATCH", `/invoices/${pro.id}/status`, { ...T, body: { status: "cancelled" } });
+  check("stock-fix", "cancelling a proforma moves no stock", stockById(goods.id) === 100, String(stockById(goods.id)));
+
+  // Changing the type moves stock to match.
+  const flip = (await sale([line(goods, 10)])).data.invoice;
+  check("stock-fix", "a tax invoice deducts", stockById(goods.id) === 90, String(stockById(goods.id)));
+  await call("PATCH", `/invoices/${flip.id}`, { ...T, body: { type: "Proforma Invoice" } });
+  check("stock-fix", "turning it into a proforma gives the goods back", stockById(goods.id) === 100, String(stockById(goods.id)));
+
+  // No receipts against a quotation or a credit note.
+  const pro2 = (await sale([line(goods, 1)], "Proforma Invoice")).data.invoice;
+  const payPro = await call("POST", "/payments", { ...T, body: { type: "received", amount: 10, date: "2026-08-06", mode: "cash", invoiceId: pro2.id } });
+  check("stock-fix", "a receipt against a proforma is refused", payPro.status === 409, `status ${payPro.status}`);
+  const cn2 = (await sale([line(goods, 1)], "Credit Note")).data.invoice;
+  const payCn = await call("POST", "/payments", { ...T, body: { type: "received", amount: 10, date: "2026-08-06", mode: "cash", invoiceId: cn2.id } });
+  check("stock-fix", "a receipt against a credit note is refused", payCn.status === 409, `status ${payCn.status}`);
+
+  // Whole paise only.
+  const real = (await sale([line(goods, 1)])).data.invoice;
+  const frac = await call("POST", "/payments", { ...T, body: { type: "received", amount: 0.001, date: "2026-08-06", mode: "cash", invoiceId: real.id } });
+  check("stock-fix", "a payment finer than a paisa is refused", frac.status === 400, `status ${frac.status}`);
+  const fracPaid = await call("PATCH", `/invoices/${real.id}/status`, { ...T, body: { status: "partial", paidAmount: 10.005 } });
+  check("stock-fix", "a paid amount finer than a paisa is refused", fracPaid.status === 400, `status ${fracPaid.status}`);
+
+  // Once money has been received the figures are frozen.
+  await call("POST", "/payments", { ...T, body: { type: "received", amount: 10, date: "2026-08-06", mode: "cash", invoiceId: real.id } });
+  const frozen = await call("PATCH", `/invoices/${real.id}`, { ...T, body: { items: [line(goods, 3)] } });
+  check("stock-fix", "a part-paid invoice's lines cannot be edited", frozen.status === 409, `status ${frozen.status}`);
+
+  // Two concurrent deletes of one purchase return the goods once.
+  const vend = (await call("POST", "/vendors", { ...T, body: { name: "SF Vendor", gstin: "27SVSVS0000V1Z5" } })).data;
+  const bill = (await call("POST", "/purchases", { ...T,
+    body: { vendorId: vend.id, billDate: "2026-08-05", items: [{ productId: goods.id, description: goods.name, quantity: 30, unitPrice: 10, gstRate: 18 }] } })).data;
+  const before = stockById(goods.id);
+  await Promise.all([call("DELETE", `/purchases/${bill.id}`, T), call("DELETE", `/purchases/${bill.id}`, T)]);
+  check("stock-fix", "concurrent deletes of a bill reverse its goods once",
+    stockById(goods.id) === before - 30, `${before} -> ${stockById(goods.id)}`);
+
+  // Concurrent edits leave totals that match the lines that won.
+  const racer = await mk("Racer", 1000);
+  const rinv = (await sale([line(racer, 1)])).data.invoice;
+  await Promise.all([2, 3, 4, 5].map((q) => call("PATCH", `/invoices/${rinv.id}`, { ...T, body: { items: [line(racer, q)] } })));
+  const final = (await call("GET", `/invoices/${rinv.id}`, T)).data;
+  const qty = final.items[0].quantity;
+  check("stock-fix", "after racing edits the total matches the surviving line",
+    Math.abs(final.subtotal - qty * 100) < 0.005, `qty ${qty} subtotal ${final.subtotal}`);
+  check("stock-fix", "and stock matches the surviving quantity", stockById(racer.id) === 1000 - qty,
+    `qty ${qty} stock ${stockById(racer.id)}`);
+}
+
 // === review: marking an invoice paid settles it and records the payment ====
 {
   const pd = await register("paid");
