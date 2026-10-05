@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { Shield, CircleX } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -7,6 +7,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useVerifyRegistration } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
+
+/**
+ * The emailed link carries the token in the URL fragment (`/verify#token=...`), which browsers never
+ * send to the server, so it stays out of static-host access logs and `Referer` headers. A `?token=`
+ * query parameter is still accepted so links that were already emailed keep working.
+ */
+function readVerificationToken(): string | null {
+  const fromHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("token");
+  return fromHash || new URLSearchParams(window.location.search).get("token");
+}
 
 /**
  * The second half of registration, and where the password is chosen.
@@ -24,7 +34,13 @@ export default function VerifyPage() {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const token = new URLSearchParams(window.location.search).get("token");
+  const [token] = useState(readVerificationToken);
+
+  // Once the token is held in state, take it out of the address bar so it does not linger in the
+  // visible URL, browser history or history sync. Path only: drops both the fragment and the query.
+  useEffect(() => {
+    if (token) window.history.replaceState(window.history.state, "", window.location.pathname);
+  }, [token]);
 
   const mutation = useVerifyRegistration({
     mutation: {
