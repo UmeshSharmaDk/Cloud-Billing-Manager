@@ -16,6 +16,8 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 // ---------------------------------------------------------------------------
 
 let _baseUrl: string | null = null;
+// Origin of the configured base URL, or null when there is none (or it is not an absolute URL).
+let _baseOrigin: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
 let _credentials: RequestCredentials | null = null;
 let _csrfTokenGetter: (() => string | null) | null = null;
@@ -29,6 +31,16 @@ let _csrfTokenGetter: (() => string | null) | null = null;
  */
 export function setBaseUrl(url: string | null): void {
   _baseUrl = url ? url.replace(/\/+$/, "") : null;
+  _baseOrigin = null;
+  if (_baseUrl) {
+    try {
+      const origin = new URL(_baseUrl).origin;
+      // Opaque origins serialise as "null"; never treat those as a match.
+      if (origin !== "null") _baseOrigin = origin;
+    } catch {
+      // Not an absolute URL (e.g. a path prefix): only relative requests are trusted.
+    }
+  }
 }
 
 /**
@@ -94,6 +106,39 @@ function applyBaseUrl(input: RequestInfo | URL): RequestInfo | URL {
   if (typeof input === "string") return absolute;
   if (isUrl(input)) return new URL(absolute);
   return new Request(absolute, input as Request);
+}
+
+// Two probe bases, one per scheme: a string such as "https:evil.example" is relative to an https page but
+// absolute (and cross-origin) on an http one, so it is only "relative" if it stays on the probe under both.
+const RELATIVE_PROBES = ["http://relative.invalid", "https://relative.invalid"];
+
+function isRelativeUrl(url: string): boolean {
+  try {
+    // The WHATWG parser resolves "//host/x" and "/\host/x" (and the same with tabs or newlines
+    // smuggled in) to another host, so decide by parsing rather than by looking for a leading "/".
+    return RELATIVE_PROBES.every((probe) => new URL(url, probe).origin === probe);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether ambient credentials (cookies, the CSRF header, the bearer token) may be attached to a request.
+ * That is the case only for relative URLs, URLs on the configured base URL's origin, and, because they
+ * are equivalent to relative ones, URLs on the page's own origin. Everything else is a third party, and
+ * an absolute URL reaching `customFetch` must not be able to collect the session.
+ */
+function isCredentialedDestination(url: string): boolean {
+  if (isRelativeUrl(url)) return true;
+  let origin: string;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return false;
+  }
+  if (origin === "null") return false;
+  if (_baseOrigin !== null && origin === _baseOrigin) return true;
+  return typeof location !== "undefined" && origin === location.origin;
 }
 
 function resolveUrl(input: RequestInfo | URL): string {
@@ -373,9 +418,12 @@ export async function customFetch<T = unknown>(
     headers.set("accept", DEFAULT_JSON_ACCEPT);
   }
 
+  const requestInfo = { method, url: resolveUrl(input) };
+  const credentialed = isCredentialedDestination(requestInfo.url);
+
   // Attach bearer token when an auth getter is configured and no
   // Authorization header has been explicitly provided.
-  if (_authTokenGetter && !headers.has("authorization")) {
+  if (credentialed && _authTokenGetter && !headers.has("authorization")) {
     const token = await _authTokenGetter();
     if (token) {
       headers.set("authorization", `Bearer ${token}`);
@@ -384,18 +432,18 @@ export async function customFetch<T = unknown>(
 
   // Echo the CSRF token on state-changing requests. Safe methods do not need
   // it, and adding it there would only widen what a preflight must allow.
-  if (_csrfTokenGetter && !["GET", "HEAD", "OPTIONS"].includes(method)) {
+  if (credentialed && _csrfTokenGetter && !["GET", "HEAD", "OPTIONS"].includes(method)) {
     const csrf = _csrfTokenGetter();
     if (csrf) headers.set("x-csrf-token", csrf);
   }
-
-  const requestInfo = { method, url: resolveUrl(input) };
 
   const response = await fetch(input, {
     ...init,
     method,
     headers,
-    ...(_credentials ? { credentials: _credentials } : {}),
+    // Cookies only go to destinations that are trusted with them; a caller-supplied
+    // `credentials: "include"` is overridden for any other origin.
+    ...(credentialed ? (_credentials ? { credentials: _credentials } : {}) : { credentials: "omit" as const }),
   });
 
   if (!response.ok) {
