@@ -8,16 +8,23 @@ on:
 permissions:
   contents: read
 
+# Third-party actions are pinned to full commit SHAs, not tags: a tag can be moved to different code
+# after the fact, a SHA cannot. The trailing comment names the release the SHA is. To update one,
+# resolve the new tag to its commit (for an annotated tag, the `^{}` line of
+# `git ls-remote --tags https://github.com/<owner>/<repo> 'refs/tags/<tag>*'`) and change the SHA
+# and the comment together.
+
 jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -78,16 +85,24 @@ jobs:
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          # gitleaks-action runs `gitleaks detect` over a commit range and needs those commits (and
+          # the parent of the first one) to exist locally, hence the full clone. What it then scans
+          # depends on the event: a pull_request run scans the commits in the PR and a push run scans
+          # the commits in that push (`--no-merges --first-parent <first>^..<last>`). It walks the
+          # whole history only for workflow_dispatch and schedule runs, and this workflow has
+          # neither. So a secret already sitting in older history is not re-found by every run;
+          # audit that by hand with `gitleaks detect --config .gitleaks.toml`.
           fetch-depth: 0
       # A hardcoded signing secret shipped in this repository once already.
       #
       # `.gitleaks.toml` baselines exactly the values that leak is made of, and
       # nothing else — see the comments there. They are rotations the operator
       # owes, not findings waved away, and a new secret of any shape still fails.
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
@@ -95,8 +110,9 @@ jobs:
   no-fallback-secrets:
     name: No fallback secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Catches the exact shape of the original finding: a secret read from the
       # environment with a literal default, so a deployment that forgets to set
       # the variable silently uses a value that is public in this repository.
@@ -113,12 +129,13 @@ jobs:
   typecheck:
     name: Typecheck and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -127,9 +144,46 @@ jobs:
       - name: Unit tests
         run: pnpm --filter @workspace/api-server run test
 
+      # `pnpm run typecheck` does not build the app, and two security properties of the
+      # browser bundle only exist in the build output: the Content-Security-Policy <meta> tag
+      # (vite.config.ts strips it for `vite dev`, so it is only ever in a build) and the
+      # self-hosted OCR assets that let that policy stay at 'self' (without them tesseract.js
+      # falls back to jsDelivr, which the policy blocks, and OCR import breaks at runtime).
+      - name: Build the frontend
+        env:
+          PORT: "25512"
+          BASE_PATH: /
+        run: pnpm --filter @workspace/gst-platform run build
+
+      - name: Assert the frontend build ships its CSP and self-hosted OCR assets
+        run: |
+          dist=artifacts/gst-platform/dist/public
+          failed=0
+          if [ ! -f "$dist/index.html" ]; then
+            echo "::error::$dist/index.html was not produced by the frontend build"
+            exit 1
+          fi
+          if ! grep -q 'http-equiv="Content-Security-Policy"' "$dist/index.html"; then
+            echo "::error::$dist/index.html has no Content-Security-Policy meta tag; the app would ship with no CSP"
+            failed=1
+          fi
+          for asset in \
+            ocr/worker.min.js \
+            ocr/core/tesseract-core-simd-lstm.wasm.js \
+            ocr/core/tesseract-core-lstm.wasm.js \
+            ocr/lang/eng.traineddata.gz; do
+            if [ ! -s "$dist/$asset" ]; then
+              echo "::error::$dist/$asset is missing or empty; OCR import would fall back to a CDN that the CSP blocks"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then exit 1; fi
+          echo "CSP meta tag and self-hosted OCR assets are present in the build."
+
   integration:
     name: Security integration suite
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     # The suite is the only thing standing between this repository and the
     # findings it just fixed coming back. It needs a real database: the
@@ -182,11 +236,11 @@ jobs:
       MAIL_FROM: GST Platform <no-reply@example.test>
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 10
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: pnpm
@@ -224,6 +278,95 @@ jobs:
 
       - name: Build the API server
         run: pnpm --filter @workspace/api-server run build
+
+      # The server is written to refuse to start on insecure configuration (no or short signing
+      # secret, no or wildcard CORS origins, production without a mail transport). The suite below
+      # always runs it with a valid configuration, so nothing else would notice if one of those
+      # checks were removed or weakened. Each case starts the built server with exactly one thing
+      # wrong, under `env -i` so that none of this job's (valid) environment leaks in, and requires
+      # that it exits non-zero within 10 seconds, names the setting at fault, and never answers on
+      # its port. A control run with a valid configuration proves the harness itself can boot it,
+      # so a refusal cannot be a crash from something unrelated.
+      - name: Assert the server refuses to boot with insecure configuration
+        run: |
+          secret="$(openssl rand -base64 48)"
+          origins="http://localhost:25512"
+          failures=0
+
+          answering() {
+            curl -s --max-time 2 -o /dev/null "http://127.0.0.1:${PORT}/api/healthz"
+          }
+
+          expect_refusal() {
+            local label="$1" setting="$2" out status
+            shift 2
+            out="$(mktemp)"
+            status=0
+            timeout 10 env -i PATH="$PATH" PORT="$PORT" DATABASE_URL="$DATABASE_URL" "$@" \
+              node artifacts/api-server/dist/index.mjs >"$out" 2>&1 || status=$?
+            if [ "$status" -eq 0 ]; then
+              echo "::error::[$label] the server exited 0 instead of refusing to boot"
+              failures=$((failures + 1))
+            elif [ "$status" -eq 124 ]; then
+              echo "::error::[$label] the server was still running after 10 seconds; it must refuse to boot"
+              failures=$((failures + 1))
+            elif ! grep -q -- "$setting" "$out"; then
+              echo "::error::[$label] exited $status, but without naming $setting, so it may have failed for another reason"
+              sed 's/^/    | /' "$out" | head -20
+              failures=$((failures + 1))
+            else
+              echo "ok [$label]: exited $status, $(grep -m1 -- "$setting" "$out" | cut -c1-100)"
+            fi
+            if answering; then
+              echo "::error::[$label] something is answering on port $PORT"
+              failures=$((failures + 1))
+            fi
+            rm -f "$out"
+          }
+
+          # Control: a valid configuration must boot under this same `env -i` harness. `env` execs
+          # node, so $! is the server's own PID and the kill below really stops it (wrapping this
+          # in a shell function would leave node running and holding the port).
+          control_log="$(mktemp)"
+          env -i PATH="$PATH" PORT="$PORT" DATABASE_URL="$DATABASE_URL" \
+            SESSION_SECRET="$secret" ALLOWED_ORIGINS="$origins" NODE_ENV=production \
+            MAIL_OUTBOX_PATH=/tmp/control-outbox.jsonl \
+            node artifacts/api-server/dist/index.mjs >"$control_log" 2>&1 &
+          control_pid=$!
+          booted=0
+          for _ in $(seq 1 30); do
+            if curl -sf --max-time 2 "http://127.0.0.1:${PORT}/api/healthz" >/dev/null; then booted=1; break; fi
+            sleep 1
+          done
+          kill "$control_pid" 2>/dev/null || true
+          wait "$control_pid" 2>/dev/null || true
+          if [ "$booted" -ne 1 ]; then
+            echo "::error::the control server (valid configuration) did not boot, so the refusals below would prove nothing"
+            cat "$control_log"
+            exit 1
+          fi
+          if answering; then
+            echo "::error::the control server is still answering on port $PORT after being stopped"
+            exit 1
+          fi
+          echo "ok [control]: a valid configuration boots"
+
+          expect_refusal "no SESSION_SECRET" SESSION_SECRET \
+            ALLOWED_ORIGINS="$origins" NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
+          expect_refusal "SESSION_SECRET too short" SESSION_SECRET \
+            SESSION_SECRET=too-short ALLOWED_ORIGINS="$origins" NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
+          expect_refusal "no ALLOWED_ORIGINS" ALLOWED_ORIGINS \
+            SESSION_SECRET="$secret" NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
+          expect_refusal "ALLOWED_ORIGINS=*" ALLOWED_ORIGINS \
+            SESSION_SECRET="$secret" ALLOWED_ORIGINS='*' NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
+          expect_refusal "production without a mail transport" SMTP_URL \
+            SESSION_SECRET="$secret" ALLOWED_ORIGINS="$origins" NODE_ENV=production
+
+          if [ "$failures" -ne 0 ]; then
+            echo "::error::$failures check(s) failed: the server does not reliably refuse insecure configuration"
+            exit 1
+          fi
+          echo "The server refused to boot in every insecure configuration."
 
       - name: Start the API server
         run: |
