@@ -2372,6 +2372,9 @@ const adminEmail = `admin${uniq}@example.test`;
 
   // Two simultaneous creates contend for the same locked admin row. Exactly
   // one consumes the remaining seat; the other gets the request-capacity path.
+  // The allowance is one, and the first child above holds it, so open exactly
+  // one more seat for the race and put the allowance back afterwards.
+  sqlExec(`UPDATE users SET user_limit=2 WHERE id=${tenantAdminId}`);
   const concurrent = await Promise.all([1, 2].map((n) => call("POST", "/users", {
     token: accepted.data?.token,
     body: {
@@ -2381,6 +2384,7 @@ const adminEmail = `admin${uniq}@example.test`;
       role: "user",
     },
   })));
+  sqlExec(`UPDATE users SET user_limit=1 WHERE id=${tenantAdminId}`);
   const statuses = concurrent.map((response) => response.status).sort((a, b) => a - b);
   check("capacity", "concurrent user creation cannot exceed the allowance",
     statuses[0] === 201 && statuses[1] === 402, statuses.join(", "));
@@ -2388,7 +2392,7 @@ const adminEmail = `admin${uniq}@example.test`;
   check("capacity", "quota errors include the fixed INR 1,000 per-user quote",
     quotaResponse?.data?.amountInr === 1000 &&
       quotaResponse?.data?.currency === "INR" &&
-      quotaResponse?.data?.userLimit === 1);
+      quotaResponse?.data?.userLimit === 2);
   check("capacity", "exactly one concurrent account owns the final seat",
     sqlValue(`SELECT count(*) FROM users WHERE created_by_admin_id=${tenantAdminId} AND role='user' AND deleted_at IS NULL`) === "2");
 
