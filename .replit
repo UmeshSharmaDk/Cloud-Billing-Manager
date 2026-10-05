@@ -39,5 +39,3 @@ channel = "stable-25_05"
 [userenv.shared]
 
 [userenv.development]
-SUPERADMIN_BOOTSTRAP_EMAIL = "stechies.vikask@gmail.com"
-SUPERADMIN_BOOTSTRAP_NAME = "Super Admin"
