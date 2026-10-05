@@ -13,6 +13,7 @@ import {
 } from "../lib/password";
 import { validateBody } from "../middleware/validate";
 import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody } from "../schemas";
+import { recordAudit } from "../lib/audit";
 import { validatePassword } from "../lib/password-policy";
 import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
@@ -597,6 +598,12 @@ router.post("/accept-admin-invite", authIpLimiter, validateBody(AcceptAdminInvit
     if (!admin) {
       return res.status(400).json({ error: "That invitation is invalid or has expired." });
     }
+
+    await recordAudit({
+      actorId: admin.id, actorEmail: admin.email, action: "admin.created",
+      targetType: "user", targetId: admin.id, sourceIp: req.ip,
+      details: { invitationId: pending.id, invitedByAdminId: pending.invitedByAdminId, userLimit: admin.userLimit },
+    });
 
     const session = generateToken(admin.id, admin.role, admin.tokenVersion);
     setSessionCookies(res, session);

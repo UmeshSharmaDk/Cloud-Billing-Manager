@@ -8,7 +8,7 @@ import {
   adminInvitationsTable,
   capacityRequestsTable,
 } from "@workspace/db";
-import { requireAdmin, requireAuth, requireSuperadmin } from "./auth";
+import { requireAuth, requireAdmin, requireSuperadmin } from "./auth";
 import { validateBody, validateParams } from "../middleware/validate";
 import {
   CreateAdminInvitationBody,
@@ -30,7 +30,10 @@ export const ADDITIONAL_USER_PRICE_INR = 1000;
 const INVITATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 const router = Router();
-router.use(systemScope);
+// Authenticate first: an anonymous request must not take a pooled connection and
+// open a policy-free transaction. Admins reach the capacity-request routes, so the
+// router admits admins and each privileged route adds `requireSuperadmin`.
+router.use(requireAuth, requireAdmin, systemScope);
 
 type Req = AuthedRequest<any, any, IdParams>;
 const tokenHash = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
@@ -46,7 +49,7 @@ function serializeInvitation(invite: typeof adminInvitationsTable.$inferSelect) 
   };
 }
 
-router.get("/admins", requireAuth, requireSuperadmin, async (_req: Req, res) => {
+router.get("/admins", requireSuperadmin, async (_req: Req, res) => {
   const admins = await db.select().from(usersTable)
     .where(and(eq(usersTable.role, "admin"), isNull(usersTable.deletedAt)))
     .orderBy(desc(usersTable.createdAt));
@@ -75,7 +78,7 @@ router.get("/admins", requireAuth, requireSuperadmin, async (_req: Req, res) => 
   });
 });
 
-router.post("/admin-invitations", requireAuth, requireSuperadmin, validateBody(CreateAdminInvitationBody), async (req: Req, res) => {
+router.post("/admin-invitations", requireSuperadmin, validateBody(CreateAdminInvitationBody), async (req: Req, res) => {
   if (config.mail.kind === "log") {
     return res.status(503).json({ error: "Email delivery is not configured in this environment." });
   }
@@ -118,10 +121,10 @@ router.post("/admin-invitations", requireAuth, requireSuperadmin, validateBody(C
     throw err;
   }
 
-  const link = `${config.appBaseUrl}/accept-admin-invite?token=${encodeURIComponent(rawToken)}`;
+  const link = `${config.appBaseUrl}/accept-admin-invite#token=${encodeURIComponent(rawToken)}`;
   rawToken = "";
   try {
-    await mailer.send(adminInvitationMessage(normalisedEmail, name, link));
+    await mailer.send(adminInvitationMessage(normalisedEmail, link));
   } catch (err) {
     req.log?.error({ error: (err as Error)?.name }, "Could not send administrator invitation");
     await rootDb.delete(adminInvitationsTable).where(eq(adminInvitationsTable.id, invite.id));
@@ -139,14 +142,14 @@ router.post("/admin-invitations", requireAuth, requireSuperadmin, validateBody(C
   return res.status(201).json(serializeInvitation(invite));
 });
 
-router.get("/admin-invitations", requireAuth, requireSuperadmin, async (_req: Req, res) => {
+router.get("/admin-invitations", requireSuperadmin, async (_req: Req, res) => {
   const invitations = await db.select().from(adminInvitationsTable)
     .where(and(isNull(adminInvitationsTable.usedAt), gt(adminInvitationsTable.expiresAt, new Date())))
     .orderBy(desc(adminInvitationsTable.createdAt));
   return res.json({ invitations: invitations.map(serializeInvitation) });
 });
 
-router.patch("/admins/:id/limit", requireAuth, requireSuperadmin, validateParams(IdParam),
+router.patch("/admins/:id/limit", requireSuperadmin, validateParams(IdParam),
   validateBody(UpdateAdminLimitBody), async (req: Req, res) => {
     const targetId = req.validatedParams.id;
     const stepUp = await verifyStepUp(req);
@@ -195,7 +198,7 @@ router.patch("/admins/:id/limit", requireAuth, requireSuperadmin, validateParams
     return res.json(mapUser(result.admin));
   });
 
-router.get("/capacity-requests", requireAuth, requireAdmin, async (req: Req, res) => {
+router.get("/capacity-requests", requireAdmin, async (req: Req, res) => {
   const conditions = req.userRole === "admin"
     ? [eq(capacityRequestsTable.adminId, req.user.id)]
     : [];
@@ -225,7 +228,7 @@ router.get("/capacity-requests", requireAuth, requireAdmin, async (req: Req, res
   });
 });
 
-router.post("/capacity-requests", requireAuth, requireAdmin, validateBody(CreateCapacityRequestBody),
+router.post("/capacity-requests", requireAdmin, validateBody(CreateCapacityRequestBody),
   async (req: Req, res) => {
     if (req.userRole !== "admin") {
       return res.status(403).json({ error: "Only tenant administrators can request user capacity." });
@@ -307,7 +310,7 @@ router.post("/capacity-requests", requireAuth, requireAdmin, validateBody(Create
     });
   });
 
-router.patch("/capacity-requests/:id/review", requireAuth, requireSuperadmin, validateParams(IdParam),
+router.patch("/capacity-requests/:id/review", requireSuperadmin, validateParams(IdParam),
   validateBody(ReviewCapacityRequestBody), async (req: Req, res) => {
     const stepUp = await verifyStepUp(req);
     if (!stepUp.ok) return sendStepUpFailure(res, stepUp);

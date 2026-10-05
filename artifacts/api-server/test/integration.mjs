@@ -145,7 +145,7 @@ function verificationToken(email) {
 function adminInvitationToken(email) {
   for (const message of [...outbox()].reverse()) {
     if (message.to !== email) continue;
-    const match = /accept-admin-invite\?token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
+    const match = /accept-admin-invite[?#]token=([A-Za-z0-9_-]+)/.exec(message.text ?? "");
     if (match) return match[1];
   }
   return null;
@@ -998,6 +998,32 @@ const adminEmail = `admin${uniq}@example.test`;
     codes.join(","));
   check("parallel-guess", "even the correct password is refused while locked",
     (await call("POST", "/auth/change-password", { token: g.token, body: { currentPassword: PASSWORD, newPassword: "an-entirely-new-passphrase-77" } })).status === 429);
+}
+
+// === check-up: superadmin router and identity changes ======================
+{
+  const anon = await call("GET", "/superadmin/admins", {});
+  check("superadmin-gate", "an anonymous request to the superadmin router is refused", anon.status === 401, `status ${anon.status}`);
+  const anonUnknown = await call("GET", "/superadmin/no-such-route", {});
+  check("superadmin-gate", "so is an unknown path under it", anonUnknown.status === 401, `status ${anonUnknown.status}`);
+  const plain = await register("sagateuser");
+  const plainAdmins = await call("GET", "/superadmin/admins", { token: plain.token });
+  check("superadmin-gate", "a plain user is refused", plainAdmins.status === 403, `status ${plainAdmins.status}`);
+
+  const sa = await register("saidentity");
+  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${sa.userId}`);
+  const holder = await register("saholder");
+  const subject = await register("sasubject");
+  const clash = await call("PATCH", `/users/${subject.userId}`, { token: sa.token, body: { email: holder.email } });
+  check("superadmin-identity", "changing a user's email to a taken address is a 409, not a 500", clash.status === 409, `status ${clash.status}`);
+
+  const adm = await register("saadmintarget");
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${adm.userId}`);
+  const newEmail = `renamed${Date.now()}@example.test`;
+  const bare = await call("PATCH", `/users/${adm.userId}`, { token: sa.token, body: { email: newEmail } });
+  check("superadmin-identity", "changing an administrator's email needs password confirmation", bare.status === 403, `status ${bare.status}`);
+  const confirmed = await call("PATCH", `/users/${adm.userId}`, { token: sa.token, body: { email: newEmail, confirmPassword: PASSWORD } });
+  check("superadmin-identity", "and succeeds with it", confirmed.status === 200 && confirmed.data?.email === newEmail, `status ${confirmed.status}`);
 }
 
 // === review: marking an invoice paid settles it and records the payment ====
@@ -2330,6 +2356,10 @@ const adminEmail = `admin${uniq}@example.test`;
   const acceptedMe = await call("GET", "/auth/me", { jar: inviteJar });
   check("superadmin", "the accepted session resolves to the new admin account",
     acceptedMe.status === 200 && acceptedMe.data?.email === adminEmail);
+  check("superadmin", "accepting an invitation is audited",
+    Number(sqlValue(`SELECT count(*) FROM audit_log WHERE action='admin.created' AND target_id=${accepted.data?.user?.id}`)) === 1);
+  check("superadmin", "the invitation link carries its token in the fragment",
+    /accept-admin-invite#token=/.test(outbox().filter((m) => m.to === adminEmail).at(-1)?.text ?? ""));
   const reused = await call("POST", "/auth/accept-admin-invite", {
     body: { token: adminToken, password: ADMIN_PASSWORD },
   });

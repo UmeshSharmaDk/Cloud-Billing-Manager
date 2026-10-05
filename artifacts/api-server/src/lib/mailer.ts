@@ -88,15 +88,6 @@ function selectMailer(): Mailer {
 export const mailer: Mailer = selectMailer();
 
 /**
- * Text typed by someone else, made safe to sit inside one line of a message:
- * control characters and line breaks collapse to a space and the length is
- * capped, so it cannot be turned into a forged paragraph.
- */
-function plainLine(text: string): string {
-  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/ {2,}/g, " ").trim().slice(0, 80);
-}
-
-/**
  * Sent when the address is free: here is the link that finishes your signup.
  */
 /**
@@ -154,12 +145,12 @@ export function alreadyRegisteredMessage(to: string): Message {
 }
 
 /** Sent to an invited administrator so they can set their own password. */
-export function adminInvitationMessage(to: string, name: string, link: string): Message {
+export function adminInvitationMessage(to: string, link: string): Message {
   return {
     to,
     subject: "Set up your GST Pro administrator account",
     text: [
-      `Hello ${plainLine(name)},`,
+      "Hello,",
       "",
       "You have been invited to manage users in GST Pro.",
       "Open the one-time link below to choose a password and activate your account:",

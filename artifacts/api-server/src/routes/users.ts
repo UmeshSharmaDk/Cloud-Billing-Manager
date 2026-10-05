@@ -188,9 +188,23 @@ router.patch("/:id", requireAdmin, validateParams(IdParam), validateBody(UpdateU
       if (guard) return res.status(409).json({ error: guard });
     }
 
+    // An email is the identity of the account. Changing a privileged account's
+    // takes the same password confirmation as the other privileged changes, and
+    // a collision is a 409 rather than a unique-index 500.
+    const newEmail = email ? String(email).toLowerCase() : undefined;
+    if (newEmail && newEmail !== before.email) {
+      if (before.role !== "user") {
+        const stepUp = await verifyStepUp(req);
+        if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+      }
+      const [taken] = await db.select({ id: usersTable.id }).from(usersTable)
+        .where(eq(usersTable.email, newEmail)).limit(1);
+      if (taken) return res.status(409).json({ error: "That email address is already registered" });
+    }
+
     const updates: any = {};
     if (name) updates.name = name;
-    if (email) updates.email = email.toLowerCase();
+    if (newEmail) updates.email = newEmail;
     if (role) updates.role = role;
     if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
     if (subscriptionEnd !== undefined) updates.subscriptionEnd = subscriptionEnd;
