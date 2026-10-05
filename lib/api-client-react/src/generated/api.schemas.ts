@@ -189,6 +189,142 @@ export interface AuthResponse {
   user: User;
 }
 
+export interface AdminAccount {
+  id: number;
+  name: string;
+  email: string;
+  isActive: boolean;
+  userLimit: number;
+  userCount: number;
+  availableSlots: number;
+  createdAt: string;
+  additionalUserPriceInr?: number;
+}
+
+export interface AdminAccountsResponse {
+  admins: AdminAccount[];
+  defaultUserLimit: number;
+  additionalUserPriceInr: number;
+}
+
+export interface AdminInvitation {
+  id: number;
+  name: string;
+  email: string;
+  userLimit: number;
+  expiresAt: string;
+  createdAt: string;
+}
+
+export interface AdminInvitationListResponse {
+  invitations: AdminInvitation[];
+}
+
+export interface AdminInvitationInput {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  name: string;
+  /** @maxLength 320 */
+  email: string;
+  /**
+     * @minimum 0
+     * @maximum 100000
+     */
+  userLimit?: number;
+  /**
+     * @minLength 1
+     * @maxLength 1024
+     */
+  confirmPassword: string;
+}
+
+export interface AdminLimitInput {
+  /**
+     * @minimum 0
+     * @maximum 100000
+     */
+  userLimit: number;
+  /**
+     * @minLength 1
+     * @maxLength 1024
+     */
+  confirmPassword: string;
+}
+
+export type CapacityRequestStatus = typeof CapacityRequestStatus[keyof typeof CapacityRequestStatus];
+
+
+export const CapacityRequestStatus = {
+  pending: 'pending',
+  approved: 'approved',
+  declined: 'declined',
+} as const;
+
+export interface CapacityRequest {
+  id: number;
+  adminId: number;
+  adminName: string;
+  adminEmail: string;
+  additionalUsers: number;
+  amountInr: number;
+  status: CapacityRequestStatus;
+  /** @nullable */
+  reviewedAt?: string | null;
+  /** @nullable */
+  grantedUserLimit?: number | null;
+  createdAt: string;
+}
+
+export interface CapacityRequestListResponse {
+  requests: CapacityRequest[];
+  additionalUserPriceInr: number;
+}
+
+export interface CapacityRequestInput {
+  /**
+     * @minimum 1
+     * @maximum 100000
+     */
+  additionalUsers: number;
+}
+
+export type CapacityRequestReviewInputDecision = typeof CapacityRequestReviewInputDecision[keyof typeof CapacityRequestReviewInputDecision];
+
+
+export const CapacityRequestReviewInputDecision = {
+  approve: 'approve',
+  decline: 'decline',
+} as const;
+
+export interface CapacityRequestReviewInput {
+  decision: CapacityRequestReviewInputDecision;
+  /**
+     * @minimum 0
+     * @maximum 100000
+     */
+  userLimit?: number;
+  /**
+     * @minLength 1
+     * @maxLength 1024
+     */
+  confirmPassword: string;
+}
+
+export interface AcceptAdminInvitationInput {
+  /**
+     * @minLength 1
+     * @maxLength 512
+     */
+  token: string;
+  /**
+     * @minLength 12
+     * @maxLength 1024
+     */
+  password: string;
+}
+
 export interface UserListResponse {
   users: User[];
   total: number;

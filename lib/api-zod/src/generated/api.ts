@@ -1802,6 +1802,178 @@ export const DeleteEwayBillResponse = zod.object({
 
 
 /**
+ * @summary List admin accounts and their managed-user usage
+ */
+export const ListSuperadminAdminsResponse = zod.object({
+  "admins": zod.array(zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "isActive": zod.boolean(),
+  "userLimit": zod.number(),
+  "userCount": zod.number(),
+  "availableSlots": zod.number(),
+  "createdAt": zod.string(),
+  "additionalUserPriceInr": zod.number().optional()
+})),
+  "defaultUserLimit": zod.number(),
+  "additionalUserPriceInr": zod.number()
+})
+
+
+/**
+ * @summary List outstanding administrator invitations
+ */
+export const ListAdminInvitationsResponse = zod.object({
+  "invitations": zod.array(zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "userLimit": zod.number(),
+  "expiresAt": zod.string(),
+  "createdAt": zod.string()
+}))
+})
+
+
+/**
+ * @summary Invite an administrator to set up their account
+ */
+export const createAdminInvitationBodyNameMax = 200;
+
+export const createAdminInvitationBodyEmailMax = 320;
+
+export const createAdminInvitationBodyUserLimitDefault = 15;
+export const createAdminInvitationBodyUserLimitMin = 0;
+export const createAdminInvitationBodyUserLimitMax = 100000;
+
+export const createAdminInvitationBodyConfirmPasswordMax = 1024;
+
+
+
+export const CreateAdminInvitationBody = zod.object({
+  "name": zod.string().min(1).max(createAdminInvitationBodyNameMax),
+  "email": zod.string().email().max(createAdminInvitationBodyEmailMax),
+  "userLimit": zod.number().min(createAdminInvitationBodyUserLimitMin).max(createAdminInvitationBodyUserLimitMax).default(createAdminInvitationBodyUserLimitDefault),
+  "confirmPassword": zod.string().min(1).max(createAdminInvitationBodyConfirmPasswordMax)
+})
+
+
+/**
+ * @summary Explicitly change an administrator's user allowance
+ */
+export const UpdateSuperadminAdminLimitParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const updateSuperadminAdminLimitBodyUserLimitMin = 0;
+export const updateSuperadminAdminLimitBodyUserLimitMax = 100000;
+
+export const updateSuperadminAdminLimitBodyConfirmPasswordMax = 1024;
+
+
+
+export const UpdateSuperadminAdminLimitBody = zod.object({
+  "userLimit": zod.number().min(updateSuperadminAdminLimitBodyUserLimitMin).max(updateSuperadminAdminLimitBodyUserLimitMax),
+  "confirmPassword": zod.string().min(1).max(updateSuperadminAdminLimitBodyConfirmPasswordMax)
+})
+
+export const UpdateSuperadminAdminLimitResponse = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "isActive": zod.boolean(),
+  "userLimit": zod.number(),
+  "userCount": zod.number(),
+  "availableSlots": zod.number(),
+  "createdAt": zod.string(),
+  "additionalUserPriceInr": zod.number().optional()
+})
+
+
+/**
+ * @summary List capacity requests for the current admin or all admins
+ */
+export const ListCapacityRequestsResponse = zod.object({
+  "requests": zod.array(zod.object({
+  "id": zod.number(),
+  "adminId": zod.number(),
+  "adminName": zod.string(),
+  "adminEmail": zod.string(),
+  "additionalUsers": zod.number(),
+  "amountInr": zod.number(),
+  "status": zod.enum(['pending', 'approved', 'declined']),
+  "reviewedAt": zod.string().nullish(),
+  "grantedUserLimit": zod.number().nullish(),
+  "createdAt": zod.string()
+})),
+  "additionalUserPriceInr": zod.number()
+})
+
+
+/**
+ * @summary Request additional managed-user capacity
+ */
+export const createCapacityRequestBodyAdditionalUsersMax = 100000;
+
+
+
+export const CreateCapacityRequestBody = zod.object({
+  "additionalUsers": zod.number().min(1).max(createCapacityRequestBodyAdditionalUsersMax)
+})
+
+
+/**
+ * @summary Approve with an explicit new limit or decline a pending request
+ */
+export const ReviewCapacityRequestParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const reviewCapacityRequestBodyUserLimitMin = 0;
+export const reviewCapacityRequestBodyUserLimitMax = 100000;
+
+export const reviewCapacityRequestBodyConfirmPasswordMax = 1024;
+
+
+
+export const ReviewCapacityRequestBody = zod.object({
+  "decision": zod.enum(['approve', 'decline']),
+  "userLimit": zod.number().min(reviewCapacityRequestBodyUserLimitMin).max(reviewCapacityRequestBodyUserLimitMax).optional(),
+  "confirmPassword": zod.string().min(1).max(reviewCapacityRequestBodyConfirmPasswordMax)
+})
+
+export const ReviewCapacityRequestResponse = zod.object({
+  "id": zod.number(),
+  "adminId": zod.number(),
+  "adminName": zod.string(),
+  "adminEmail": zod.string(),
+  "additionalUsers": zod.number(),
+  "amountInr": zod.number(),
+  "status": zod.enum(['pending', 'approved', 'declined']),
+  "reviewedAt": zod.string().nullish(),
+  "grantedUserLimit": zod.number().nullish(),
+  "createdAt": zod.string()
+})
+
+
+/**
+ * @summary Set a password and activate an invited administrator account
+ */
+export const acceptAdminInvitationBodyTokenMax = 512;
+
+export const acceptAdminInvitationBodyPasswordMin = 12;
+export const acceptAdminInvitationBodyPasswordMax = 1024;
+
+
+
+export const AcceptAdminInvitationBody = zod.object({
+  "token": zod.string().min(1).max(acceptAdminInvitationBodyTokenMax),
+  "password": zod.string().min(acceptAdminInvitationBodyPasswordMin).max(acceptAdminInvitationBodyPasswordMax)
+})
+
+
+/**
  * @summary Admin platform stats
  */
 export const GetAdminStatsResponse = zod.object({

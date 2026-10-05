@@ -28,13 +28,19 @@ export type AuditAction =
   | "user.deleted"
   | "user.restored"
   | "user.status_changed"
-  | "user.subscription_changed";
+  | "user.subscription_changed"
+  | "admin.created"
+  | "admin.invitation_sent"
+  | "admin.user_limit_changed"
+  | "capacity_request.created"
+  | "capacity_request.approved"
+  | "capacity_request.declined";
 
 interface AuditInput {
   actorId: number;
   actorEmail: string;
   action: AuditAction;
-  targetType: "user";
+  targetType: "user" | "admin_invitation" | "capacity_request";
   targetId?: number | null;
   details?: Record<string, unknown>;
   sourceIp?: string | null;

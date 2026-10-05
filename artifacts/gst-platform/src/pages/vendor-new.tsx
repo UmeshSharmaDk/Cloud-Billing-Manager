@@ -27,7 +27,17 @@ export default function VendorNewPage() {
     e.preventDefault();
     mutation.mutate({ data: form as any }, {
       onSuccess: () => { toast({ title: "Vendor added!" }); setLocation("/vendors"); },
-      onError: () => toast({ title: "Failed to add vendor", variant: "destructive" }),
+      onError: (error: any) => {
+        const message = error instanceof Error ? error.message : "";
+        const sessionExpired = error?.status === 401 || message.includes("HTTP 401");
+        toast({
+          title: sessionExpired ? "Your session has expired" : "Failed to add vendor",
+          description: sessionExpired
+            ? "Please sign in again and retry."
+            : message.replace(/^HTTP \d+[^:]*:\s*/, "") || "Please check the vendor details and try again.",
+          variant: "destructive",
+        });
+      },
     });
   };
 

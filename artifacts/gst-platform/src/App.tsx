@@ -33,6 +33,8 @@ import SettingsPage from "@/pages/settings";
 import AdminDashboardPage from "@/pages/admin-dashboard";
 import AdminUsersPage from "@/pages/admin-users";
 import AdminUserDetailPage from "@/pages/admin-user-detail";
+import SuperadminDashboardPage from "@/pages/superadmin-dashboard";
+import AcceptAdminInvitePage from "@/pages/accept-admin-invite";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 1000 * 60 } }
@@ -43,7 +45,9 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
   if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
   if (!user) return <Redirect to="/login" />;
   if (adminOnly && user.role !== "admin") return <Redirect to="/dashboard" />;
-  if (!adminOnly && user.role === "admin") return <Redirect to="/admin" />;
+  if (!adminOnly && user.role !== "user") {
+    return <Redirect to={user.role === "superadmin" ? "/superadmin" : "/admin"} />;
+  }
   return <AppShell><Component /></AppShell>;
 }
 
@@ -55,12 +59,21 @@ function AdminRoute({ component: Component }: { component: React.ComponentType }
   return <AppShell><Component /></AppShell>;
 }
 
+function SuperadminRoute({ component: Component }: { component: React.ComponentType }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (!user) return <Redirect to="/login" />;
+  if (user.role !== "superadmin") return <Redirect to={user.role === "admin" ? "/admin" : "/dashboard"} />;
+  return <AppShell><Component /></AppShell>;
+}
+
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={LoginPage} />
       <Route path="/register" component={RegisterPage} />
       <Route path="/verify" component={VerifyPage} />
+      <Route path="/accept-admin-invite" component={AcceptAdminInvitePage} />
       <Route path="/">{() => <Redirect to="/login" />}</Route>
       <Route path="/dashboard">{() => <ProtectedRoute component={DashboardPage} />}</Route>
       <Route path="/invoices">{() => <ProtectedRoute component={InvoicesPage} />}</Route>
@@ -87,6 +100,7 @@ function Router() {
       <Route path="/admin">{() => <AdminRoute component={AdminDashboardPage} />}</Route>
       <Route path="/admin/users">{() => <AdminRoute component={AdminUsersPage} />}</Route>
       <Route path="/admin/users/:id">{() => <AdminRoute component={AdminUserDetailPage} />}</Route>
+      <Route path="/superadmin">{() => <SuperadminRoute component={SuperadminDashboardPage} />}</Route>
       <Route component={NotFound} />
     </Switch>
   );

@@ -147,6 +147,8 @@ export const ChangePasswordBody = z.object({
  * whatever `role` string the body carried, so `{"role":"superadmin"}` wrote a
  * value no authorization check understands.
  */
+// `superadmin` is deliberately absent: it is assigned only by the operator
+// bootstrap command, never accepted by an HTTP create or role-edit schema.
 export const roleEnum = z.enum(["user", "admin"]);
 
 const subscriptionShape = {
@@ -203,6 +205,36 @@ export const ResetPasswordBody = z.object({
 });
 
 export const AdminListUsersQuery = z.object({ ...paginationShape, ...searchShape });
+
+export const CreateAdminInvitationBody = z.object({
+  name: shortText(200),
+  email: z.string().email().max(320),
+  confirmPassword: z.string().min(1).max(1024),
+  userLimit: z.coerce.number().int().min(0).max(100_000).default(15),
+});
+
+export const UpdateAdminLimitBody = z.object({
+  userLimit: z.coerce.number().int().min(0).max(100_000),
+  confirmPassword: z.string().min(1).max(1024),
+});
+
+export const CreateCapacityRequestBody = z.object({
+  additionalUsers: z.coerce.number().int().min(1).max(100_000),
+});
+
+export const ReviewCapacityRequestBody = z.object({
+  decision: z.enum(["approve", "decline"]),
+  userLimit: z.coerce.number().int().min(0).max(100_000).optional(),
+  confirmPassword: z.string().min(1).max(1024),
+}).refine(
+  (value) => value.decision !== "approve" || value.userLimit !== undefined,
+  { message: "Set an explicit user limit to approve a capacity request", path: ["userLimit"] },
+);
+
+export const AcceptAdminInvitationBody = z.object({
+  token: z.string().min(1).max(512),
+  password: newPassword,
+});
 
 // ---------------------------------------------------------------------------
 // Business

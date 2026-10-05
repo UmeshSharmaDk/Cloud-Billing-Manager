@@ -24,6 +24,7 @@ export function mapUser(user: User) {
     subscriptionStatus: user.subscriptionStatus,
     subscriptionEnd: user.subscriptionEnd,
     businessId: user.businessId,
+    userLimit: user.role === "admin" || user.role === "superadmin" ? user.userLimit : undefined,
     createdAt: user.createdAt,
   };
 }

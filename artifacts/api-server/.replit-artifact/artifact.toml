@@ -10,7 +10,7 @@ name = "API Server"
 paths = ["/api"]
 
 [services.development]
-run = "pnpm --filter @workspace/api-server run dev"
+run = "export ALLOWED_ORIGINS=\"https://$REPLIT_DEV_DOMAIN,http://localhost:80\" && pnpm --filter @workspace/api-server run dev"
 
 [services.production]
 

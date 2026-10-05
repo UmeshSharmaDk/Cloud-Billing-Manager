@@ -1,7 +1,7 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { db, rootDb, runInSystemScope, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable } from "@workspace/db";
-import { eq, and, lt, gt } from "drizzle-orm";
+import { db, rootDb, runInSystemScope, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable, adminInvitationsTable } from "@workspace/db";
+import { eq, and, lt, gt, isNull } from "drizzle-orm";
 import jwt from "jsonwebtoken";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
@@ -12,7 +12,7 @@ import {
   spendVerificationTime,
 } from "../lib/password";
 import { validateBody } from "../middleware/validate";
-import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody } from "../schemas";
+import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody } from "../schemas";
 import { validatePassword } from "../lib/password-policy";
 import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
@@ -143,7 +143,7 @@ export function isSubscriptionExpired(user: {
   subscriptionEnd: string | null;
   subscriptionStatus?: string | null;
 }): boolean {
-  if (user.role === "admin") return false;
+  if (user.role === "admin" || user.role === "superadmin") return false;
   // Marking an account "expired" used to do nothing unless an end date was also
   // set and had passed: the status was stored and never read.
   if (user.subscriptionStatus === "expired") return true;
@@ -225,7 +225,14 @@ export async function requireAuth(req: any, res: any, next: any) {
 }
 
 export function requireAdmin(req: any, res: any, next: any) {
-  if (req.user?.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  if (req.user?.role !== "admin" && req.user?.role !== "superadmin") {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+}
+
+export function requireSuperadmin(req: any, res: any, next: any) {
+  if (req.user?.role !== "superadmin") return res.status(403).json({ error: "Forbidden" });
   next();
 }
 
@@ -533,6 +540,76 @@ router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrati
     }
   });
 });
+
+/**
+ * An administrator invited by a superadmin chooses their own password. The
+ * invite token is hashed at rest, checked for expiry, then locked and consumed
+ * in the same transaction that creates the account.
+ */
+router.post("/accept-admin-invite", authIpLimiter, validateBody(AcceptAdminInvitationBody),
+  async (req: Req, res) => {
+    const rawToken = String(req.body.token);
+    const hashedToken = hashToken(rawToken);
+    const [pending] = await rootDb.select().from(adminInvitationsTable)
+      .where(and(
+        eq(adminInvitationsTable.tokenHash, hashedToken),
+        isNull(adminInvitationsTable.usedAt),
+        gt(adminInvitationsTable.expiresAt, new Date()),
+      ))
+      .limit(1);
+    if (!pending) {
+      return res.status(400).json({ error: "That invitation is invalid or has expired." });
+    }
+
+    const policyFailure = await validatePassword(String(req.body.password));
+    if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+    const passwordHash = await hashPassword(String(req.body.password));
+
+    const admin = await rootDb.transaction(async (tx) => {
+      const [locked] = await tx.select().from(adminInvitationsTable)
+        .where(and(
+          eq(adminInvitationsTable.id, pending.id),
+          eq(adminInvitationsTable.tokenHash, hashedToken),
+          isNull(adminInvitationsTable.usedAt),
+          gt(adminInvitationsTable.expiresAt, new Date()),
+        ))
+        .for("update")
+        .limit(1);
+      if (!locked) return null;
+
+      const [existing] = await tx.select({ id: usersTable.id }).from(usersTable)
+        .where(eq(usersTable.email, locked.email)).limit(1);
+      if (existing) return null;
+
+      const [created] = await tx.insert(usersTable).values({
+        name: locked.name,
+        email: locked.email,
+        passwordHash,
+        role: "admin",
+        isActive: true,
+        userLimit: locked.userLimit,
+      }).returning();
+      await tx.update(adminInvitationsTable).set({ usedAt: new Date() })
+        .where(eq(adminInvitationsTable.id, locked.id));
+      return created;
+    });
+
+    if (!admin) {
+      return res.status(400).json({ error: "That invitation is invalid or has expired." });
+    }
+
+    const session = generateToken(admin.id, admin.role, admin.tokenVersion);
+    setSessionCookies(res, session);
+    return res.status(201).json({
+      token: session,
+      user: {
+        id: admin.id, name: admin.name, email: admin.email, role: admin.role,
+        isActive: admin.isActive, subscriptionStatus: admin.subscriptionStatus,
+        subscriptionEnd: admin.subscriptionEnd, businessId: admin.businessId,
+        createdAt: admin.createdAt,
+      },
+    });
+  });
 
 /** Drop pending registrations whose links have expired. */
 export async function prunePendingRegistrations(): Promise<number> {

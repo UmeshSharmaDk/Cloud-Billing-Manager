@@ -65,7 +65,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // The server has already set the session cookie on the login response.
     setMaybeSignedIn(true);
     queryClient.setQueryData(getGetMeQueryKey(), newUser);
-    setLocation(newUser.role === "admin" ? "/admin" : "/dashboard");
+    setLocation(
+      newUser.role === "superadmin" ? "/superadmin" :
+      newUser.role === "admin" ? "/admin" :
+      "/dashboard",
+    );
   };
 
   const logout = () => {

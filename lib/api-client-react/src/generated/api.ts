@@ -20,13 +20,24 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  AcceptAdminInvitationInput,
+  AdminAccount,
+  AdminAccountsResponse,
   AdminGetUser200,
+  AdminInvitation,
+  AdminInvitationInput,
+  AdminInvitationListResponse,
+  AdminLimitInput,
   AdminListUsersParams,
   AdminStats,
   AdminUserUpdate,
   AuthResponse,
   Business,
   BusinessUpdate,
+  CapacityRequest,
+  CapacityRequestInput,
+  CapacityRequestListResponse,
+  CapacityRequestReviewInput,
   ChangePassword200,
   ChangePasswordInput,
   CreateEwayBill201,
@@ -5010,6 +5021,594 @@ export const useDeleteEwayBill = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getDeleteEwayBillMutationOptions(options));
+    }
+
+export const getListSuperadminAdminsUrl = () => {
+
+
+
+
+  return `/api/superadmin/admins`
+}
+
+/**
+ * @summary List admin accounts and their managed-user usage
+ */
+export const listSuperadminAdmins = async ( options?: RequestInit): Promise<AdminAccountsResponse> => {
+
+  return customFetch<AdminAccountsResponse>(getListSuperadminAdminsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListSuperadminAdminsQueryKey = () => {
+    return [
+    `/api/superadmin/admins`
+    ] as const;
+    }
+
+
+export const getListSuperadminAdminsQueryOptions = <TData = Awaited<ReturnType<typeof listSuperadminAdmins>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSuperadminAdmins>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListSuperadminAdminsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listSuperadminAdmins>>> = ({ signal }) => listSuperadminAdmins({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listSuperadminAdmins>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListSuperadminAdminsQueryResult = NonNullable<Awaited<ReturnType<typeof listSuperadminAdmins>>>
+export type ListSuperadminAdminsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List admin accounts and their managed-user usage
+ */
+
+export function useListSuperadminAdmins<TData = Awaited<ReturnType<typeof listSuperadminAdmins>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listSuperadminAdmins>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListSuperadminAdminsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getListAdminInvitationsUrl = () => {
+
+
+
+
+  return `/api/superadmin/admin-invitations`
+}
+
+/**
+ * @summary List outstanding administrator invitations
+ */
+export const listAdminInvitations = async ( options?: RequestInit): Promise<AdminInvitationListResponse> => {
+
+  return customFetch<AdminInvitationListResponse>(getListAdminInvitationsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListAdminInvitationsQueryKey = () => {
+    return [
+    `/api/superadmin/admin-invitations`
+    ] as const;
+    }
+
+
+export const getListAdminInvitationsQueryOptions = <TData = Awaited<ReturnType<typeof listAdminInvitations>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAdminInvitations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListAdminInvitationsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listAdminInvitations>>> = ({ signal }) => listAdminInvitations({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listAdminInvitations>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListAdminInvitationsQueryResult = NonNullable<Awaited<ReturnType<typeof listAdminInvitations>>>
+export type ListAdminInvitationsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List outstanding administrator invitations
+ */
+
+export function useListAdminInvitations<TData = Awaited<ReturnType<typeof listAdminInvitations>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listAdminInvitations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListAdminInvitationsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreateAdminInvitationUrl = () => {
+
+
+
+
+  return `/api/superadmin/admin-invitations`
+}
+
+/**
+ * @summary Invite an administrator to set up their account
+ */
+export const createAdminInvitation = async (adminInvitationInput: AdminInvitationInput, options?: RequestInit): Promise<AdminInvitation> => {
+
+  return customFetch<AdminInvitation>(getCreateAdminInvitationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminInvitationInput,)
+  }
+);}
+
+
+
+
+export const getCreateAdminInvitationMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAdminInvitation>>, TError,{data: BodyType<AdminInvitationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createAdminInvitation>>, TError,{data: BodyType<AdminInvitationInput>}, TContext> => {
+
+const mutationKey = ['createAdminInvitation'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createAdminInvitation>>, {data: BodyType<AdminInvitationInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createAdminInvitation(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateAdminInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof createAdminInvitation>>>
+    export type CreateAdminInvitationMutationBody = BodyType<AdminInvitationInput>
+    export type CreateAdminInvitationMutationError = ErrorType<void>
+
+    /**
+ * @summary Invite an administrator to set up their account
+ */
+export const useCreateAdminInvitation = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createAdminInvitation>>, TError,{data: BodyType<AdminInvitationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createAdminInvitation>>,
+        TError,
+        {data: BodyType<AdminInvitationInput>},
+        TContext
+      > => {
+      return useMutation(getCreateAdminInvitationMutationOptions(options));
+    }
+
+export const getUpdateSuperadminAdminLimitUrl = (id: number,) => {
+
+
+
+
+  return `/api/superadmin/admins/${id}/limit`
+}
+
+/**
+ * @summary Explicitly change an administrator's user allowance
+ */
+export const updateSuperadminAdminLimit = async (id: number,
+    adminLimitInput: AdminLimitInput, options?: RequestInit): Promise<AdminAccount> => {
+
+  return customFetch<AdminAccount>(getUpdateSuperadminAdminLimitUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      adminLimitInput,)
+  }
+);}
+
+
+
+
+export const getUpdateSuperadminAdminLimitMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSuperadminAdminLimit>>, TError,{id: number;data: BodyType<AdminLimitInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateSuperadminAdminLimit>>, TError,{id: number;data: BodyType<AdminLimitInput>}, TContext> => {
+
+const mutationKey = ['updateSuperadminAdminLimit'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateSuperadminAdminLimit>>, {id: number;data: BodyType<AdminLimitInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateSuperadminAdminLimit(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateSuperadminAdminLimitMutationResult = NonNullable<Awaited<ReturnType<typeof updateSuperadminAdminLimit>>>
+    export type UpdateSuperadminAdminLimitMutationBody = BodyType<AdminLimitInput>
+    export type UpdateSuperadminAdminLimitMutationError = ErrorType<void>
+
+    /**
+ * @summary Explicitly change an administrator's user allowance
+ */
+export const useUpdateSuperadminAdminLimit = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSuperadminAdminLimit>>, TError,{id: number;data: BodyType<AdminLimitInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateSuperadminAdminLimit>>,
+        TError,
+        {id: number;data: BodyType<AdminLimitInput>},
+        TContext
+      > => {
+      return useMutation(getUpdateSuperadminAdminLimitMutationOptions(options));
+    }
+
+export const getListCapacityRequestsUrl = () => {
+
+
+
+
+  return `/api/superadmin/capacity-requests`
+}
+
+/**
+ * @summary List capacity requests for the current admin or all admins
+ */
+export const listCapacityRequests = async ( options?: RequestInit): Promise<CapacityRequestListResponse> => {
+
+  return customFetch<CapacityRequestListResponse>(getListCapacityRequestsUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListCapacityRequestsQueryKey = () => {
+    return [
+    `/api/superadmin/capacity-requests`
+    ] as const;
+    }
+
+
+export const getListCapacityRequestsQueryOptions = <TData = Awaited<ReturnType<typeof listCapacityRequests>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCapacityRequests>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListCapacityRequestsQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listCapacityRequests>>> = ({ signal }) => listCapacityRequests({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listCapacityRequests>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListCapacityRequestsQueryResult = NonNullable<Awaited<ReturnType<typeof listCapacityRequests>>>
+export type ListCapacityRequestsQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary List capacity requests for the current admin or all admins
+ */
+
+export function useListCapacityRequests<TData = Awaited<ReturnType<typeof listCapacityRequests>>, TError = ErrorType<unknown>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCapacityRequests>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListCapacityRequestsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+export const getCreateCapacityRequestUrl = () => {
+
+
+
+
+  return `/api/superadmin/capacity-requests`
+}
+
+/**
+ * @summary Request additional managed-user capacity
+ */
+export const createCapacityRequest = async (capacityRequestInput: CapacityRequestInput, options?: RequestInit): Promise<CapacityRequest> => {
+
+  return customFetch<CapacityRequest>(getCreateCapacityRequestUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      capacityRequestInput,)
+  }
+);}
+
+
+
+
+export const getCreateCapacityRequestMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCapacityRequest>>, TError,{data: BodyType<CapacityRequestInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof createCapacityRequest>>, TError,{data: BodyType<CapacityRequestInput>}, TContext> => {
+
+const mutationKey = ['createCapacityRequest'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof createCapacityRequest>>, {data: BodyType<CapacityRequestInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  createCapacityRequest(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CreateCapacityRequestMutationResult = NonNullable<Awaited<ReturnType<typeof createCapacityRequest>>>
+    export type CreateCapacityRequestMutationBody = BodyType<CapacityRequestInput>
+    export type CreateCapacityRequestMutationError = ErrorType<void>
+
+    /**
+ * @summary Request additional managed-user capacity
+ */
+export const useCreateCapacityRequest = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createCapacityRequest>>, TError,{data: BodyType<CapacityRequestInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof createCapacityRequest>>,
+        TError,
+        {data: BodyType<CapacityRequestInput>},
+        TContext
+      > => {
+      return useMutation(getCreateCapacityRequestMutationOptions(options));
+    }
+
+export const getReviewCapacityRequestUrl = (id: number,) => {
+
+
+
+
+  return `/api/superadmin/capacity-requests/${id}/review`
+}
+
+/**
+ * @summary Approve with an explicit new limit or decline a pending request
+ */
+export const reviewCapacityRequest = async (id: number,
+    capacityRequestReviewInput: CapacityRequestReviewInput, options?: RequestInit): Promise<CapacityRequest> => {
+
+  return customFetch<CapacityRequest>(getReviewCapacityRequestUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      capacityRequestReviewInput,)
+  }
+);}
+
+
+
+
+export const getReviewCapacityRequestMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reviewCapacityRequest>>, TError,{id: number;data: BodyType<CapacityRequestReviewInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof reviewCapacityRequest>>, TError,{id: number;data: BodyType<CapacityRequestReviewInput>}, TContext> => {
+
+const mutationKey = ['reviewCapacityRequest'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof reviewCapacityRequest>>, {id: number;data: BodyType<CapacityRequestReviewInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  reviewCapacityRequest(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReviewCapacityRequestMutationResult = NonNullable<Awaited<ReturnType<typeof reviewCapacityRequest>>>
+    export type ReviewCapacityRequestMutationBody = BodyType<CapacityRequestReviewInput>
+    export type ReviewCapacityRequestMutationError = ErrorType<void>
+
+    /**
+ * @summary Approve with an explicit new limit or decline a pending request
+ */
+export const useReviewCapacityRequest = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof reviewCapacityRequest>>, TError,{id: number;data: BodyType<CapacityRequestReviewInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof reviewCapacityRequest>>,
+        TError,
+        {id: number;data: BodyType<CapacityRequestReviewInput>},
+        TContext
+      > => {
+      return useMutation(getReviewCapacityRequestMutationOptions(options));
+    }
+
+export const getAcceptAdminInvitationUrl = () => {
+
+
+
+
+  return `/api/auth/accept-admin-invite`
+}
+
+/**
+ * @summary Set a password and activate an invited administrator account
+ */
+export const acceptAdminInvitation = async (acceptAdminInvitationInput: AcceptAdminInvitationInput, options?: RequestInit): Promise<AuthResponse> => {
+
+  return customFetch<AuthResponse>(getAcceptAdminInvitationUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      acceptAdminInvitationInput,)
+  }
+);}
+
+
+
+
+export const getAcceptAdminInvitationMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acceptAdminInvitation>>, TError,{data: BodyType<AcceptAdminInvitationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof acceptAdminInvitation>>, TError,{data: BodyType<AcceptAdminInvitationInput>}, TContext> => {
+
+const mutationKey = ['acceptAdminInvitation'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof acceptAdminInvitation>>, {data: BodyType<AcceptAdminInvitationInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  acceptAdminInvitation(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type AcceptAdminInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof acceptAdminInvitation>>>
+    export type AcceptAdminInvitationMutationBody = BodyType<AcceptAdminInvitationInput>
+    export type AcceptAdminInvitationMutationError = ErrorType<void>
+
+    /**
+ * @summary Set a password and activate an invited administrator account
+ */
+export const useAcceptAdminInvitation = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acceptAdminInvitation>>, TError,{data: BodyType<AcceptAdminInvitationInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof acceptAdminInvitation>>,
+        TError,
+        {data: BodyType<AcceptAdminInvitationInput>},
+        TContext
+      > => {
+      return useMutation(getAcceptAdminInvitationMutationOptions(options));
     }
 
 export const getGetAdminStatsUrl = () => {

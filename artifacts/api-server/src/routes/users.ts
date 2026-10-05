@@ -44,6 +44,8 @@ router.get("/", requireAdmin, validateQuery(ListUsersQuery), async (req: Req, re
   if (status === "active") conditions.push(eq(usersTable.isActive, true));
   if (status === "inactive") conditions.push(eq(usersTable.isActive, false));
   conditions.push(isNull(usersTable.deletedAt));
+  conditions.push(eq(usersTable.role, "user"));
+  if (req.userRole === "admin") conditions.push(eq(usersTable.createdByAdminId, req.user.id));
   const where = and(...conditions);
 
   const users = await db.select().from(usersTable).where(where)
@@ -58,14 +60,11 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
   const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
 
-  // Creating an administrator is a privilege grant, so it is confirmed exactly
-  // as promoting one is. Without this the step-up on PATCH was trivially routed
-  // around: a stolen session could not promote an existing user, but could
-  // create a brand-new admin with a password of the attacker's choosing — and
-  // that account's sessions survive the real admin's `logout-all`.
-  if (role === "admin") {
-    const stepUp = await verifyStepUp(req);
-    if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+  if (req.userRole === "admin" && role !== "user") {
+    return res.status(403).json({ error: "Admins can create user accounts only." });
+  }
+  if (role !== "user") {
+    return res.status(403).json({ error: "Use the superadmin admin-account flow for privileged accounts." });
   }
 
   const policyFailure = await validatePassword(password);
@@ -73,19 +72,71 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
 
   const normalisedEmail = String(email).toLowerCase();
 
-  // Checked rather than left to the unique index, which surfaced as a 500 and
-  // told the operator nothing.
-  const [taken] = await db.select({ id: usersTable.id }).from(usersTable)
-    .where(eq(usersTable.email, normalisedEmail)).limit(1);
-  if (taken) return res.status(409).json({ error: "That email address is already registered" });
+  const result = await db.transaction(async (tx) => {
+    if (req.userRole === "admin") {
+      // Lock the manager row so concurrent requests cannot spend the same
+      // remaining slot twice.
+      const [manager] = await tx.select({ userLimit: usersTable.userLimit })
+        .from(usersTable)
+        .where(and(
+          eq(usersTable.id, req.user.id),
+          eq(usersTable.role, "admin"),
+          isNull(usersTable.deletedAt),
+        ))
+        .for("update");
+      if (!manager) return { kind: "manager-missing" as const };
 
-  const [user] = await db.insert(usersTable).values({
-    name, email: normalisedEmail, passwordHash: await hashPassword(String(password)), role,
-    isActive: true, subscriptionStatus, subscriptionEnd,
-  }).returning();
+      const [{ count: currentCount }] = await tx.select({ count: count() })
+        .from(usersTable)
+        .where(and(
+          eq(usersTable.createdByAdminId, req.user.id),
+          eq(usersTable.role, "user"),
+          isNull(usersTable.deletedAt),
+        ));
+      const current = Number(currentCount);
+      if (current >= manager.userLimit) {
+        return { kind: "limit" as const, current, limit: manager.userLimit };
+      }
+    }
+
+    const [taken] = await tx.select({ id: usersTable.id }).from(usersTable)
+      .where(eq(usersTable.email, normalisedEmail)).limit(1);
+    if (taken) {
+      return { kind: "duplicate" as const };
+    }
+
+    const [user] = await tx.insert(usersTable).values({
+      name,
+      email: normalisedEmail,
+      passwordHash: await hashPassword(String(password)),
+      role: "user",
+      isActive: true,
+      subscriptionStatus,
+      subscriptionEnd,
+      createdByAdminId: req.userRole === "admin" ? req.user.id : null,
+    }).returning();
+    return { kind: "created" as const, user };
+  });
+
+  if (result.kind === "manager-missing") {
+    return res.status(403).json({ error: "Administrator account is no longer active." });
+  }
+  if (result.kind === "limit") {
+    return res.status(402).json({
+      error: "User limit reached. Request additional capacity for superadmin review before creating another user.",
+      code: "user_limit_reached",
+      currentUsers: result.current,
+      userLimit: result.limit,
+      amountInr: 1000,
+      currency: "INR",
+    });
+  }
+  if (result.kind === "duplicate") return res.status(409).json({ error: "That email address is already registered" });
+
+  const user = result.user;
   await recordAudit({
     ...actorFrom(req), action: "user.created", targetType: "user", targetId: user.id,
-    details: { email: user.email, role: user.role },
+    details: { email: user.email, role: user.role, createdByAdminId: req.userRole === "admin" ? req.user.id : null },
   });
   return res.status(201).json(mapUser(user));
 });
@@ -99,12 +150,15 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
  */
 
 router.get("/:id", validateParams(IdParam), async (req: Req, res) => {
-  if (req.userRole !== "admin" && req.userId !== req.validatedParams.id) {
+  if (req.userRole !== "admin" && req.userRole !== "superadmin" && req.userId !== req.validatedParams.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
   const [user] = await db.select().from(usersTable)
     .where(and(eq(usersTable.id, req.validatedParams.id), isNull(usersTable.deletedAt))).limit(1);
   if (!user) return res.status(404).json({ error: "User not found" });
+  if (req.userRole === "admin" && user.createdByAdminId !== req.user.id) {
+    return res.status(404).json({ error: "User not found" });
+  }
   return res.json(mapUser(user));
 });
 
@@ -115,12 +169,18 @@ router.patch("/:id", requireAdmin, validateParams(IdParam), validateBody(UpdateU
 
     const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+    if (req.userRole === "admin" && before.createdByAdminId !== req.user.id) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
     // Confirmation is required to CHANGE a role, not merely to send the field.
     // The admin edit form posts the whole record including the unchanged role,
     // so gating on presence made every save fail — a subscription edit is not
     // a privilege change and must not demand a password.
     if (role && role !== before.role) {
+      if (req.userRole !== "superadmin" || role === "admin" || before.role === "superadmin") {
+        return res.status(403).json({ error: "Use an administrator invitation to grant admin access." });
+      }
       const stepUp = await verifyStepUp(req);
       if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
 
@@ -160,6 +220,9 @@ router.delete("/:id", requireAdmin, validateParams(IdParam), async (req: Req, re
 
   const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
   if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
+  if (req.userRole === "admin" && before.createdByAdminId !== req.user.id) {
+    return res.status(404).json({ error: "User not found" });
+  }
 
   const guard = await assertNotLastAdmin(before, "user");
   if (guard) return res.status(409).json({ error: guard });
@@ -179,9 +242,23 @@ router.patch("/:id/toggle-status", requireAdmin, validateParams(IdParam), valida
   const targetId = req.validatedParams.id;
   const { isActive } = req.body;
 
+  const [before] = await db.select().from(usersTable)
+    .where(and(eq(usersTable.id, targetId), isNull(usersTable.deletedAt))).limit(1);
+  if (!before) return res.status(404).json({ error: "User not found" });
+  if (req.userRole === "admin" && before.createdByAdminId !== req.user.id) {
+    return res.status(404).json({ error: "User not found" });
+  }
+  if (before.role !== "user" && req.userRole !== "superadmin") {
+    return res.status(403).json({ error: "Only a superadmin can change an administrator account." });
+  }
+
   if (!isActive) {
     const selfGuard = assertNotSelf(req.user.id, targetId);
     if (selfGuard) return res.status(409).json({ error: selfGuard });
+    if (before.role === "admin") {
+      const guard = await assertNotLastAdmin(before, "user");
+      if (guard) return res.status(409).json({ error: guard });
+    }
   }
 
   const [user] = await db.update(usersTable).set({ isActive })
@@ -210,6 +287,12 @@ router.post("/:id/reset-password", requireAdmin, validateParams(IdParam),
 
     const [target] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!target || target.deletedAt) return res.status(404).json({ error: "User not found" });
+    if (req.userRole === "admin" && target.createdByAdminId !== req.user.id) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (target.role !== "user" && req.userRole !== "superadmin") {
+      return res.status(403).json({ error: "Only a superadmin can reset an administrator's password." });
+    }
 
     // Revoke the target's existing sessions as well. Resetting a password
     // while leaving the old sessions live defeats the point of the reset.
