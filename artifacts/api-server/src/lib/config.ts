@@ -118,7 +118,11 @@ function mailTransport():
   | { kind: "smtp"; url: string; from: string }
   | { kind: "file"; path: string; from: string }
   | { kind: "log"; from: string } {
-  const url = process.env["SMTP_URL"]?.trim();
+  // Keep the dedicated production credential out of development mail delivery.
+  const url = (
+    (!isDevelopment && process.env["PRODUCTION_SMTP_URL"]?.trim()) ||
+    process.env["SMTP_URL"]?.trim()
+  );
   const outbox = process.env["MAIL_OUTBOX_PATH"]?.trim();
   const from = process.env["MAIL_FROM"]?.trim();
 
@@ -150,7 +154,7 @@ function mailTransport():
 
   if (!isDevelopment) {
     throw new Error(
-      "SMTP_URL environment variable is required but was not provided. " +
+      "SMTP_URL or PRODUCTION_SMTP_URL is required but was not provided. " +
         "Registration confirms nothing over HTTP — whether an address is already " +
         "registered is settled by email — so the server cannot accept signups " +
         'without a mail transport. Set SMTP_URL (e.g. "smtps://user:pass@smtp.example.com:465") ' +

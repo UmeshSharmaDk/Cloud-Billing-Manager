@@ -40,3 +40,7 @@ channel = "stable-25_05"
 MAIL_FROM = "support@outhillsmanali.com"
 
 [userenv.development]
+
+[userenv.production]
+ALLOWED_ORIGINS = "https://gstpro.replit.app"
+APP_BASE_URL = "https://gstpro.replit.app"

@@ -17,8 +17,12 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   emails are logged in the API workflow console rather than delivered.
   Register through the app and open the verification link from that console
   to finish creating a development account.
-- Production is **not configured**: configure SMTP delivery and a dedicated
-  non-superuser, non-BYPASSRLS application database connection before publishing.
+- Production uses `ALLOWED_ORIGINS` and `APP_BASE_URL` from production-scoped
+  environment variables. Keep both aligned with the published domain.
+  `PRODUCTION_SMTP_URL` selects SMTP outside development, with `SMTP_URL` as
+  the shared fallback. Development ignores the production-only credential.
+  Configure a dedicated non-superuser, non-BYPASSRLS application database
+  connection before using the app for production business data.
   The current workspace owner connection bypasses RLS, as reported by the
   API startup warning; application query filters still apply.
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 8080)
@@ -38,7 +42,7 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   - `DATABASE_URL` — Postgres connection string; must be a role without `BYPASSRLS` (see `lib/db/README-rls.md`)
   - `SESSION_SECRET` — session signing key, minimum 32 chars (`openssl rand -base64 48`)
   - `ALLOWED_ORIGINS` — comma-separated browser origins permitted by CORS; never `*`
-  - `SMTP_URL` + `MAIL_FROM` — registration is confirmed by emailed link, so production refuses to boot without a mail transport
+  - `SMTP_URL` (or production-only `PRODUCTION_SMTP_URL`) + `MAIL_FROM` — registration is confirmed by emailed link, so production refuses to boot without a mail transport
 - Optional env: `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
   for the client address, default 1), `AUTH_RATE_LIMIT_MAX` (default 30), `REGISTER_RATE_LIMIT_MAX`,
   `TENANT_WRITE_RATE_LIMIT_MAX`, `TENANT_READ_RATE_LIMIT_MAX`, `TENANT_MAX_IN_FLIGHT` (default 16, keep below
