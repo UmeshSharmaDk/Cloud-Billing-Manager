@@ -104,10 +104,17 @@ export const mailer: Mailer = selectMailer();
 
 export { describeMailError };
 
-/** Where SMTP is pointed, without the credentials, so a typo is visible in the log. */
-function describeSmtpTarget(url: string): Record<string, unknown> {
+function smtpSettingName(): string {
+  return config.isDevelopment ? "SMTP_URL" : "PRODUCTION_SMTP_URL";
+}
+
+/** Where SMTP is pointed, without credentials or the URL, so a typo is visible in the log. */
+function describeSmtpTarget(url: string, settingName: string): Record<string, unknown> {
   try {
     const u = new URL(url);
+    if (u.protocol !== "smtp:" && u.protocol !== "smtps:") {
+      return { problem: `${settingName} must use smtp:// or smtps://` };
+    }
     const secure = u.protocol === "smtps:";
     return {
       host: u.hostname,
@@ -116,7 +123,7 @@ function describeSmtpTarget(url: string): Record<string, unknown> {
       authenticated: Boolean(u.username),
     };
   } catch {
-    return { problem: "SMTP_URL is not a valid URL" };
+    return { problem: `${settingName} is not a valid SMTP URL (value not logged)` };
   }
 }
 
@@ -134,7 +141,7 @@ export async function checkMailTransport(): Promise<void> {
     logger.info({ transport: config.mail.kind }, "Mail transport is not SMTP; skipping the connectivity check");
     return;
   }
-  const target = describeSmtpTarget(config.mail.url);
+  const target = describeSmtpTarget(config.mail.url, smtpSettingName());
   try {
     await mailer.verify?.();
     logger.info(
@@ -143,7 +150,7 @@ export async function checkMailTransport(): Promise<void> {
     );
   } catch (err) {
     logger.error(
-      { ...target, from: config.mail.from, ...describeMailError(err) },
+      { ...target, from: config.mail.from, ...describeMailError(err, smtpSettingName()) },
       "SMTP check failed: registration and administrator invitation emails will not be delivered",
     );
   }
@@ -237,6 +244,9 @@ export async function sendQuietly(message: Message): Promise<void> {
   try {
     await mailer.send(message);
   } catch (err) {
-    logger.error({ ...describeMailError(err), subject: message.subject }, "Could not send mail");
+    logger.error(
+      { ...describeMailError(err, smtpSettingName()), subject: message.subject },
+      "Could not send mail",
+    );
   }
 }

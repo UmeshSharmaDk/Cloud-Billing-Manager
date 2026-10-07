@@ -16,7 +16,7 @@ worst outcome, because it looks protected.
 Create a role that cannot bypass:
 
 ```sql
-CREATE ROLE gst_app LOGIN PASSWORD '<generate one>' NOSUPERUSER NOBYPASSRLS;
+CREATE ROLE gst_app LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION;
 GRANT USAGE ON SCHEMA public TO gst_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gst_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gst_app;
@@ -28,17 +28,42 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO gst_app;
 ```
 
-Point the application's `DATABASE_URL` at `gst_app`. Keep the owner connection
-for migrations only — `drizzle-kit push` and `rls:apply` need to alter tables,
-which `gst_app` deliberately cannot.
+An authorized database administrator must provision this login for the existing
+database. Set its password through the administrator's password-setting interface
+or the interactive `psql` command `\password gst_app`, not in committed SQL,
+command-line arguments, or application logs. Do not grant it membership in the
+owner or any privileged role. Run default-privilege grants as the role that
+actually creates schema objects.
 
-The API server checks this at boot and logs a warning naming the role if the
-connection can bypass policies. `pnpm --filter @workspace/db run rls:apply`
-prints the same warning.
+Point the application's `APP_DATABASE_URL` at `gst_app`. In production the API
+requires this variable and never falls back to Replit's owner-level
+`DATABASE_URL`. Keep the owner connection for schema operations only:
+`drizzle-kit push` and `rls:apply` need to alter tables, which `gst_app`
+deliberately cannot.
+
+Development ignores the shared production `APP_DATABASE_URL`. Use
+`DEVELOPMENT_APP_DATABASE_URL` for a restricted development/scratch login, or
+the development `DATABASE_URL` fallback. Local RLS tests also ignore the
+production secret so adding it cannot redirect fixture writes to live data.
+An application process explicitly started with `NODE_ENV=test` must provide
+`TEST_APP_DATABASE_URL`; it never falls back to either shared production
+credentials or the workspace owner connection.
+
+The API server checks this at boot and reports whether policies are effective.
+It refuses to serve production traffic if the application role can bypass RLS
+or any tenant table lacks an active forced policy. Development remains available
+for local work while reporting an unsafe development role. `pnpm --filter
+@workspace/db run rls:apply` prints the policy status for the connection it uses.
 
 ## Applying
 
-Both commands need the *owner* connection, not the application's:
+The commands below are for development or disposable test databases. Replit
+Publish manages the schema in Replit's managed production database; do not point
+these commands at production or add them to deployment build/startup commands.
+Provisioning a restricted login is a separate administrator access-control step,
+not application startup work.
+
+Both development commands need the *owner* connection, not the application's:
 
 ```bash
 DATABASE_URL=$ADMIN_DATABASE_URL pnpm --filter @workspace/db run push
@@ -62,8 +87,8 @@ outright.
 ## Verifying
 
 ```bash
-DATABASE_URL=<gst_app connection> \
-ADMIN_DATABASE_URL=<owner connection> \
+DEVELOPMENT_APP_DATABASE_URL=<restricted scratch connection> \
+ADMIN_DATABASE_URL=<scratch owner connection> \
   pnpm --filter @workspace/db run test:rls
 ```
 
@@ -72,10 +97,10 @@ scoped connection cannot reach another tenant even by naming its id or its
 primary key, cross-tenant writes are rejected, and the scope does not survive
 its transaction.
 
-It exits 2 without running if `DATABASE_URL` can bypass RLS, because every
-assertion in it would otherwise pass while proving nothing. The application's
-integration suite needs `ADMIN_DATABASE_URL` for the same reason: it
-manipulates fixtures as an operator, which the application role cannot do.
+It exits 2 without running if the application connection can bypass RLS, because
+every assertion in it would otherwise pass while proving nothing. The
+application's integration suite needs `ADMIN_DATABASE_URL` for the same reason:
+it manipulates fixtures as an operator, which the application role cannot do.
 
 ## How the tenant reaches the database
 

@@ -8,3 +8,4 @@ Run operator and database scripts that import workspace TypeScript package expor
 **Why:** A direct Node invocation failed with `ERR_UNSUPPORTED_DIR_IMPORT` before it reached the script's guarded database operation; the existing `tsx` runner loaded it successfully.
 
 **How to apply:** Add `tsx` as a development dependency of the package owning such scripts, use it in the package scripts, and verify guarded commands without supplying operator secrets.
+

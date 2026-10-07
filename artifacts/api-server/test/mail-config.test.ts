@@ -30,8 +30,15 @@ assert.deepEqual(JSON.parse(production.stdout), {
 });
 
 const shared = loadConfig({ SMTP_URL: "smtp://shared.example.test:587" });
-assert.equal(shared.status, 0, shared.stderr);
-assert.equal(JSON.parse(shared.stdout).kind, "smtp");
+assert.notEqual(shared.status, 0);
+assert.match(shared.stderr, /PRODUCTION_SMTP_URL environment variable is required/);
+
+const developmentSmtp = loadConfig({
+  NODE_ENV: "development",
+  SMTP_URL: "smtp://shared.example.test:587",
+});
+assert.equal(developmentSmtp.status, 0, developmentSmtp.stderr);
+assert.equal(JSON.parse(developmentSmtp.stdout).kind, "smtp");
 
 const development = loadConfig({
   NODE_ENV: "development",
@@ -42,5 +49,5 @@ assert.equal(JSON.parse(development.stdout).kind, "log");
 
 const missing = loadConfig({});
 assert.notEqual(missing.status, 0);
-assert.match(missing.stderr, /SMTP_URL or PRODUCTION_SMTP_URL is required/);
-console.log("Mail config: production override, shared fallback, development isolation, and required transport passed.");
+assert.match(missing.stderr, /PRODUCTION_SMTP_URL environment variable is required/);
+console.log("Mail config: production-only credentials, development SMTP opt-in, development isolation, and required transport passed.");

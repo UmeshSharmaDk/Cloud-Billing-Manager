@@ -14,15 +14,15 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   accounts or business records were imported from GitHub.
 - The API development workflow supplies the preview CORS origins and its
   `dev` script sets `NODE_ENV=development`. Without `SMTP_URL`, verification
-  emails are logged in the API workflow console rather than delivered.
-  Register through the app and open the verification link from that console
-  to finish creating a development account.
+  only mail metadata is logged in the API workflow console; no message or
+  verification token is delivered. Use development SMTP or the test file
+  transport to complete a development registration.
 - Production uses `ALLOWED_ORIGINS` and `APP_BASE_URL` from production-scoped
-  environment variables. Keep both aligned with the published domain.
-  `PRODUCTION_SMTP_URL` selects SMTP outside development, with `SMTP_URL` as
-  the shared fallback. Development ignores the production-only credential.
-  Configure a dedicated non-superuser, non-BYPASSRLS application database
-  connection before using the app for production business data.
+  environment variables. Keep both aligned with the verified published domain.
+  `PRODUCTION_SMTP_URL` selects SMTP outside development; `SMTP_URL` is only a
+  development opt-in. Development ignores the production credential.
+  A dedicated non-superuser, non-BYPASSRLS application database connection is
+  still required before publishing the fail-closed startup code.
   The current workspace owner connection bypasses RLS, as reported by the
   API startup warning; application query filters still apply.
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 8080)
@@ -39,16 +39,17 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   accountability, invoice numbering, transaction rollback). Needs a running server and a real
   Postgres; see the header of `artifacts/api-server/test/integration.mjs`.
 - Required env (all fail the boot if unset — there are no defaults; see `.env.example`):
-  - `DATABASE_URL` — Postgres connection string; must be a role without `BYPASSRLS` (see `lib/db/README-rls.md`)
+  - `APP_DATABASE_URL` — required production application connection; must use a dedicated `NOSUPERUSER NOBYPASSRLS` role with no privileged-role memberships (see `lib/db/README-rls.md`). Development ignores it and uses `DEVELOPMENT_APP_DATABASE_URL` or its local `DATABASE_URL`.
   - `SESSION_SECRET` — session signing key, minimum 32 chars (`openssl rand -base64 48`)
   - `ALLOWED_ORIGINS` — comma-separated browser origins permitted by CORS; never `*`
-  - `SMTP_URL` (or production-only `PRODUCTION_SMTP_URL`) + `MAIL_FROM` — registration is confirmed by emailed link, so production refuses to boot without a mail transport
+  - `PRODUCTION_SMTP_URL` + `MAIL_FROM` — production registration email uses user-approved Hostinger SMTP. The production secret is ignored in development; `SMTP_URL` is a separate development opt-in.
 - Optional env: `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
   for the client address, default 1), `AUTH_RATE_LIMIT_MAX` (default 30), `REGISTER_RATE_LIMIT_MAX`,
   `TENANT_WRITE_RATE_LIMIT_MAX`, `TENANT_READ_RATE_LIMIT_MAX`, `TENANT_MAX_IN_FLIGHT` (default 16, keep below
   `DB_POOL_MAX`), `DISABLE_BREACH_CHECK` (skips the Have I Been Pwned lookup on new passwords), `NODE_ENV`
-- After any `push`, run `pnpm --filter @workspace/db run rls:apply` with the owner connection
-  (`scripts/post-merge.sh` does both)
+- After a development/disposable-database `push`, run `pnpm --filter @workspace/db run rls:apply`
+  with the owner connection (`scripts/post-merge.sh` does both). Replit Publish manages production
+  schema changes; do not run schema scripts against managed production or add startup/build-time DDL.
 
 ## Stack
 

@@ -2,14 +2,18 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
 import { createScopedDb } from "./tenant-scope";
+import { resolveApplicationDatabaseUrl } from "./connection-config";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
-  );
-}
+/**
+ * The Replit-provided DATABASE_URL is the schema-owner connection. Production
+ * API traffic must use a separate, least-privilege connection so PostgreSQL
+ * policies cannot be bypassed by the application. Local development may keep
+ * using DATABASE_URL unless DEVELOPMENT_APP_DATABASE_URL is supplied. The
+ * shared production APP_DATABASE_URL must never be used for local requests.
+ */
+const applicationDatabaseUrl = resolveApplicationDatabaseUrl(process.env);
 
 /**
  * Pool sizing and timeouts.
@@ -38,7 +42,7 @@ const poolNumber = (name: string, fallback: number): number => {
 };
 
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: applicationDatabaseUrl,
   max: poolNumber("DB_POOL_MAX", 20),
   // Fail a request that cannot get a connection rather than hanging forever.
   connectionTimeoutMillis: poolNumber("DB_CONNECTION_TIMEOUT_MS", 10_000),

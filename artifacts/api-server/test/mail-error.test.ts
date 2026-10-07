@@ -11,6 +11,11 @@ const mk = (props: Record<string, unknown>) => Object.assign(new Error("Invalid 
 
 const auth = describeMailError(mk({ code: "EAUTH", responseCode: 535, command: "AUTH PLAIN" }));
 check("a rejected login points at the credentials", String(auth["hint"]).includes("credentials"));
+check(
+  "a production SMTP failure names its production secret",
+  String(describeMailError(mk({ code: "EAUTH" }), "PRODUCTION_SMTP_URL")["hint"])
+    .includes("credentials in PRODUCTION_SMTP_URL"),
+);
 check("it keeps the codes and the command", auth["smtpCode"] === "EAUTH" && auth["smtpResponseCode"] === 535 && auth["smtpCommand"] === "AUTH PLAIN");
 check("it never carries the error message", !JSON.stringify(auth).includes("hunter2") && !JSON.stringify(auth).includes("alice"));
 

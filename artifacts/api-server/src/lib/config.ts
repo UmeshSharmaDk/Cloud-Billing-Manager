@@ -118,17 +118,21 @@ function mailTransport():
   | { kind: "smtp"; url: string; from: string }
   | { kind: "file"; path: string; from: string }
   | { kind: "log"; from: string } {
-  // Keep the dedicated production credential out of development mail delivery.
+  // A shared production SMTP secret must not silently turn local signup tests
+  // into real email. Development has its own opt-in SMTP_URL; every non-dev
+  // environment uses the production-only secret.
+  const urlVariable = isDevelopment ? "SMTP_URL" : "PRODUCTION_SMTP_URL";
   const url = (
-    (!isDevelopment && process.env["PRODUCTION_SMTP_URL"]?.trim()) ||
-    process.env["SMTP_URL"]?.trim()
-  );
+    isDevelopment
+      ? process.env["SMTP_URL"]
+      : process.env["PRODUCTION_SMTP_URL"]
+  )?.trim();
   const outbox = process.env["MAIL_OUTBOX_PATH"]?.trim();
   const from = process.env["MAIL_FROM"]?.trim();
 
   if (url && outbox) {
     throw new Error(
-      "Set either SMTP_URL or MAIL_OUTBOX_PATH, not both — which one wins would " +
+      `Set either ${urlVariable} or MAIL_OUTBOX_PATH, not both — which one wins would ` +
         "otherwise decide whether registration mail is delivered or written to disk.",
     );
   }
@@ -145,7 +149,7 @@ function mailTransport():
   if (url) {
     if (!from) {
       throw new Error(
-        "MAIL_FROM is required when SMTP_URL is set. " +
+        `MAIL_FROM is required when ${urlVariable} is set. ` +
           'Set it to the address mail is sent from, e.g. "GST Platform <no-reply@example.com>".',
       );
     }
@@ -154,10 +158,10 @@ function mailTransport():
 
   if (!isDevelopment) {
     throw new Error(
-      "SMTP_URL or PRODUCTION_SMTP_URL is required but was not provided. " +
+      "PRODUCTION_SMTP_URL environment variable is required but was not provided. " +
         "Registration confirms nothing over HTTP — whether an address is already " +
         "registered is settled by email — so the server cannot accept signups " +
-        'without a mail transport. Set SMTP_URL (e.g. "smtps://user:pass@smtp.example.com:465") ' +
+      'without a mail transport. Set PRODUCTION_SMTP_URL (e.g. "smtp://user:pass@smtp.example.com:587") ' +
         "and MAIL_FROM. See F-14 in SECURITY-REVIEW.md.",
     );
   }

@@ -140,7 +140,7 @@ export function describeRlsProblem(status: RlsStatus): string | null {
     return (
       `Row-level security is NOT in effect: the database role "${status.role}" is a superuser ` +
       `or holds BYPASSRLS, so Postgres ignores every tenant policy for it. ` +
-      `Point DATABASE_URL at a dedicated application role created with ` +
+      `Point APP_DATABASE_URL at a dedicated application role created with ` +
       `NOSUPERUSER NOBYPASSRLS (see lib/db/README-rls.md). Tenant isolation ` +
       `currently rests entirely on the application's own query filters.`
     );
