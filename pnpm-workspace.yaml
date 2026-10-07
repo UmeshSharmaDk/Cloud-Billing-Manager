@@ -165,3 +165,5 @@ overrides:
   "body-parser@<2.3.0": ">=2.3.0"
   # express-rate-limit pins ip-address to an exact release that now has advisories.
   "ip-address@<10.7.1": ">=10.7.1"
+  # Express still allows the older release blocked by the package firewall.
+  "proxy-addr@<2.0.8": "2.0.8"

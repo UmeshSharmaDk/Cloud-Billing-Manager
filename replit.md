@@ -4,6 +4,23 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 
 ## Run & Operate
 
+- Replit development preview: start the managed workflows
+  `artifacts/api-server: API Server` and `artifacts/gst-platform: web`.
+  The frontend is served at `/`; the API is served at `/api`.
+  The unused Canvas workflow does not need to run.
+- This import runs on Node.js 24. Install dependencies with
+  `pnpm install --frozen-lockfile`. The development schema and RLS policies
+  have been initialized in the workspace PostgreSQL database; no user
+  accounts or business records were imported from GitHub.
+- The API development workflow supplies the preview CORS origins and its
+  `dev` script sets `NODE_ENV=development`. Without `SMTP_URL`, verification
+  emails are logged in the API workflow console rather than delivered.
+  Register through the app and open the verification link from that console
+  to finish creating a development account.
+- Production is **not configured**: configure SMTP delivery and a dedicated
+  non-superuser, non-BYPASSRLS application database connection before publishing.
+  The current workspace owner connection bypasses RLS, as reported by the
+  API startup warning; application query filters still apply.
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 8080)
 - `pnpm --filter @workspace/gst-platform run dev` — run the frontend (port 25512)
 - `pnpm run typecheck` — full typecheck across all packages
