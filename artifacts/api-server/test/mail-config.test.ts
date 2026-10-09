@@ -50,4 +50,14 @@ assert.equal(JSON.parse(development.stdout).kind, "log");
 const missing = loadConfig({});
 assert.notEqual(missing.status, 0);
 assert.match(missing.stderr, /PRODUCTION_SMTP_URL environment variable is required/);
+const fileOutbox = loadConfig({ MAIL_OUTBOX_PATH: "/tmp/isolated-mail-config.jsonl" });
+assert.equal(fileOutbox.status, 0, fileOutbox.stderr);
+assert.equal(JSON.parse(fileOutbox.stdout).kind, "file");
+
+const conflicting = loadConfig({
+  MAIL_OUTBOX_PATH: "/tmp/isolated-mail-config.jsonl",
+  PRODUCTION_SMTP_URL: "smtps://production.example.test:465",
+});
+assert.notEqual(conflicting.status, 0);
+assert.match(conflicting.stderr, /either PRODUCTION_SMTP_URL or MAIL_OUTBOX_PATH, not both/);
 console.log("Mail config: production-only credentials, development SMTP opt-in, development isolation, and required transport passed.");

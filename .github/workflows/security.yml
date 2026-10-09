@@ -216,7 +216,7 @@ jobs:
       # apply to it; migrations and test fixtures run as the owner, which they
       # have to, because the application role deliberately cannot alter a table
       # or read across tenants.
-      DATABASE_URL: postgres://gst_app:gst_app@127.0.0.1:5432/gst
+      APP_DATABASE_URL: postgres://gst_app:gst_app@127.0.0.1:5432/gst
       ADMIN_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/gst
       ALLOWED_ORIGINS: http://localhost:25512
       NODE_ENV: production
@@ -289,7 +289,8 @@ jobs:
         run: pnpm --filter @workspace/api-server run build
 
       # The server is written to refuse to start on insecure configuration (no or short signing
-      # secret, no or wildcard CORS origins, production without a mail transport). The suite below
+      # secret, no or wildcard CORS origins, missing/privileged application connection,
+      # production without a mail transport). The suite below
       # always runs it with a valid configuration, so nothing else would notice if one of those
       # checks were removed or weakened. Each case starts the built server with exactly one thing
       # wrong, under `env -i` so that none of this job's (valid) environment leaks in, and requires
@@ -309,9 +310,9 @@ jobs:
           expect_refusal() {
             local label="$1" setting="$2" out status
             shift 2
-            out="$(mktemp)"
+            out="/tmp/security-startup-refusal-$((++cases)).log"
             status=0
-            timeout 10 env -i PATH="$PATH" PORT="$PORT" DATABASE_URL="$DATABASE_URL" "$@" \
+            timeout 10 env -i PATH="$PATH" PORT="$PORT" APP_DATABASE_URL="$APP_DATABASE_URL" "$@" \
               node artifacts/api-server/dist/index.mjs >"$out" 2>&1 || status=$?
             if [ "$status" -eq 0 ]; then
               echo "::error::[$label] the server exited 0 instead of refusing to boot"
@@ -321,37 +322,39 @@ jobs:
               failures=$((failures + 1))
             elif ! grep -q -- "$setting" "$out"; then
               echo "::error::[$label] exited $status, but without naming $setting, so it may have failed for another reason"
-              sed 's/^/    | /' "$out" | head -20
+              node scripts/security-log.mjs "$out"
               failures=$((failures + 1))
             else
-              echo "ok [$label]: exited $status, $(grep -m1 -- "$setting" "$out" | cut -c1-100)"
+              echo "ok [$label]: exited $status and identified $setting"
             fi
             if answering; then
               echo "::error::[$label] something is answering on port $PORT"
               failures=$((failures + 1))
             fi
-            rm -f "$out"
           }
 
           # Control: a valid configuration must boot under this same `env -i` harness. `env` execs
           # node, so $! is the server's own PID and the kill below really stops it (wrapping this
           # in a shell function would leave node running and holding the port).
-          control_log="$(mktemp)"
-          env -i PATH="$PATH" PORT="$PORT" DATABASE_URL="$DATABASE_URL" \
+          cases=0
+          control_log="/tmp/security-startup-control.log"
+          env -i PATH="$PATH" PORT="$PORT" APP_DATABASE_URL="$APP_DATABASE_URL" \
             SESSION_SECRET="$secret" ALLOWED_ORIGINS="$origins" NODE_ENV=production \
             MAIL_OUTBOX_PATH=/tmp/control-outbox.jsonl \
             node artifacts/api-server/dist/index.mjs >"$control_log" 2>&1 &
           control_pid=$!
+          trap 'kill "$control_pid" 2>/dev/null || true' EXIT
           booted=0
           for _ in $(seq 1 30); do
             if curl -sf --max-time 2 "http://127.0.0.1:${PORT}/api/healthz" >/dev/null; then booted=1; break; fi
+            if ! kill -0 "$control_pid" 2>/dev/null; then break; fi
             sleep 1
           done
           kill "$control_pid" 2>/dev/null || true
           wait "$control_pid" 2>/dev/null || true
           if [ "$booted" -ne 1 ]; then
             echo "::error::the control server (valid configuration) did not boot, so the refusals below would prove nothing"
-            cat "$control_log"
+            node scripts/security-log.mjs "$control_log"
             exit 1
           fi
           if answering; then
@@ -368,7 +371,13 @@ jobs:
             SESSION_SECRET="$secret" NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
           expect_refusal "ALLOWED_ORIGINS=*" ALLOWED_ORIGINS \
             SESSION_SECRET="$secret" ALLOWED_ORIGINS='*' NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
-          expect_refusal "production without a mail transport" SMTP_URL \
+          expect_refusal "no APP_DATABASE_URL (owner URL is not a fallback)" APP_DATABASE_URL \
+            APP_DATABASE_URL= DATABASE_URL="$ADMIN_DATABASE_URL" \
+            SESSION_SECRET="$secret" ALLOWED_ORIGINS="$origins" NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
+          expect_refusal "privileged application connection" "row-level security" \
+            APP_DATABASE_URL="$ADMIN_DATABASE_URL" \
+            SESSION_SECRET="$secret" ALLOWED_ORIGINS="$origins" NODE_ENV=production MAIL_OUTBOX_PATH=/tmp/refusal-outbox.jsonl
+          expect_refusal "production without a mail transport" PRODUCTION_SMTP_URL \
             SESSION_SECRET="$secret" ALLOWED_ORIGINS="$origins" NODE_ENV=production
 
           if [ "$failures" -ne 0 ]; then
@@ -379,7 +388,11 @@ jobs:
 
       - name: Start the API server
         run: |
-          SESSION_SECRET="$(openssl rand -base64 48)" \
+          env -i PATH="$PATH" PORT="$PORT" NODE_ENV=production \
+            APP_DATABASE_URL="$APP_DATABASE_URL" SESSION_SECRET="$(openssl rand -base64 48)" \
+            ALLOWED_ORIGINS="$ALLOWED_ORIGINS" MAIL_OUTBOX_PATH="$MAIL_OUTBOX_PATH" MAIL_FROM="$MAIL_FROM" \
+            DISABLE_BREACH_CHECK="$DISABLE_BREACH_CHECK" AUTH_RATE_LIMIT_MAX="$AUTH_RATE_LIMIT_MAX" \
+            REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" \
             node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
           echo $! > /tmp/api.pid
           timeout 60 bash -c 'until curl -sf http://127.0.0.1:8099/api/healthz >/dev/null; do sleep 1; done'
@@ -391,8 +404,10 @@ jobs:
       # make, so it would pass just as happily with the policies switched off.
       # This asserts on what the database refuses.
       - name: Assert row-level security actually isolates tenants
+        env:
+          DEVELOPMENT_APP_DATABASE_URL: ${{ env.APP_DATABASE_URL }}
         run: pnpm --filter @workspace/db run test:rls
 
       - name: Server log on failure
         if: failure()
-        run: tail -100 /tmp/api.log
+        run: node scripts/security-log.mjs /tmp/security-startup-*.log /tmp/api.log
