@@ -11,6 +11,7 @@ export interface AdminAccount {
   name: string;
   email: string;
   isActive: boolean;
+  mfaEnabled?: boolean;
   userLimit: number;
   userCount: number;
   availableSlots: number;

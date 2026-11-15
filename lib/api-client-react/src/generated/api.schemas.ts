@@ -181,6 +181,7 @@ export interface User {
   subscriptionEnd?: string | null;
   /** @nullable */
   businessId?: number | null;
+  mfaEnabled?: boolean;
   createdAt?: string;
 }
 
@@ -189,11 +190,59 @@ export interface AuthResponse {
   user: User;
 }
 
+export interface MfaChallenge {
+  mfaRequired: true;
+  mfaToken: string;
+}
+
+export type LoginResult = AuthResponse | MfaChallenge;
+
+export interface MfaLoginInput {
+  mfaToken: string;
+  /**
+     * A six-digit authenticator code, or a recovery code
+     * @minLength 6
+     * @maxLength 32
+     */
+  code: string;
+}
+
+export interface MfaCodeInput {
+  /**
+     * @minLength 6
+     * @maxLength 32
+     */
+  code: string;
+}
+
+export interface ConfirmPasswordInput {
+  /** @minLength 1 */
+  confirmPassword: string;
+}
+
+export interface MfaSetupResponse {
+  /** Base32, for typing into an authenticator by hand */
+  secret: string;
+  otpauthUri: string;
+  /** A PNG data URL of the otpauthUri */
+  qrCodeDataUrl: string;
+}
+
+export interface MfaEnableResponse {
+  recoveryCodes: string[];
+  token: string;
+}
+
+export interface MfaRecoveryCodesResponse {
+  recoveryCodes: string[];
+}
+
 export interface AdminAccount {
   id: number;
   name: string;
   email: string;
   isActive: boolean;
+  mfaEnabled?: boolean;
   userLimit: number;
   userCount: number;
   availableSlots: number;

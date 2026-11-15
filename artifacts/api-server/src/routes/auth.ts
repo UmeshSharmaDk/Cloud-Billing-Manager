@@ -1,7 +1,8 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import { db, rootDb, runInSystemScope, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable, adminInvitationsTable } from "@workspace/db";
-import { eq, and, lt, gt, isNull } from "drizzle-orm";
+import { eq, and, lt, gt, isNull, or, sql } from "drizzle-orm";
+import QRCode from "qrcode";
 import jwt from "jsonwebtoken";
 import { logger } from "../lib/logger";
 import { config } from "../lib/config";
@@ -12,8 +13,16 @@ import {
   spendVerificationTime,
 } from "../lib/password";
 import { validateBody } from "../middleware/validate";
-import { LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody } from "../schemas";
-import { recordAudit } from "../lib/audit";
+import {
+  LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody,
+  MfaSetupBody, MfaCodeBody, MfaLoginBody,
+} from "../schemas";
+import { recordAudit, actorFrom } from "../lib/audit";
+import { mapUser } from "../lib/serialise";
+import { verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
+import {
+  generateTotpSecret, matchTotp, otpauthUri, generateRecoveryCodes, hashRecoveryCode, looksLikeTotp,
+} from "../lib/mfa";
 import { validatePassword } from "../lib/password-policy";
 import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
@@ -28,6 +37,7 @@ import {
   clearFailures,
   consumeBudget,
   userKey,
+  mfaKey,
   loginKey,
   registerKey,
 } from "../middleware/rate-limit";
@@ -52,6 +62,22 @@ interface TokenPayload {
   /** This token's own id, so signing out can revoke it alone. */
   jti?: string;
   exp?: number;
+  /**
+   * Set only on the short-lived token that sits between a correct password and
+   * a correct second factor. It names an account but is not a session:
+   * `requireAuth` refuses it, and `/auth/mfa/login` accepts nothing else.
+   */
+  purpose?: "mfa";
+}
+
+/** Long enough to open an authenticator app, short enough to be useless later. */
+const MFA_TOKEN_TTL_SECONDS = 5 * 60;
+
+function generateMfaToken(userId: number, tokenVersion: number): string {
+  return jwt.sign({ userId, v: tokenVersion, purpose: "mfa" }, JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: MFA_TOKEN_TTL_SECONDS,
+  });
 }
 
 function generateToken(userId: number, role: string, tokenVersion: number): string {
@@ -181,7 +207,8 @@ export async function requireAuth(req: any, res: any, next: any) {
   if (!token) return res.status(401).json({ error: "Unauthorized" });
 
   const payload = verifyToken(token);
-  if (!payload) return res.status(401).json({ error: "Invalid token" });
+  // A half-finished sign-in is not a session.
+  if (!payload || payload.purpose) return res.status(401).json({ error: "Invalid token" });
 
   const [user] = await db
     .select()
@@ -223,15 +250,38 @@ export async function requireAuth(req: any, res: any, next: any) {
   next();
 }
 
+const isAdminRole = (role: string | undefined) => role === "admin" || role === "superadmin";
+
+/**
+ * Administrators must have a second factor before any admin route answers.
+ *
+ * A password alone could reset any user's password or change a role. The check
+ * is on the row, like the role itself, and enabling MFA revokes every session
+ * issued before it, so an administrator's session that works here was either
+ * opened with a code or minted by the enrolment that verified one.
+ *
+ * Enrolment itself is under `/auth/mfa`, which only needs `requireAuth`, so an
+ * administrator without MFA can always reach it.
+ */
+const MFA_ENROLMENT_REQUIRED = {
+  error: "Set up two-factor authentication to use the admin panel.",
+  code: "mfa_enrolment_required",
+} as const;
+
+/** Whether this account may use admin powers right now. */
+export function hasAdminAccess(user: { role: string; mfaEnabledAt: Date | null } | undefined): boolean {
+  return Boolean(user && isAdminRole(user.role) && user.mfaEnabledAt);
+}
+
 export function requireAdmin(req: any, res: any, next: any) {
-  if (req.user?.role !== "admin" && req.user?.role !== "superadmin") {
-    return res.status(403).json({ error: "Forbidden" });
-  }
+  if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: "Forbidden" });
+  if (!req.user.mfaEnabledAt) return res.status(403).json(MFA_ENROLMENT_REQUIRED);
   next();
 }
 
 export function requireSuperadmin(req: any, res: any, next: any) {
   if (req.user?.role !== "superadmin") return res.status(403).json({ error: "Forbidden" });
+  if (!req.user.mfaEnabledAt) return res.status(403).json(MFA_ENROLMENT_REQUIRED);
   next();
 }
 
@@ -319,17 +369,204 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
   }
 
+  // The password was right, but it is only half of this account's credential.
+  // No session and no cookie: the caller gets a token good for one thing, five
+  // minutes, which is to present a code to `/auth/mfa/login`.
+  if (user.mfaEnabledAt) {
+    return res.json({ mfaRequired: true, mfaToken: generateMfaToken(user.id, user.tokenVersion) });
+  }
+
   const token = generateToken(user.id, user.role, user.tokenVersion);
   setSessionCookies(res, token);
-  return res.json({
-    token,
-    user: {
-      id: user.id, name: user.name, email: user.email, role: user.role,
-      isActive: user.isActive, subscriptionStatus: user.subscriptionStatus,
-      subscriptionEnd: user.subscriptionEnd, businessId: user.businessId,
-      createdAt: user.createdAt,
-    }
+  return res.json({ token, user: mapUser(user) });
+});
+
+/**
+ * Spend a second-factor code: an authenticator code, or one recovery code.
+ *
+ * Both are spent by a conditional UPDATE, so two requests carrying the same
+ * code cannot both succeed. An authenticator code is refused unless its step is
+ * later than the last one accepted, which also refuses a code seen over a
+ * shoulder and replayed within its 30 seconds.
+ */
+async function spendMfaCode(
+  user: { id: number; mfaSecret: string | null },
+  rawCode: string,
+  { allowRecovery }: { allowRecovery: boolean },
+): Promise<"totp" | "recovery" | null> {
+  const code = rawCode.trim();
+  if (looksLikeTotp(code)) {
+    if (!user.mfaSecret) return null;
+    const step = matchTotp(user.mfaSecret, code);
+    if (step === null) return null;
+    const [row] = await db.update(usersTable)
+      .set({ mfaLastStep: step })
+      .where(and(
+        eq(usersTable.id, user.id),
+        or(isNull(usersTable.mfaLastStep), lt(usersTable.mfaLastStep, step)),
+      ))
+      .returning({ id: usersTable.id });
+    return row ? "totp" : null;
+  }
+  if (!allowRecovery) return null;
+  const hash = hashRecoveryCode(code);
+  const [row] = await db.update(usersTable)
+    .set({ mfaRecoveryCodes: sql`array_remove(${usersTable.mfaRecoveryCodes}, ${hash})` })
+    .where(and(eq(usersTable.id, user.id), sql`${hash} = ANY(${usersTable.mfaRecoveryCodes})`))
+    .returning({ id: usersTable.id });
+  return row ? "recovery" : null;
+}
+
+const MFA_SIGN_IN_EXPIRED = { error: "Your sign-in has expired. Please sign in again." } as const;
+
+/**
+ * The second half of signing in to an account with MFA.
+ *
+ * Guesses are counted against `mfaKey`, which a correct password never clears;
+ * see `rate-limit.ts`. Everything the password step checked is checked again,
+ * because up to five minutes have passed and the account may have changed.
+ */
+router.post("/mfa/login", authIpLimiter, validateBody(MfaLoginBody), async (req: Req, res) => {
+  const payload = verifyToken(req.body.mfaToken);
+  if (!payload || payload.purpose !== "mfa") return res.status(401).json(MFA_SIGN_IN_EXPIRED);
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, payload.userId)).limit(1);
+  if (!user || user.deletedAt || !user.mfaEnabledAt || (payload.v ?? 0) !== user.tokenVersion) {
+    return res.status(401).json(MFA_SIGN_IN_EXPIRED);
+  }
+  if (!user.isActive || isSubscriptionExpired(user)) {
+    return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
+  }
+
+  const lockedUntil = await reserveAttempt([mfaKey(user.id)]);
+  if (lockedUntil) {
+    res.setHeader("Retry-After", String(Math.ceil((lockedUntil.getTime() - Date.now()) / 1000)));
+    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+  }
+
+  const spent = await spendMfaCode(user, req.body.code, { allowRecovery: true });
+  if (!spent) return res.status(401).json({ error: "That code is not valid." });
+  await clearFailures([mfaKey(user.id)]);
+
+  if (spent === "recovery") {
+    await recordAudit({
+      actorId: user.id, actorEmail: user.email, action: "user.mfa_recovery_code_used",
+      targetType: "user", targetId: user.id, sourceIp: req.ip,
+      details: { remaining: Math.max(0, (user.mfaRecoveryCodes?.length ?? 1) - 1) },
+    });
+  }
+
+  const token = generateToken(user.id, user.role, user.tokenVersion);
+  setSessionCookies(res, token);
+  return res.json({ token, user: mapUser(user) });
+});
+
+/** Only administrators enrol: they are who `requireAdmin` asks it of. */
+function requireAdminRole(req: any, res: any, next: any) {
+  if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: "Forbidden" });
+  next();
+}
+
+/**
+ * Start enrolment: a new secret, shown once.
+ *
+ * Needs the account's password, not just its session. Otherwise a stolen
+ * session could enrol the thief's authenticator and lock the owner out. The
+ * secret does not count until `/mfa/enable` confirms a code from it.
+ */
+router.post("/mfa/setup", requireAuth, requireAdminRole, validateBody(MfaSetupBody), async (req: Req, res) => {
+  if (req.user.mfaEnabledAt) {
+    return res.status(409).json({ error: "Two-factor authentication is already on for this account." });
+  }
+  const stepUp = await verifyStepUp(req);
+  if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+
+  const secret = generateTotpSecret();
+  await db.update(usersTable)
+    .set({ mfaSecret: secret, mfaLastStep: null })
+    .where(and(eq(usersTable.id, req.user.id), isNull(usersTable.mfaEnabledAt)));
+
+  const uri = otpauthUri(secret, req.user.email);
+  return res.json({ secret, otpauthUri: uri, qrCodeDataUrl: await QRCode.toDataURL(uri, { margin: 1, width: 240 }) });
+});
+
+/**
+ * Finish enrolment with a code from the new authenticator.
+ *
+ * Every other session this account holds is revoked: they were opened with a
+ * password alone. This device gets a fresh session, and the recovery codes are
+ * returned here and never again.
+ */
+router.post("/mfa/enable", requireAuth, requireAdminRole, validateBody(MfaCodeBody), async (req: Req, res) => {
+  if (req.user.mfaEnabledAt) {
+    return res.status(409).json({ error: "Two-factor authentication is already on for this account." });
+  }
+  if (!req.user.mfaSecret) {
+    return res.status(400).json({ error: "Start setup first." });
+  }
+
+  const lockedUntil = await reserveAttempt([mfaKey(req.user.id)]);
+  if (lockedUntil) {
+    res.setHeader("Retry-After", String(Math.ceil((lockedUntil.getTime() - Date.now()) / 1000)));
+    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+  }
+
+  const step = matchTotp(req.user.mfaSecret, req.body.code);
+  if (step === null) return res.status(400).json({ error: "That code is not valid. Check the time on your phone and try again." });
+
+  const recoveryCodes = generateRecoveryCodes();
+  // Conditional on the secret this request checked the code against, so a
+  // second `/mfa/setup` racing this one cannot enable a secret nobody verified.
+  const [updated] = await db.update(usersTable)
+    .set({
+      mfaEnabledAt: new Date(),
+      mfaLastStep: step,
+      mfaRecoveryCodes: recoveryCodes.map(hashRecoveryCode),
+      tokenVersion: req.user.tokenVersion + 1,
+    })
+    .where(and(
+      eq(usersTable.id, req.user.id),
+      isNull(usersTable.mfaEnabledAt),
+      eq(usersTable.mfaSecret, req.user.mfaSecret),
+    ))
+    .returning();
+  if (!updated) return res.status(409).json({ error: "Setup changed while this was in progress. Start again." });
+  await clearFailures([mfaKey(req.user.id)]);
+
+  await recordAudit({
+    ...actorFrom(req), action: "user.mfa_enabled", targetType: "user", targetId: req.user.id,
   });
+
+  const token = generateToken(updated.id, updated.role, updated.tokenVersion);
+  setSessionCookies(res, token);
+  return res.json({ recoveryCodes, token });
+});
+
+/**
+ * Replace the recovery codes. Takes an authenticator code, not a recovery
+ * code: whoever holds one leftover code should not be able to mint ten more.
+ */
+router.post("/mfa/recovery-codes", requireAuth, requireAdminRole, validateBody(MfaCodeBody), async (req: Req, res) => {
+  if (!req.user.mfaEnabledAt) {
+    return res.status(400).json({ error: "Two-factor authentication is not on for this account." });
+  }
+  const lockedUntil = await reserveAttempt([mfaKey(req.user.id)]);
+  if (lockedUntil) {
+    res.setHeader("Retry-After", String(Math.ceil((lockedUntil.getTime() - Date.now()) / 1000)));
+    return res.status(429).json({ error: "Too many failed attempts. Try again later." });
+  }
+  const spent = await spendMfaCode(req.user, req.body.code, { allowRecovery: false });
+  if (!spent) return res.status(400).json({ error: "That code is not valid." });
+  await clearFailures([mfaKey(req.user.id)]);
+
+  const recoveryCodes = generateRecoveryCodes();
+  await db.update(usersTable)
+    .set({ mfaRecoveryCodes: recoveryCodes.map(hashRecoveryCode) })
+    .where(eq(usersTable.id, req.user.id));
+  await recordAudit({
+    ...actorFrom(req), action: "user.mfa_recovery_codes_regenerated", targetType: "user", targetId: req.user.id,
+  });
+  return res.json({ recoveryCodes });
 });
 
 /** How long a verification link stays usable. */
@@ -531,12 +768,7 @@ router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrati
   setSessionCookies(res, session);
   return res.status(201).json({
     token: session,
-    user: {
-      id: created.user.id, name: created.user.name, email: created.user.email, role: created.user.role,
-      isActive: created.user.isActive, subscriptionStatus: created.user.subscriptionStatus,
-      subscriptionEnd: created.user.subscriptionEnd, businessId: created.business.id,
-      createdAt: created.user.createdAt,
-    }
+    user: mapUser(created.user),
   });
 });
 
@@ -607,12 +839,7 @@ router.post("/accept-admin-invite", authIpLimiter, validateBody(AcceptAdminInvit
     setSessionCookies(res, session);
     return res.status(201).json({
       token: session,
-      user: {
-        id: admin.id, name: admin.name, email: admin.email, role: admin.role,
-        isActive: admin.isActive, subscriptionStatus: admin.subscriptionStatus,
-        subscriptionEnd: admin.subscriptionEnd, businessId: admin.businessId,
-        createdAt: admin.createdAt,
-      },
+      user: mapUser(admin),
     });
   });
 
@@ -624,15 +851,7 @@ export async function prunePendingRegistrations(): Promise<number> {
   return deleted.length;
 }
 
-router.get("/me", requireAuth, async (req: Req, res) => {
-  const user = req.user;
-  return res.json({
-    id: user.id, name: user.name, email: user.email, role: user.role,
-    isActive: user.isActive, subscriptionStatus: user.subscriptionStatus,
-    subscriptionEnd: user.subscriptionEnd, businessId: user.businessId,
-    createdAt: user.createdAt,
-  });
-});
+router.get("/me", requireAuth, async (req: Req, res) => res.json(mapUser(req.user)));
 
 /**
  * Clear the session cookie. This was a stub that returned `{ success: true }`

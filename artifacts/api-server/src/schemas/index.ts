@@ -237,6 +237,30 @@ export const AcceptAdminInvitationBody = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Two-factor authentication
+// ---------------------------------------------------------------------------
+
+/** A six-digit authenticator code, or a recovery code where one is accepted. */
+const mfaCode = z.string().trim().min(6).max(32);
+
+export const MfaSetupBody = z.object({
+  confirmPassword: z.string().min(1).max(1024),
+});
+
+export const MfaCodeBody = z.object({
+  code: mfaCode,
+});
+
+export const MfaLoginBody = z.object({
+  mfaToken: z.string().min(1).max(2048),
+  code: mfaCode,
+});
+
+export const MfaResetBody = z.object({
+  confirmPassword: z.string().min(1).max(1024),
+});
+
+// ---------------------------------------------------------------------------
 // Business
 // ---------------------------------------------------------------------------
 

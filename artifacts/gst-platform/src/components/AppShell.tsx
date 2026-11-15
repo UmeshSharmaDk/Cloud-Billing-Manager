@@ -15,7 +15,8 @@ import {
   Shield,
   Menu,
   LogOut,
-  Truck
+  Truck,
+  KeyRound,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
@@ -44,10 +45,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const adminNavigation = [
     { name: "Admin Dashboard", href: "/admin", icon: Shield },
     { name: "User Management", href: "/admin/users", icon: Users },
+    { name: "Security", href: "/security", icon: KeyRound },
   ];
 
   const superadminNavigation = [
     { name: "Superadmin", href: "/superadmin", icon: Shield },
+    { name: "Security", href: "/security", icon: KeyRound },
   ];
 
   const navigation = isSuperadmin ? superadminNavigation : isAdmin ? adminNavigation : userNavigation;

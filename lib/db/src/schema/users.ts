@@ -31,6 +31,17 @@ export const usersTable = pgTable("users", {
    * rejects any token whose copy is behind the row's.
    */
   tokenVersion: integer("token_version").notNull().default(0),
+  /**
+   * Second factor for administrators. `mfaSecret` is written at enrolment and
+   * only counts once `mfaEnabledAt` is set by a confirmed code, so a setup
+   * abandoned halfway changes nothing about how the account signs in.
+   */
+  mfaSecret: text("mfa_secret"),
+  mfaEnabledAt: timestamp("mfa_enabled_at"),
+  /** The last 30-second step a code was accepted for; a code is spent once. */
+  mfaLastStep: integer("mfa_last_step"),
+  /** SHA-256 of each unused recovery code. One is removed as it is used. */
+  mfaRecoveryCodes: text("mfa_recovery_codes").array(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   createdByAdminIdx: index("users_created_by_admin_idx").on(table.createdByAdminId),

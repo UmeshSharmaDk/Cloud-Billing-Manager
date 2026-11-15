@@ -153,10 +153,65 @@ inconsistently — is deleted. One admin surface.
 
 ### What is left, and why it is not code
 
-- **MFA for administrators** is a product feature — enrolment, QR provisioning, recovery codes, and
-  a policy for what happens when someone loses their authenticator. Shipping it badly is worse than
-  not shipping it, so it wants its own decision rather than a corner of a cleanup sweep.
+- **MFA for administrators** — done; see *Two-factor authentication for administrators* below.
 - **An external penetration test** remains the one step no amount of self-review substitutes for.
+
+## Two-factor authentication for administrators — done
+
+A password was the whole credential for an account that can reset anyone's password, change roles
+and grant seats. Administrators and superadmins now need a time-based code (RFC 6238, any
+authenticator app) as well.
+
+**Enforced, not offered.** `requireAdmin` and `requireSuperadmin` refuse with
+`403 mfa_enrolment_required` until the account has MFA on, and the web app sends such an
+administrator to `/security` to set it up. Enrolment lives under `/auth/mfa`, which needs only a
+session, so nobody is locked out of enrolling. Ordinary users are unaffected.
+
+**Enrolment** needs the account's password (`/auth/mfa/setup`), so a stolen session cannot enrol
+the thief's phone. The secret counts only once a code from it is confirmed (`/auth/mfa/enable`),
+which also revokes every session opened with the password alone and returns ten single-use
+recovery codes, shown once and stored as SHA-256 hashes.
+
+**Sign-in** is two steps. A correct password for an account with MFA returns a five-minute
+`mfaToken` and no session; `requireAuth` refuses that token. `/auth/mfa/login` takes it with an
+authenticator code or a recovery code. Codes are spent by a conditional `UPDATE`, so a code cannot
+be replayed, even within its 30 seconds, and a recovery code works once. Wrong codes count against
+`mfa:<id>`, which a correct password never clears; otherwise someone holding the password could
+reset the count with each login and guess codes without limit.
+
+**Lost authenticator.** A recovery code signs in, and `/security` replaces the set (that needs an
+authenticator code, not a recovery code). With both gone, a superadmin resets the administrator
+(`POST /superadmin/admins/:id/mfa-reset`, own password confirmed, never on themselves). The reset
+revokes the target's sessions, is written to `audit_log`, and the administrator must enrol again.
+Using a recovery code is audited too.
+
+**The last superadmin** cannot be reset by anyone else. If that account loses both its phone and
+its codes, an operator clears it in the database, which is the same trust boundary that created it:
+
+```sql
+UPDATE users SET mfa_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = NULL,
+  mfa_recovery_codes = NULL, token_version = token_version + 1
+WHERE email = '<superadmin address>' AND role = 'superadmin';
+```
+
+**The secret is stored unencrypted** in `users.mfa_secret`. Encrypting it with a key the same
+server holds protects only against someone who can read the table but not the environment, and
+loses every administrator's MFA the day that key is rotated or lost. The second factor exists to
+stop a stolen or guessed password. `mapUser` never returns it, and the audit log redacts it.
+
+**Deploying it.** `push` adds four nullable columns to `users` and loses no data; run `rls:apply`
+afterwards as always. Every existing administrator is sent to set up MFA the next time they open
+the admin panel, so tell them before deploying.
+
+### Verified
+
+- `test/totp.test.ts` checks the TOTP code against RFC 6238's SHA-1 vectors, the drift window, and
+  the recovery-code format.
+- The integration suite enrols an invited administrator through the API, and a new `mfa` section
+  covers the gate on every admin router, password-gated setup, revocation of password-only
+  sessions, the two-step sign-in, replay, recovery codes (single use, hashed, audited), the lockout
+  surviving a correct password, regeneration, and the superadmin reset. The suite promotes accounts
+  as already-enrolled administrators so the existing checks run unchanged.
 
 ## Registration no longer answers the question — fixed
 
