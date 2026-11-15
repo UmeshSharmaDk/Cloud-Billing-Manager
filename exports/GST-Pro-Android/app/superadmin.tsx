@@ -9,7 +9,7 @@ import { Button, Card, colors, ErrorView, Field, Loading, PasswordPrompt, Prompt
 import { AccountCard } from "./(tabs)/more";
 import { Stat, type CapacityRequest } from "./admin";
 
-type Admin = { id: number; name: string; email: string; isActive: boolean; userLimit: number; userCount: number; availableSlots: number };
+type Admin = { id: number; name: string; email: string; isActive: boolean; mfaEnabled?: boolean; userLimit: number; userCount: number; availableSlots: number };
 type Invite = { id: number; name: string; email: string; userLimit: number; expiresAt: string };
 type Ask = { title: string; message: string; then: (v: string) => void };
 const whole = (v: string) => (/^\d+$/.test(v.trim()) ? Number(v) : null);
@@ -85,7 +85,12 @@ export default function Superadmin() {
             </View>
             <Text style={s.muted}>{a.email}</Text>
             <Row label="Users / limit" value={`${a.userCount} / ${a.userLimit} (${a.availableSlots} free)`} />
+            <Text style={s.muted}>{a.mfaEnabled ? "Two-factor on" : "Two-factor not set up"}</Text>
             <Button title="Change user limit" variant="outline" onPress={() => editLimit(a)} />
+            {a.mfaEnabled && (
+              <Button title="Reset two-factor" variant="outline" onPress={() => privileged((pw) => api(`/superadmin/admins/${a.id}/mfa-reset`, { method: "POST", body: { confirmPassword: pw } }),
+                () => Alert.alert("Two-factor reset", `${a.name} sets it up again at their next sign-in.`))} />
+            )}
           </View>
         ))}
       </Card>
