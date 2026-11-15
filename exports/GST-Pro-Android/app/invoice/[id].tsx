@@ -7,6 +7,7 @@ import { Alert, Image, Linking, ScrollView, Text, View } from "react-native";
 import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { invoiceHtml } from "@/lib/invoiceHtml";
+import { reminderLink } from "@/lib/whatsapp";
 import { useSave } from "@/lib/save";
 import type { Business, Customer, Invoice } from "@/lib/types";
 import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill } from "@/lib/ui";
@@ -63,6 +64,10 @@ export default function InvoiceDetail() {
         <Card title="Payment">
           <Row label="Paid so far" value={money(inv.paidAmount)} />
           {due > 0 && <Row label="Balance due" value={money(due)} />}
+          {reminderLink(inv, cust.data?.phone as string, { name: biz.data?.name, upiId: biz.data?.upiId as string }, money, date) && (
+            <Button title="Send WhatsApp reminder" variant="outline"
+              onPress={() => Linking.openURL(reminderLink(inv, cust.data?.phone as string, { name: biz.data?.name, upiId: biz.data?.upiId as string }, money, date)!).catch(() => Alert.alert("WhatsApp is not installed"))} />
+          )}
           {inv.upi && (
             <View style={{ alignItems: "center", gap: 6, paddingVertical: 6 }}>
               <Image source={{ uri: inv.upi.qr }} style={{ width: 180, height: 180 }} accessibilityLabel="UPI payment QR code" />
