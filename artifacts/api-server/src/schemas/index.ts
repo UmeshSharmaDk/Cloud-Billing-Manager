@@ -546,6 +546,15 @@ export const ListPaymentsQuery = z.object({
   type: z.enum(["in", "out", "received", "paid"]).optional(),
 });
 
+export const MatchStatementBody = z.object({
+  rows: z.array(z.object({
+    date: z.string().max(40),
+    description: z.string().max(500),
+    amount: z.coerce.number().finite().min(-1e12).max(1e12),
+    reference: z.string().max(100).nullish(),
+  })).min(1).max(2000),
+});
+
 export const CreatePaymentBody = z.object({
   type: z.enum(["received", "paid", "in", "out"]),
   // Strictly positive: direction is the `type`, not the sign. A negative amount

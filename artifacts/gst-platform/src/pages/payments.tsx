@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useListPayments } from "@workspace/api-client-react";
+import { BankImport } from "@/components/BankImport";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -48,6 +49,8 @@ export default function PaymentsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <BankImport />
 
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">

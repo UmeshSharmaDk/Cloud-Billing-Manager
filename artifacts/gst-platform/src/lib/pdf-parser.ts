@@ -540,3 +540,17 @@ export async function parsePurchaseBill(file: File, products: any[]): Promise<Pa
 
 // Kept as a compatibility alias for any existing callers.
 export const parsePdfPurchaseBill = parsePurchaseBill;
+
+/** The text of any importable file: PDF (OCR when scanned), image (OCR), Word, spreadsheet or plain text. */
+export async function fileToText(file: File): Promise<string> {
+  if (file.size > MAX_IMPORT_FILE_BYTES) throw new ImportFileTooLargeError(file.size);
+  const extension = getExtension(file);
+  if (file.type === "application/pdf" || extension === "pdf") {
+    const text = await extractPdfText(file);
+    return text.trim() ? text : extractOcrText(await renderPdfPages(file));
+  }
+  if (isImageFile(file)) return extractOcrText([file]);
+  if (extension === "docx") return extractWordText(file);
+  if (isSpreadsheetFile(file)) return extractSpreadsheetText(file);
+  return file.text();
+}

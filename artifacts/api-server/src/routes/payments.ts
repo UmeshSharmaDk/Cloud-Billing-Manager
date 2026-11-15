@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { db, paymentsTable, invoicesTable, customersTable, vendorsTable } from "@workspace/db";
-import { eq, and, count, desc } from "drizzle-orm";
+import { db, paymentsTable, invoicesTable, purchasesTable, customersTable, vendorsTable } from "@workspace/db";
+import { eq, and, count, desc, notInArray } from "drizzle-orm";
+import { matchStatement } from "../lib/bank-match";
 import { requireAuth, requireBusiness } from "./auth";
 import { dec, toColumn, toJson } from "../lib/money";
 import { settleInvoice } from "../lib/invoice-payments";
 import { validateBody, validateQuery } from "../middleware/validate";
-import { ListPaymentsQuery, CreatePaymentBody } from "../schemas";
+import { ListPaymentsQuery, CreatePaymentBody, MatchStatementBody } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { resolveTenantRefs } from "../lib/tenant-refs";
 
@@ -36,6 +37,22 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListPaymentsQuery), 
     .orderBy(desc(paymentsTable.createdAt));
   const [{ count: total }] = await db.select({ count: count() }).from(paymentsTable).where(and(...conditions));
   return res.json({ payments: payments.map(mapPayment), total: Number(total) });
+});
+
+/** Suggest the open invoice or bill each bank statement line settles. Reads only. */
+router.post("/match", requireAuth, requireBusiness, validateBody(MatchStatementBody), async (req: Req, res) => {
+  const businessId = req.businessId;
+  const closed = ["paid", "cancelled"];
+  const [invoices, purchases] = await Promise.all([
+    db.select().from(invoicesTable).where(and(eq(invoicesTable.businessId, businessId), notInArray(invoicesTable.status, closed))),
+    db.select().from(purchasesTable).where(and(eq(purchasesTable.businessId, businessId), notInArray(purchasesTable.status, closed))),
+  ]);
+  const matches = matchStatement(
+    req.body.rows,
+    invoices.map((i) => ({ id: i.id, number: i.invoiceNumber, party: i.customerName, partyId: i.customerId, due: toJson(dec(i.grandTotal).minus(dec(i.paidAmount))) })),
+    purchases.map((p) => ({ id: p.id, number: p.invoiceNumber, party: p.vendorName, partyId: p.vendorId, due: toJson(dec(p.grandTotal).minus(dec(p.tdsAmount))) })),
+  );
+  return res.json({ matches });
 });
 
 router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), books("payment"), async (req: Req, res) => {

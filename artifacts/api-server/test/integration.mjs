@@ -2971,6 +2971,23 @@ const adminEmail = `admin${uniq}@example.test`;
   check("tcs", "the TCS report lists it with the collectee PAN", tcs?.totalTcs === 118 && tcs?.entries?.[0]?.pan === "PQRST6789K", JSON.stringify(tcs));
   const g3b = (await call("GET", "/reports/gstr3b?month=6&year=2026", { token: o.token })).data;
   check("tcs", "TCS does not change the GST figures", g3b?.outwardTaxable === 100000 && g3b?.outwardCgst === 9000, JSON.stringify({ t: g3b?.outwardTaxable, c: g3b?.outwardCgst }));
+
+  // Bank statement import: suggest, then record through the ordinary endpoints.
+  const m = await call("POST", "/payments/match", { token: o.token, body: { rows: [
+    { date: "2026-06-20", description: `NEFT BIG BUYER ${i.invoiceNumber}`, amount: 118118 },
+    { date: "2026-06-21", description: "RTGS CONTRACTOR", amount: -11700 },
+    { date: "2026-06-22", description: "Bank charges", amount: -59 },
+  ] } });
+  const [mi, mp, none] = m.data?.matches ?? [];
+  check("bank", "a credit matches the invoice named in its narration", mi?.kind === "invoice" && mi?.id === i.id && mi?.by === "number" && mi?.due === 118118, JSON.stringify(m.data));
+  check("bank", "a debit matches the bill whose net payable equals it", mp?.kind === "purchase" && mp?.id === b.id && mp?.by === "amount");
+  check("bank", "an unrelated line is left unmatched", none === null);
+  const other = await register("bankother");
+  const theirs = (await call("POST", "/payments/match", { token: other.token, body: { rows: [{ date: "2026-06-20", description: i.invoiceNumber, amount: 118118 }] } })).data;
+  check("bank", "another business's invoices are never suggested", theirs?.matches?.[0] === null, JSON.stringify(theirs));
+  await call("POST", "/payments", { token: o.token, body: { type: "received", invoiceId: i.id, amount: 118118, date: "2026-06-20", mode: "bank_transfer" } });
+  const again = (await call("POST", "/payments/match", { token: o.token, body: { rows: [{ date: "2026-06-20", description: i.invoiceNumber, amount: 118118 }] } })).data;
+  check("bank", "a paid invoice is no longer suggested", again?.matches?.[0] === null, JSON.stringify(again));
 }
 
 // ---------------------------------------------------------------------------
