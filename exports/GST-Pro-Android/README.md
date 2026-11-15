@@ -1,8 +1,14 @@
 # GST Pro — Android app
 
-Native React Native (Expo) client for GST Pro. Business ("user") accounts can
-sign in and see the dashboard, invoices and customers. Admin tools, sign-up and
-password resets stay on the website for now.
+Native React Native (Expo) client for GST Pro, covering what the website does:
+business accounts get invoices (create, payment status, PDF share and print),
+purchases, inventory, customers, vendors, payments, e-way bills, GST reports
+(GSTR-1, GSTR-3B, HSN) and business settings; admins manage their users and
+capacity; the superadmin manages admins, invitations and capacity requests.
+
+Two website-only pieces remain: importing a purchase bill from a PDF or photo,
+and the links in sign-up and admin-invite emails, which open the website to set
+a password before signing in here.
 
 It talks to the API with a bearer token kept in the device keystore
 (`expo-secure-store`); the server skips its browser CSRF check for bearer

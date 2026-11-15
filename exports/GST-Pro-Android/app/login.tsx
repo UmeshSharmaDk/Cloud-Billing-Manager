@@ -1,4 +1,4 @@
-import { Redirect } from "expo-router";
+import { Redirect, router } from "expo-router";
 import { useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -12,7 +12,7 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (user) return <Redirect href="/(tabs)" />;
+  if (user) return <Redirect href="/" />;
 
   const submit = async () => {
     if (!email.trim() || !password) return setError("Enter your email and password.");
@@ -41,7 +41,9 @@ export default function Login() {
           <Text style={s.buttonText}>{busy ? "Signing in…" : "Sign in"}</Text>
         </Pressable>
         <View style={{ height: 8 }} />
-        <Text style={[s.muted, { textAlign: "center" }]}>New accounts and password resets are on the website.</Text>
+        <Pressable onPress={() => router.push("/register")} accessibilityRole="button">
+          <Text style={{ color: colors.primary, textAlign: "center", fontWeight: "600" }}>New here? Create an account</Text>
+        </Pressable>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

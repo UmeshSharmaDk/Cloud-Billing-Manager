@@ -5,7 +5,9 @@ export type User = {
   email: string;
   role: "user" | "admin" | "superadmin" | string;
   isActive: boolean;
+  subscriptionStatus?: string | null;
   subscriptionEnd?: string | null;
+  createdAt?: string;
 };
 
 export type DashboardStats = {
@@ -29,11 +31,20 @@ export type Customer = {
   city?: string | null;
   state?: string | null;
   pincode?: string | null;
+  stateCode?: string | null;
+  creditLimit?: number | null;
   outstandingBalance?: number | null;
 };
 
+export type Vendor = Customer;
+
 export type InvoiceItem = {
   id?: number;
+  productId?: number | null;
+  discount?: number;
+  cgst?: number;
+  sgst?: number;
+  igst?: number;
   description?: string;
   hsnCode?: string | null;
   quantity: number;
@@ -67,3 +78,61 @@ export type Invoice = {
   notes?: string | null;
   items?: InvoiceItem[];
 };
+
+export type Product = {
+  id: number;
+  name: string;
+  sku?: string | null;
+  hsnCode?: string | null;
+  unit: string;
+  purchasePrice?: number | null;
+  sellingPrice?: number | null;
+  gstRate: number;
+  stockQuantity: number;
+  lowStockThreshold?: number | null;
+  description?: string | null;
+  category?: string | null;
+};
+
+export type Purchase = {
+  id: number;
+  vendorId: number;
+  vendorName: string;
+  vendorGstin?: string | null;
+  invoiceNumber: string;
+  invoiceDate: string;
+  status: string;
+  subtotal: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  totalGst: number;
+  grandTotal: number;
+  notes?: string | null;
+  items: InvoiceItem[];
+};
+
+export type Payment = {
+  id: number;
+  type: string;
+  amount: number;
+  date: string;
+  mode: string;
+  referenceNumber?: string | null;
+  notes?: string | null;
+};
+
+export type EwayBill = {
+  id: number;
+  docNo: string;
+  docDate: string;
+  status: "draft" | "generated" | "cancelled";
+  ewbNo?: string | null;
+  ewbDate?: string | null;
+  validUpto?: string | null;
+  vehicleNo?: string | null;
+  totalInvValue?: number;
+  [k: string]: unknown;
+};
+
+export type Business = Record<string, string | number | null> & { id: number; name: string };

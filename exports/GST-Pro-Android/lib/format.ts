@@ -10,4 +10,11 @@ export const statusColor: Record<string, string> = {
   partial: "#d97706",
   unpaid: "#dc2626",
   cancelled: "#6b7280",
+  declined: "#6b7280",
+  draft: "#d97706",
+  pending: "#d97706",
+  generated: "#16a34a",
+  approved: "#16a34a",
+  active: "#16a34a",
+  inactive: "#dc2626",
 };

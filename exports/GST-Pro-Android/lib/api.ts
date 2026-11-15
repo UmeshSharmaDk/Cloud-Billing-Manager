@@ -11,8 +11,11 @@ export const saveToken = (token: string) => SecureStore.setItemAsync(TOKEN_KEY, 
 export const clearToken = () => SecureStore.deleteItemAsync(TOKEN_KEY);
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public data?: any) {
     super(message);
+  }
+  get code(): string | undefined {
+    return this.data?.code;
   }
 }
 
@@ -48,7 +51,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     if (res.status === 401 && token) onUnauthorized();
-    throw new ApiError(res.status, data?.error ?? `Request failed (${res.status}).`);
+    throw new ApiError(res.status, data?.error ?? `Request failed (${res.status}).`, data);
   }
   return data as T;
 }

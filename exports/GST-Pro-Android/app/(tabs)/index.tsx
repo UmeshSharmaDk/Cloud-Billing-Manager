@@ -3,8 +3,13 @@ import { router } from "expo-router";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
-import type { DashboardStats, Invoice } from "@/lib/types";
-import { colors, ErrorView, Loading, s, StatusPill } from "@/lib/ui";
+import type { DashboardStats, Invoice, Product } from "@/lib/types";
+import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill } from "@/lib/ui";
+
+type Month = { month: string; sales: number; purchases: number; gst: number };
+type Top = { productId: number; productName: string; totalQuantity: number; totalRevenue: number };
+type GstSummary = Record<"outputCgst" | "outputSgst" | "outputIgst" | "inputCgst" | "inputSgst" | "inputIgst" | "netPayable", number>;
+const get = <T,>(path: string) => ({ queryKey: [path], queryFn: () => api<T>(path) });
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
@@ -17,16 +22,22 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 
 export default function Dashboard() {
   const stats = useQuery({ queryKey: ["dashboard/stats"], queryFn: () => api<DashboardStats>("/dashboard/stats") });
-  const recent = useQuery({ queryKey: ["dashboard/recent"], queryFn: () => api<Invoice[]>("/dashboard/recent-invoices") });
+  const recent = useQuery(get<Invoice[]>("/dashboard/recent-invoices"));
+  const months = useQuery(get<Month[]>("/dashboard/monthly-revenue"));
+  const top = useQuery(get<Top[]>("/dashboard/top-products"));
+  const gst = useQuery(get<GstSummary>("/dashboard/gst-summary"));
+  const low = useQuery(get<Product[]>("/dashboard/low-stock"));
 
   if (stats.isLoading) return <Loading />;
   if (stats.error) return <ErrorView error={stats.error} onRetry={stats.refetch} />;
   const d = stats.data!;
-  const refresh = () => { stats.refetch(); recent.refetch(); };
+  const refresh = () => [stats, recent, months, top, gst, low].forEach((q) => q.refetch());
+  const peak = Math.max(1, ...(months.data ?? []).map((m) => m.sales));
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}
       refreshControl={<RefreshControl refreshing={stats.isRefetching} onRefresh={refresh} />}>
+      <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
         <Stat label="Total sales" value={money(d.totalSales)} />
         <Stat label="Purchases" value={money(d.totalPurchases)} />
@@ -53,6 +64,44 @@ export default function Dashboard() {
           </Pressable>
         ))}
       </View>
+      {!!months.data?.length && (
+        <Card title="Monthly sales">
+          {months.data.map((m) => (
+            <View key={m.month} style={{ gap: 2 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                <Text style={s.muted}>{m.month}</Text>
+                <Text style={{ color: colors.text, fontWeight: "600" }}>{money(m.sales)}</Text>
+              </View>
+              <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border }}>
+                <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.primary, width: `${(m.sales / peak) * 100}%` }} />
+              </View>
+            </View>
+          ))}
+        </Card>
+      )}
+      {!!gst.data && (
+        <Card title="GST this month">
+          <Row label="Output CGST / SGST" value={`${money(gst.data.outputCgst)} / ${money(gst.data.outputSgst)}`} />
+          <Row label="Output IGST" value={money(gst.data.outputIgst)} />
+          <Row label="Input CGST / SGST" value={`${money(gst.data.inputCgst)} / ${money(gst.data.inputSgst)}`} />
+          <Row label="Input IGST" value={money(gst.data.inputIgst)} />
+          <Row label="Net payable" value={money(gst.data.netPayable)} />
+        </Card>
+      )}
+      {!!top.data?.length && (
+        <Card title="Top products">
+          {top.data.map((p) => <Row key={p.productId ?? p.productName} label={`${p.productName} (${p.totalQuantity})`} value={money(p.totalRevenue)} />)}
+        </Card>
+      )}
+      {!!low.data?.length && (
+        <Card title="Low stock">
+          {low.data.map((p) => (
+            <Pressable key={p.id} onPress={() => router.push(`/product/${p.id}`)}>
+              <Row label={p.name} value={`${p.stockQuantity} ${p.unit}`} />
+            </Pressable>
+          ))}
+        </Card>
+      )}
     </ScrollView>
   );
 }
