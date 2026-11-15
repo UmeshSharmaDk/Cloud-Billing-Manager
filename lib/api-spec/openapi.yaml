@@ -2014,6 +2014,12 @@ components:
       properties:
         name:
           type: string
+        businessName:
+          type: string
+          description: Name of the business created with the account. Defaults to the user's name.
+        gstin:
+          type: string
+          nullable: true
         email:
           type: string
         password:

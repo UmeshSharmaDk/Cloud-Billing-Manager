@@ -171,6 +171,9 @@ export const VerifyRegistrationBody = z.object({
 
 export const CreateUserBody = z.object({
   name: shortText(200),
+  // Every business user needs a business to work in; defaults to the user's name.
+  businessName: shortText(200).optional(),
+  gstin,
   email: z.string().email().max(320),
   password: newPassword,
   role: roleEnum,
