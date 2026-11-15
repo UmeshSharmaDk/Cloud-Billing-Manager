@@ -170,15 +170,26 @@ const dayPassed = (day: string | null) => {
  * admin (`subscriptionEnd` on the admin's row). Once it passes, that admin and
  * every user they created are refused. The superadmin has no plan.
  */
-export async function isPlanExpired(user: { role: string; subscriptionEnd: string | null; subscriptionStatus: string | null; createdByAdminId: number | null }): Promise<boolean> {
-  if (user.role === "superadmin") return false;
-  if (user.role === "admin") return dayPassed(user.subscriptionEnd);
-  // Older per-user settings still count if someone set them; the UI no longer offers them.
-  if (user.subscriptionStatus === "expired" || dayPassed(user.subscriptionEnd)) return true;
-  if (!user.createdByAdminId) return false;
+type PlanUser = { role: string; subscriptionEnd: string | null; subscriptionStatus: string | null; createdByAdminId: number | null };
+
+/**
+ * The last day this account can sign in: an admin's own end date; for a user,
+ * their admin's (or an older per-user date, if someone set one and it is sooner).
+ */
+export async function planEndFor(user: PlanUser): Promise<string | null> {
+  if (user.role === "superadmin") return null;
+  if (user.role === "admin" || !user.createdByAdminId) return user.subscriptionEnd;
   const [admin] = await db.select({ subscriptionEnd: usersTable.subscriptionEnd })
     .from(usersTable).where(eq(usersTable.id, user.createdByAdminId)).limit(1);
-  return dayPassed(admin?.subscriptionEnd ?? null);
+  // YYYY-MM-DD strings sort as dates.
+  return [user.subscriptionEnd, admin?.subscriptionEnd ?? null].filter((d): d is string => !!d).sort()[0] ?? null;
+}
+
+export async function isPlanExpired(user: PlanUser): Promise<boolean> {
+  if (user.role === "superadmin") return false;
+  // Older per-user settings still count if someone set them; the UI no longer offers them.
+  if (user.role !== "admin" && user.subscriptionStatus === "expired") return true;
+  return dayPassed(await planEndFor(user));
 }
 
 /**
@@ -888,7 +899,8 @@ export async function prunePendingRegistrations(): Promise<number> {
   return deleted.length;
 }
 
-router.get("/me", requireAuth, async (req: Req, res) => res.json(mapUser(req.user)));
+// planEnd drives the app's "your login will be blocked" reminders.
+router.get("/me", requireAuth, async (req: Req, res) => res.json({ ...mapUser(req.user), planEnd: await planEndFor(req.user) }));
 
 /**
  * Clear the session cookie. This was a stub that returned `{ success: true }`

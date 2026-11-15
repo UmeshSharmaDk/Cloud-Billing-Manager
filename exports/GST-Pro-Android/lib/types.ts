@@ -8,6 +8,8 @@ export type User = {
   mfaEnabled?: boolean;
   subscriptionStatus?: string | null;
   subscriptionEnd?: string | null;
+  /** The last day sign-in works (a user inherits their admin's). Only from GET /auth/me. */
+  planEnd?: string | null;
   createdAt?: string;
 };
 

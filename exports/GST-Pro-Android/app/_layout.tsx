@@ -5,6 +5,7 @@ import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppUpdates } from "@/lib/AppUpdates";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { PlanExpiryNotifications } from "@/lib/PlanExpiry";
 import { colors } from "@/lib/ui";
 
 const queryClient = new QueryClient({
@@ -46,6 +47,7 @@ export default function RootLayout() {
         </Stack>
         <SessionGuard />
         <AppUpdates />
+        <PlanExpiryNotifications />
       </AuthProvider>
     </QueryClientProvider>
   );

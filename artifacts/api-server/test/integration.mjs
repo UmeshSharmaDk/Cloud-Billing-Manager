@@ -2834,6 +2834,12 @@ const adminEmail = `admin${uniq}@example.test`;
   const path = `/superadmin/admins/${adm.userId}/plan`;
   check("plans", "setting a plan end needs the superadmin's password",
     (await call("PATCH", path, { token: sa.token, body: { planEnd: "2020-01-01" } })).status === 400);
+  // Self-registered test accounts carry their own trial end date; admin-created users have none.
+  sqlExec(`UPDATE users SET subscription_end=NULL WHERE id IN (${mine.userId}, ${stranger.userId})`);
+  await call("PATCH", path, { token: sa.token, body: { planEnd: "2099-01-01", confirmPassword: PASSWORD } });
+  check("plans", "the admin's own session shows the plan end", (await call("GET", "/auth/me", { token: adm.token })).data?.planEnd === "2099-01-01");
+  check("plans", "and so do their users' sessions", (await call("GET", "/auth/me", { token: mine.token })).data?.planEnd === "2099-01-01");
+  check("plans", "but not another admin's users'", (await call("GET", "/auth/me", { token: stranger.token })).data?.planEnd == null);
   const ended = await call("PATCH", path, { token: sa.token, body: { planEnd: "2020-01-01", confirmPassword: PASSWORD } });
   check("plans", "the superadmin sets an admin's plan end", ended.status === 200 && ended.data?.subscriptionEnd === "2020-01-01", `status ${ended.status}`);
   check("plans", "a lapsed plan refuses the admin's live session", (await call("GET", "/auth/me", { token: adm.token })).status === 403);

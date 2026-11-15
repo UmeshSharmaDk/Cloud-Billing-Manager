@@ -65,7 +65,7 @@ jobs:
           for f in bill-text bank-statement whatsapp; do
             cmp "artifacts/gst-platform/src/lib/$f.ts" "$APP_DIR/lib/$f.ts"
           done
-          cd "$APP_DIR" && node lib/importFile.test.ts
+          cd "$APP_DIR" && node lib/importFile.test.ts && node lib/plan-dates.test.ts
       - name: Refresh the Android project
         run: node scripts/refresh-android-build.mjs build-check.invalid
       - name: Compile an unsigned release APK (arm64)

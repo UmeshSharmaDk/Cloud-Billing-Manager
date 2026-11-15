@@ -2001,6 +2001,9 @@ components:
           type: ["string", "null"]
         subscriptionEnd:
           type: ["string", "null"]
+        planEnd:
+          type: ["string", "null"]
+          description: The last day this account can sign in (a user inherits their admin's). Only on GET /auth/me.
         businessId:
           type: ["integer", "null"]
         mfaEnabled:
