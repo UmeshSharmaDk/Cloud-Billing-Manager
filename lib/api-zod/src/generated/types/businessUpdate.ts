@@ -39,5 +39,7 @@ export interface BusinessUpdate {
   /** @nullable */
   bankBranch?: string | null;
   /** @nullable */
+  upiId?: string | null;
+  /** @nullable */
   termsConditions?: string | null;
 }

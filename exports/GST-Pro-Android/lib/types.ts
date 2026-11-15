@@ -8,6 +8,8 @@ export type User = {
   mfaEnabled?: boolean;
   subscriptionStatus?: string | null;
   subscriptionEnd?: string | null;
+  /** The last day sign-in works (a user inherits their admin's). Only from GET /auth/me. */
+  planEnd?: string | null;
   createdAt?: string;
 };
 
@@ -78,6 +80,8 @@ export type Invoice = {
   paidAmount?: number;
   notes?: string | null;
   items?: InvoiceItem[];
+  /** Present on a single invoice with a balance due when the business has a UPI ID. */
+  upi?: { link: string; amount: number; qr: string } | null;
 };
 
 export type Product = {

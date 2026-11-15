@@ -9,19 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Building2, CreditCard, FileText, Save, KeyRound } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-const INDIAN_STATES = [
-  { code: "01", name: "Jammu & Kashmir" }, { code: "02", name: "Himachal Pradesh" },
-  { code: "03", name: "Punjab" }, { code: "06", name: "Haryana" },
-  { code: "07", name: "Delhi" }, { code: "08", name: "Rajasthan" },
-  { code: "09", name: "Uttar Pradesh" }, { code: "10", name: "Bihar" },
-  { code: "19", name: "West Bengal" }, { code: "20", name: "Jharkhand" },
-  { code: "21", name: "Odisha" }, { code: "22", name: "Chhattisgarh" },
-  { code: "23", name: "Madhya Pradesh" }, { code: "24", name: "Gujarat" },
-  { code: "27", name: "Maharashtra" }, { code: "28", name: "Andhra Pradesh" },
-  { code: "29", name: "Karnataka" }, { code: "30", name: "Goa" },
-  { code: "32", name: "Kerala" }, { code: "33", name: "Tamil Nadu" },
-  { code: "36", name: "Telangana" },
-];
+import { INDIAN_STATES } from "@/lib/states";
 
 export default function SettingsPage() {
   const { data: biz, isLoading } = useGetBusiness();
@@ -92,6 +80,11 @@ export default function SettingsPage() {
               <div className="sm:col-span-2 space-y-2"><Label>Bank Name</Label><Input value={form.bankName || ""} onChange={(e) => set("bankName", e.target.value)} placeholder="HDFC Bank" /></div>
               <div className="space-y-2"><Label>Account Number</Label><Input value={form.bankAccount || ""} onChange={(e) => set("bankAccount", e.target.value)} className="font-mono" /></div>
               <div className="space-y-2"><Label>IFSC Code</Label><Input value={form.bankIfsc || ""} onChange={(e) => set("bankIfsc", e.target.value.toUpperCase())} maxLength={11} className="font-mono" /></div>
+              <div className="sm:col-span-2 space-y-2">
+                <Label>UPI ID</Label>
+                <Input value={form.upiId || ""} onChange={(e) => set("upiId", e.target.value.trim())} placeholder="yourshop@okhdfcbank" className="font-mono" />
+                <p className="text-xs text-muted-foreground">Every unpaid invoice shows a QR code that customers scan in any UPI app to pay the balance.</p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

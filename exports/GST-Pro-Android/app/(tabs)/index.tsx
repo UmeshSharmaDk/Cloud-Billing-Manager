@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
+import { PlanExpiryBanner } from "@/lib/PlanExpiry";
 import type { DashboardStats, Invoice, Product } from "@/lib/types";
 import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill } from "@/lib/ui";
 
@@ -37,6 +38,7 @@ export default function Dashboard() {
   return (
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}
       refreshControl={<RefreshControl refreshing={stats.isRefetching} onRefresh={refresh} />}>
+      <PlanExpiryBanner />
       <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
         <Stat label="Total sales" value={money(d.totalSales)} />

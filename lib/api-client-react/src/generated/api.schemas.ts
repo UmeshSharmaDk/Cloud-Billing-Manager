@@ -179,6 +179,11 @@ export interface User {
   subscriptionStatus?: string | null;
   /** @nullable */
   subscriptionEnd?: string | null;
+  /**
+   * The last day this account can sign in (a user inherits their admin's). Only on GET /auth/me.
+   * @nullable
+   */
+  planEnd?: string | null;
   /** @nullable */
   businessId?: number | null;
   mfaEnabled?: boolean;
@@ -446,6 +451,8 @@ export interface Business {
   /** @nullable */
   bankBranch?: string | null;
   /** @nullable */
+  upiId?: string | null;
+  /** @nullable */
   termsConditions?: string | null;
 }
 
@@ -481,6 +488,8 @@ export interface BusinessUpdate {
   bankIfsc?: string | null;
   /** @nullable */
   bankBranch?: string | null;
+  /** @nullable */
+  upiId?: string | null;
   /** @nullable */
   termsConditions?: string | null;
 }

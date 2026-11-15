@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { BusinessFields, cleanBusiness, type BusinessForm } from "@/components/BusinessFields";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -46,6 +47,7 @@ export default function AdminUsersPage() {
   const capacityRequestsQuery = useListCapacityRequests({
     query: { queryKey: getListCapacityRequestsQueryKey(), refetchOnMount: "always" },
   });
+  const [biz, setBiz] = useState<BusinessForm>({});
   const createUser = useCreateUser();
   const requestCapacity = useCreateCapacityRequest();
   const users = data?.users ?? [];
@@ -63,10 +65,11 @@ export default function AdminUsersPage() {
     setCreateSuccess("");
     setQuotaHit(false);
     const { joinUserId, accessLevel, ...base } = form;
-    createUser.mutate({ data: { ...base, role: "user", ...(joinUserId ? { joinUserId: Number(joinUserId), accessLevel } : {}) } as any }, {
+    createUser.mutate({ data: { ...base, role: "user", ...(joinUserId ? { joinUserId: Number(joinUserId), accessLevel } : { business: cleanBusiness(biz) }) } as any }, {
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
         setForm({ name: "", email: "", password: "", joinUserId: "", accessLevel: "entry" });
+        setBiz({});
         setShowCreate(false);
         setCreateSuccess("User account created and added to your workspace.");
       },
@@ -204,7 +207,7 @@ export default function AdminUsersPage() {
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#10251f]/45 p-4" role="dialog" aria-modal="true" aria-labelledby="create-user-title">
-          <Card className="w-full max-w-lg overflow-hidden rounded-2xl border-[#dce5df] shadow-2xl">
+          <Card className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border-[#dce5df] shadow-2xl">
             <div className="border-b bg-[#f5f8f3] px-6 py-5"><div className="flex items-center gap-3"><div className="rounded-lg bg-[#e5efe1] p-2 text-[#315644]"><UserPlus className="h-5 w-5" /></div><div><h2 id="create-user-title" className="font-semibold">Create workspace user</h2><p className="text-xs text-muted-foreground">This account will belong to your business only.</p></div></div></div>
             <CardContent className="p-6">
               <form className="space-y-4" onSubmit={submitUser}>
@@ -213,6 +216,13 @@ export default function AdminUsersPage() {
                 <div className="space-y-1.5"><Label htmlFor="new-user-password">Temporary password</Label><Input id="new-user-password" data-testid="input-new-user-password" type="password" minLength={12} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" required /><p className="text-xs text-muted-foreground">Use at least 12 characters.</p></div>
                 <div className="space-y-1.5"><Label htmlFor="new-user-join">Business</Label><select id="new-user-join" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.joinUserId} onChange={(e) => setForm({ ...form, joinUserId: e.target.value })}><option value="">A new client with their own business</option>{users.filter((u: any) => !u.accessLevel && u.businessId).map((u) => <option key={u.id} value={u.id}>Staff of {u.name}'s business</option>)}</select></div>
                 {form.joinUserId && <div className="space-y-1.5"><Label htmlFor="new-user-access">Access</Label><select id="new-user-access" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.accessLevel} onChange={(e) => setForm({ ...form, accessLevel: e.target.value })}><option value="full">Full: everything the owner can do</option><option value="entry">Data entry: add and edit, no deleting or settings</option><option value="view">View only: for interns or clients</option></select></div>}
+                {!form.joinUserId && (
+                  <fieldset className="space-y-3 border-t pt-4">
+                    <legend className="text-sm font-semibold">Business details</legend>
+                    <p className="text-xs text-muted-foreground">These appear on the user's invoices. They can still change them later under Settings.</p>
+                    <BusinessFields value={biz} set={(k, v) => setBiz((p) => ({ ...p, [k]: v }))} />
+                  </fieldset>
+                )}
                 {createError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{createError}</p>}
                 <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button><Button type="submit" disabled={pending} data-testid="button-create-user">{createUser.isPending && <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />}{createUser.isPending ? "Creating…" : "Create user"}</Button></div>
               </form>

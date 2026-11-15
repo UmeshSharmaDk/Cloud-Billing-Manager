@@ -358,6 +358,7 @@ export const GetBusinessResponse = zod.object({
   "bankAccount": zod.string().nullish(),
   "bankIfsc": zod.string().nullish(),
   "bankBranch": zod.string().nullish(),
+  "upiId": zod.string().nullish(),
   "termsConditions": zod.string().nullish()
 })
 
@@ -382,6 +383,7 @@ export const UpdateBusinessBody = zod.object({
   "bankAccount": zod.string().nullish(),
   "bankIfsc": zod.string().nullish(),
   "bankBranch": zod.string().nullish(),
+  "upiId": zod.string().nullish(),
   "termsConditions": zod.string().nullish()
 })
 
@@ -404,6 +406,7 @@ export const UpdateBusinessResponse = zod.object({
   "bankAccount": zod.string().nullish(),
   "bankIfsc": zod.string().nullish(),
   "bankBranch": zod.string().nullish(),
+  "upiId": zod.string().nullish(),
   "termsConditions": zod.string().nullish()
 })
 

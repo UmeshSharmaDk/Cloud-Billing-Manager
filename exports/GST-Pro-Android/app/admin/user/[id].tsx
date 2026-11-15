@@ -89,6 +89,7 @@ export default function AdminUser() {
         <Card title="Freeze transactions">
           <Row label="Frozen up to" value={user.business.lockDate ? date(String(user.business.lockDate)) : "Nothing frozen"} />
           <Button title={user.business.lockDate ? "Change lock date" : "Freeze books"} variant="outline" onPress={() => setLocking(true)} />
+          <Button title="Edit business details" variant="outline" onPress={() => router.push({ pathname: "/admin/business", params: { id: String(user.id), name: user.name } })} />
           <Button title="Audit trail" variant="outline" onPress={() => router.push({ pathname: "/admin/audit", params: { id: String(user.id), name: user.name } })} />
         </Card>
       )}

@@ -4,7 +4,8 @@ import { useGetInvoice, useUpdateInvoiceStatus, useGetBusiness, useGetCustomer }
 import { formatCurrency, formatDate, statusBadge, amountToWords } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Printer, CheckCircle } from "lucide-react";
+import { ArrowLeft, Printer, CheckCircle, MessageCircle } from "lucide-react";
+import { reminderLink } from "@/lib/whatsapp";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,6 +27,7 @@ export default function InvoiceDetailPage() {
 
   const { data: customerData } = useGetCustomer(inv.customerId || 0, { query: { enabled: !!inv.customerId } as any });
   const customer: any = customerData || {};
+  const reminder = inv.id ? reminderLink(inv, customer.phone, business, formatCurrency, formatDate) : null;
 
   // "Partly paid" is a statement about an amount, so the server will not take it
   // without one — asking for it here is what makes that option usable.
@@ -84,6 +86,11 @@ export default function InvoiceDetailPage() {
               <SelectItem value="paid">Mark Paid</SelectItem>
             </SelectContent>
           </Select>
+          {reminder && (
+            <Button variant="outline" size="sm" className="gap-1" asChild>
+              <a href={reminder} target="_blank" rel="noopener noreferrer"><MessageCircle className="w-4 h-4" /> WhatsApp reminder</a>
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="gap-1" onClick={() => window.print()}>
             <Printer className="w-4 h-4" /> Print
           </Button>
@@ -244,6 +251,15 @@ export default function InvoiceDetailPage() {
             <div className="flex justify-between"><span className="text-gray-600">Branch Name</span><span>{business.bankBranch || "-"}</span></div>
             <div className="flex justify-between"><span className="text-gray-600">Bank Account Number</span><span>{business.bankAccount || "-"}</span></div>
             <div className="flex justify-between"><span className="text-gray-600">Bank Branch IFSC</span><span>{business.bankIfsc || "-"}</span></div>
+            {inv.upi && (
+              <div className="flex items-center gap-3 pt-2">
+                <img src={inv.upi.qr} alt="UPI payment QR code" className="h-24 w-24" />
+                <div>
+                  <p className="font-semibold">Scan to pay {formatCurrency(inv.upi.amount)}</p>
+                  <p className="text-gray-600">Any UPI app · {business.upiId}</p>
+                </div>
+              </div>
+            )}
             <p className="font-semibold pt-2">Terms and Conditions</p>
             <p className="whitespace-pre-line text-[11px]">{business.termsConditions || "1. Goods once sold will not be taken back.\n2. Subject to jurisdiction."}</p>
           </div>

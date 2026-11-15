@@ -68,8 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [forget]);
 
   const signOut = useCallback(async () => {
-    // Revokes this token on the server; sign out locally even if that fails.
-    await api("/auth/logout", { method: "POST", body: {} }).catch(() => {});
+    // Revoke the token on the server in the background (the request picks the
+    // token up before it is forgotten) and sign out locally at once: waiting
+    // on the network left the screen signed in on a slow or dropped connection.
+    void api("/auth/logout", { method: "POST", body: {} }).catch(() => {});
     await forget();
   }, [forget]);
 

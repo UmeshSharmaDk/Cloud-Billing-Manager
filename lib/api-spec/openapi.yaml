@@ -2001,6 +2001,9 @@ components:
           type: ["string", "null"]
         subscriptionEnd:
           type: ["string", "null"]
+        planEnd:
+          type: ["string", "null"]
+          description: The last day this account can sign in (a user inherits their admin's). Only on GET /auth/me.
         businessId:
           type: ["integer", "null"]
         mfaEnabled:
@@ -2226,6 +2229,8 @@ components:
           type: ["string", "null"]
         bankBranch:
           type: ["string", "null"]
+        upiId:
+          type: ["string", "null"]
         termsConditions:
           type: ["string", "null"]
 
@@ -2263,6 +2268,8 @@ components:
         bankIfsc:
           type: ["string", "null"]
         bankBranch:
+          type: ["string", "null"]
+        upiId:
           type: ["string", "null"]
         termsConditions:
           type: ["string", "null"]

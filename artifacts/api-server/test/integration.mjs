@@ -2834,6 +2834,12 @@ const adminEmail = `admin${uniq}@example.test`;
   const path = `/superadmin/admins/${adm.userId}/plan`;
   check("plans", "setting a plan end needs the superadmin's password",
     (await call("PATCH", path, { token: sa.token, body: { planEnd: "2020-01-01" } })).status === 400);
+  // Self-registered test accounts carry their own trial end date; admin-created users have none.
+  sqlExec(`UPDATE users SET subscription_end=NULL WHERE id IN (${mine.userId}, ${stranger.userId})`);
+  await call("PATCH", path, { token: sa.token, body: { planEnd: "2099-01-01", confirmPassword: PASSWORD } });
+  check("plans", "the admin's own session shows the plan end", (await call("GET", "/auth/me", { token: adm.token })).data?.planEnd === "2099-01-01");
+  check("plans", "and so do their users' sessions", (await call("GET", "/auth/me", { token: mine.token })).data?.planEnd === "2099-01-01");
+  check("plans", "but not another admin's users'", (await call("GET", "/auth/me", { token: stranger.token })).data?.planEnd == null);
   const ended = await call("PATCH", path, { token: sa.token, body: { planEnd: "2020-01-01", confirmPassword: PASSWORD } });
   check("plans", "the superadmin sets an admin's plan end", ended.status === 200 && ended.data?.subscriptionEnd === "2020-01-01", `status ${ended.status}`);
   check("plans", "a lapsed plan refuses the admin's live session", (await call("GET", "/auth/me", { token: adm.token })).status === 403);
@@ -2918,6 +2924,18 @@ const adminEmail = `admin${uniq}@example.test`;
     body: { name: tag, email: `${tag}${uniq}@example.test`, password: PASSWORD, role: "user", ...body } });
   const login = async (tag) => (await call("POST", "/auth/login", { body: { email: `${tag}${uniq}@example.test`, password: PASSWORD } })).data?.token;
 
+  // The admin fills in the client's business settings while adding them.
+  const client = await make("bizclient", { business: { name: "Client Traders", gstin: "27ABCDE1234F1Z5", city: "Pune", state: "Maharashtra", stateCode: "27", bankName: "HDFC", upiId: "client@okhdfcbank", invoicePrefix: "CT" } });
+  const cTok = await login("bizclient");
+  const cBiz = (await call("GET", "/business", { token: cTok })).data;
+  check("admin business", "details given at creation are the user's business settings",
+    client.status === 201 && cBiz?.name === "Client Traders" && cBiz?.city === "Pune" && cBiz?.upiId === "client@okhdfcbank" && cBiz?.invoicePrefix === "CT", JSON.stringify({ s: client.status, d: client.data?.error, cBiz }));
+  const edited = await call("PATCH", `/admin/users/${client.data.id}/business`, { token: adm.token, body: { phone: "9876543210", city: "Mumbai" } });
+  check("admin business", "the admin edits them later", edited.status === 200 && edited.data?.city === "Mumbai" && edited.data?.name === "Client Traders", JSON.stringify(edited.data));
+  check("admin business", "but not for another admin's user",
+    (await call("PATCH", `/admin/users/${stranger.userId}/business`, { token: adm.token, body: { city: "X" } })).status === 404);
+  check("admin business", "and the user can still change them", (await call("PATCH", "/business", { token: cTok, body: { city: "Nashik" } })).data?.city === "Nashik");
+
   check("staff", "a login cannot join another admin's client",
     (await make("staffx", { joinUserId: stranger.userId })).status === 400);
   const viewer = await make("staffview", { joinUserId: owner.userId, accessLevel: "view" });
@@ -2988,6 +3006,20 @@ const adminEmail = `admin${uniq}@example.test`;
   await call("POST", "/payments", { token: o.token, body: { type: "received", invoiceId: i.id, amount: 118118, date: "2026-06-20", mode: "bank_transfer" } });
   const again = (await call("POST", "/payments/match", { token: o.token, body: { rows: [{ date: "2026-06-20", description: i.invoiceNumber, amount: 118118 }] } })).data;
   check("bank", "a paid invoice is no longer suggested", again?.matches?.[0] === null, JSON.stringify(again));
+}
+
+// === UPI QR on invoices ======================================================
+{
+  const o = await register("upiowner");
+  check("upi", "a malformed UPI ID is refused", (await call("PATCH", "/business", { token: o.token, body: { upiId: "not a vpa" } })).status === 400);
+  check("upi", "a UPI ID is saved", (await call("PATCH", "/business", { token: o.token, body: { upiId: "shop@okhdfcbank" } })).status === 200);
+  const inv = (await call("POST", "/invoices", { token: o.token, body: { invoiceDate: "2026-06-12", customerName: "Walk in", placeOfSupply: "29",
+    items: [{ description: "Goods", quantity: 1, unitPrice: 1000, gstRate: 18 }] } })).data?.invoice;
+  const got = (await call("GET", `/invoices/${inv.id}`, { token: o.token })).data;
+  check("upi", "an unpaid invoice carries a UPI link for its balance",
+    got?.upi?.link?.startsWith("upi://pay?pa=shop%40okhdfcbank") && got.upi.link.includes("am=1180.00") && got.upi.qr?.startsWith("data:image/png"), JSON.stringify(got?.upi?.link));
+  await call("PATCH", `/invoices/${inv.id}/status`, { token: o.token, body: { status: "paid" } });
+  check("upi", "a paid invoice has none", (await call("GET", `/invoices/${inv.id}`, { token: o.token })).data?.upi === null);
 }
 
 // === App updates ===========================================================
