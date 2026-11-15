@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       backend_host:
-        description: "Public backend hostname the app talks to (no https://, no /api). Defaults to the ANDROID_BACKEND_HOST repository variable."
+        description: "Public backend hostname the app talks to (no https://, no /api). Defaults to billing.myindiatrips.com."
         required: false
   push:
     branches:
@@ -71,7 +71,7 @@ jobs:
     environment: android-release
     timeout-minutes: 60
     env:
-      BACKEND_HOST: ${{ inputs.backend_host || vars.ANDROID_BACKEND_HOST }}
+      BACKEND_HOST: ${{ inputs.backend_host || vars.ANDROID_BACKEND_HOST || 'billing.myindiatrips.com' }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

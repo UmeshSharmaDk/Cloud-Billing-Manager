@@ -15,9 +15,9 @@ Run **Actions → Android APK (internal) → Run workflow**, or push a
 
 One-time setup:
 
-- Repository variable `ANDROID_BACKEND_HOST`: the published GST Pro hostname,
-  e.g. `billing.example.com` (no `https://`, no `/api`). The run's
-  `backend_host` input overrides it.
+- The app talks to `billing.myindiatrips.com` by default. Set the repository
+  variable `ANDROID_BACKEND_HOST`, or the run's `backend_host` input, to point a
+  build elsewhere (hostname only, no `https://` or `/api`).
 - Environment `android-release` with secrets `ANDROID_KEYSTORE_BASE64`,
   `ANDROID_KEYSTORE_PASSWORD` and optionally `ANDROID_KEY_PASSWORD`. The key
   alias defaults to `gstpro` (override with variable `ANDROID_KEY_ALIAS`).
