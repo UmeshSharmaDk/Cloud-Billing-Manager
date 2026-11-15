@@ -41,15 +41,31 @@ export function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function Button({ title, onPress, busy, variant = "primary", disabled }: {
-  title: string; onPress: () => void; busy?: boolean; variant?: "primary" | "outline" | "danger"; disabled?: boolean;
+/**
+ * Follows CONSTITUTION.md: at least 44 high, `title` names the action, `busy`
+ * keeps the size and shows a spinner (presses are ignored), and a button that
+ * cannot be pressed yet says why through `disabledReason`.
+ */
+export function Button({ title, onPress, busy, variant = "primary", disabled, disabledReason }: {
+  title: string; onPress: () => void; busy?: boolean; variant?: "primary" | "outline" | "danger"; disabled?: boolean; disabledReason?: string;
 }) {
   const bg = variant === "primary" ? colors.primary : variant === "danger" ? colors.danger : "transparent";
-  return (
-    <Pressable onPress={onPress} disabled={busy || disabled} accessibilityRole="button"
-      style={[s.button, { backgroundColor: bg }, variant === "outline" && { borderWidth: 1, borderColor: colors.primary }, (busy || disabled) && { opacity: 0.6 }]}>
-      <Text style={[s.buttonText, variant === "outline" && { color: colors.primary }]}>{busy ? "Please wait…" : title}</Text>
+  const off = disabled || !!disabledReason;
+  const ink = variant === "outline" ? colors.primary : "#fff";
+  const button = (
+    <Pressable onPress={onPress} disabled={busy || off} accessibilityRole="button" accessibilityState={{ busy: !!busy, disabled: off }}
+      accessibilityLabel={title} accessibilityHint={disabledReason}
+      style={[s.button, { backgroundColor: bg }, variant === "outline" && { borderWidth: 1, borderColor: colors.primary }, off && { opacity: 0.6 }]}>
+      <Text style={[s.buttonText, { color: ink }, busy && { opacity: 0 }]}>{title}</Text>
+      {busy && <ActivityIndicator color={ink} style={StyleSheet.absoluteFill} />}
     </Pressable>
+  );
+  if (!disabledReason) return button;
+  return (
+    <View style={{ gap: 4 }}>
+      {button}
+      <Text style={[s.muted, { textAlign: "center" }]}>{disabledReason}</Text>
+    </View>
   );
 }
 
@@ -163,7 +179,7 @@ export const s = StyleSheet.create({
   title: { fontSize: 18, fontWeight: "700", color: colors.text },
   muted: { fontSize: 13, color: colors.muted },
   errorText: { color: colors.danger, textAlign: "center", marginBottom: 16 },
-  button: { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 20, alignItems: "center" },
+  button: { backgroundColor: colors.primary, borderRadius: 10, minHeight: 44, paddingVertical: 12, paddingHorizontal: 20, alignItems: "center", justifyContent: "center" },
   buttonText: { color: "#fff", fontWeight: "600", fontSize: 16 },
   input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 16, backgroundColor: "#fff", color: colors.text },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
