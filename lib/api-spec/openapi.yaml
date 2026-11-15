@@ -1419,6 +1419,28 @@ paths:
                   entries: { type: array, items: { type: object, additionalProperties: true } }
                   total: { type: integer }
 
+  /reports/tds:
+    get:
+      operationId: getTdsReport
+      tags: [reports]
+      summary: TDS withheld on purchase bills in a month, by section and deductee (Form 26Q)
+      parameters:
+        - { in: query, name: month, schema: { type: integer } }
+        - { in: query, name: year,  schema: { type: integer } }
+      responses:
+        "200": { description: Report, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+
+  /reports/tcs:
+    get:
+      operationId: getTcsReport
+      tags: [reports]
+      summary: TCS collected on sales in a month, by collectee (Form 27EQ)
+      parameters:
+        - { in: query, name: month, schema: { type: integer } }
+        - { in: query, name: year,  schema: { type: integer } }
+      responses:
+        "200": { description: Report, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+
   /eway-bills:
     get:
       operationId: listEwayBills

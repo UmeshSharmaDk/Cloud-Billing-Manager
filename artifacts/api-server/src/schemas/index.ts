@@ -456,12 +456,20 @@ export const CreateInvoiceBody = z
     placeOfSupply: optionalText(2),
     notes: optionalText(2000),
     items: lineItems,
+    tcsRate: z.coerce.number().finite().min(0).max(10).optional(),
   })
   .refine((b) => b.customerId !== undefined || Boolean(b.customerName), {
     message: "customerId or customerName is required",
   });
 
+const tcsRate = z.coerce.number().finite().min(0).max(10).optional();
+const tdsShape = {
+  tdsSection: optionalText(10),
+  tdsRate: z.coerce.number().finite().min(0).max(30).optional(),
+};
+
 export const UpdateInvoiceBody = z.object({
+  tcsRate,
   type: invoiceType.optional(),
   customerId: entityId.optional(),
   invoiceDate: dateString.optional(),
@@ -509,12 +517,15 @@ export const CreatePurchaseBody = z
     dueDate: optionalDate,
     notes: optionalText(2000),
     items: lineItems,
+    tdsSection: optionalText(10),
+    tdsRate: z.coerce.number().finite().min(0).max(30).optional(),
   })
   .refine((b) => Boolean(b.billDate ?? b.invoiceDate), {
     message: "billDate is required",
   });
 
 export const UpdatePurchaseBody = z.object({
+  ...tdsShape,
   vendorId: entityId.optional(),
   billNumber: optionalText(60),
   invoiceNumber: optionalText(60),

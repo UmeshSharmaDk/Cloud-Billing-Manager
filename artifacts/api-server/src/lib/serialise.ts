@@ -54,6 +54,8 @@ export function mapInvoice(inv: any) {
     grandTotal: toJson(grandTotal),
     roundOff: toJson(inv.roundOff),
     paidAmount: toJson(paidAmount),
+    tcsRate: Number(dec(inv.tcsRate ?? 0).toFixed(3)),
+    tcsAmount: toJson(inv.tcsAmount ?? 0),
     balanceDue: toJson(balanceDue.isNegative() ? new Decimal(0) : balanceDue),
     items: Array.isArray(inv.items) ? inv.items : [],
   };
@@ -76,6 +78,10 @@ export function mapPurchase(p: any) {
     igst: toJson(p.igst),
     totalGst: toJson(p.totalGst),
     grandTotal: toJson(p.grandTotal),
+    tdsRate: Number(dec(p.tdsRate ?? 0).toFixed(3)),
+    tdsAmount: toJson(p.tdsAmount ?? 0),
+    /** What is actually paid to the vendor once TDS is withheld. */
+    netPayable: toJson(dec(p.grandTotal).minus(dec(p.tdsAmount ?? 0))),
     status: p.status ?? "unpaid",
     paymentStatus: p.status ?? "unpaid",
     items: Array.isArray(p.items) ? p.items : [],

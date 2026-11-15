@@ -35,7 +35,7 @@ export default function PurchaseNewPage() {
   const { toast } = useToast();
 
   const today = new Date().toISOString().slice(0, 10);
-  const [form, setForm] = useState({ vendorId: "", billNumber: "", billDate: today, notes: "" });
+  const [form, setForm] = useState({ vendorId: "", billNumber: "", billDate: today, notes: "", tdsSection: "", tdsRate: "" });
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [importedFile, setImportedFile] = useState<string | null>(null);
@@ -115,6 +115,7 @@ export default function PurchaseNewPage() {
         billNumber: form.billNumber,
         billDate: form.billDate,
         notes: form.notes,
+        ...(Number(form.tdsRate) > 0 ? { tdsSection: form.tdsSection || undefined, tdsRate: Number(form.tdsRate) } : {}),
         items: items.map(it => ({
           productId: it.productId, description: it.description, hsnCode: it.hsnCode,
           quantity: it.quantity, unit: it.unit, unitPrice: it.unitPrice, gstRate: it.gstRate,
@@ -191,6 +192,8 @@ export default function PurchaseNewPage() {
               </div>
               <div className="space-y-2"><Label>Vendor Bill # (optional)</Label><Input value={form.billNumber} onChange={(e) => setForm(f => ({ ...f, billNumber: e.target.value }))} placeholder="VND-001" /></div>
               <div className="space-y-2"><Label>Bill Date *</Label><Input type="date" value={form.billDate} onChange={(e) => setForm(f => ({ ...f, billDate: e.target.value }))} required /></div>
+              <div className="space-y-2"><Label>TDS section (optional)</Label><Input value={form.tdsSection} onChange={(e) => setForm(f => ({ ...f, tdsSection: e.target.value.toUpperCase() }))} placeholder="e.g. 194C" maxLength={10} /></div>
+              <div className="space-y-2"><Label>TDS %</Label><Input type="number" min="0" max="30" step="0.001" value={form.tdsRate} onChange={(e) => setForm(f => ({ ...f, tdsRate: e.target.value }))} placeholder="e.g. 2" /></div>
               <div className="sm:col-span-2 space-y-2"><Label>Notes</Label><Input value={form.notes} onChange={(e) => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional note..." /></div>
             </CardContent>
           </Card>

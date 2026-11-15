@@ -14,6 +14,7 @@ export default function NewPurchase() {
   const [billNumber, setBillNumber] = useState("");
   const [billDate, setBillDate] = useState(today());
   const [notes, setNotes] = useState("");
+  const [tds, setTds] = useState({ section: "", rate: "" });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const { busy, run } = useSave();
 
@@ -24,7 +25,7 @@ export default function NewPurchase() {
     run(
       () => api<Purchase>("/purchases", {
         method: "POST",
-        body: { vendorId: Number(vendorId), billNumber: billNumber.trim() || undefined, billDate, notes: notes.trim() || null, items: toItems(lines, false) },
+        body: { vendorId: Number(vendorId), billNumber: billNumber.trim() || undefined, billDate, notes: notes.trim() || null, ...(Number(tds.rate) > 0 ? { tdsSection: tds.section.trim().toUpperCase() || undefined, tdsRate: Number(tds.rate) } : {}), items: toItems(lines, false) },
       }),
       (p) => router.replace(`/purchase/${p.id}`),
     );
@@ -38,6 +39,8 @@ export default function NewPurchase() {
           options={vendors.map((v) => ({ value: String(v.id), label: v.gstin ? `${v.name} · ${v.gstin}` : v.name }))} />
         <Field label="Vendor bill number" value={billNumber} onChangeText={setBillNumber} />
         <Field label="Bill date *" value={billDate} onChangeText={setBillDate} placeholder="YYYY-MM-DD" />
+        <Field label="TDS section (optional, e.g. 194C)" value={tds.section} onChangeText={(v) => setTds((p) => ({ ...p, section: v }))} autoCapitalize="characters" />
+        <Field label="TDS %" value={tds.rate} onChangeText={(v) => setTds((p) => ({ ...p, rate: v }))} keyboardType="decimal-pad" />
         <Field label="Notes" value={notes} onChangeText={setNotes} multiline />
       </Card>
       <LineItems lines={lines} setLines={setLines} price="purchasePrice" withDiscount={false} />

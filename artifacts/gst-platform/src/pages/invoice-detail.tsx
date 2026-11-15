@@ -116,6 +116,7 @@ export default function InvoiceDetailPage() {
             <CardContent className="p-4 space-y-2 text-sm">
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Taxable Amount</span><span>{formatCurrency(inv.subtotal)}</span></div>
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total GST</span><span className="text-primary font-medium">{formatCurrency(inv.totalGst)}</span></div>
+              {Number(inv.tcsAmount) > 0 && <div className="flex justify-between py-1 text-sm"><span>TCS @ {inv.tcsRate}%</span><span>{formatCurrency(inv.tcsAmount)}</span></div>}
               <div className="flex justify-between py-2 border-t-2 font-bold text-base"><span>Grand Total</span><span className="text-primary">{formatCurrency(inv.grandTotal)}</span></div>
               {parseFloat(inv.paidAmount) > 0 && (
                 <div className="flex justify-between text-emerald-600"><span>Paid</span><span className="font-semibold">{formatCurrency(inv.paidAmount)}</span></div>
@@ -231,6 +232,7 @@ export default function InvoiceDetailPage() {
                 </>
               )}
             <div className="flex justify-between border-t pt-1"><span className="text-gray-600">Total Tax</span><span>{formatCurrency(inv.totalGst)}</span></div>
+            {Number(inv.tcsAmount) > 0 && <div className="flex justify-between text-sm"><span>TCS @ {inv.tcsRate}% (s.206C)</span><span>{formatCurrency(inv.tcsAmount)}</span></div>}
             <div className="flex justify-between font-bold text-sm border-t pt-1"><span>Total Amount After Tax</span><span>{formatCurrency(inv.grandTotal)}</span></div>
           </div>
         </div>

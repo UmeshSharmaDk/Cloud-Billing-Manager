@@ -43,7 +43,7 @@ function invoiceEditBlock(inv: { status: string; paidAmount: unknown }, editsFig
   return null;
 }
 
-function calcGst(items: any[], isInterstate: boolean) {
+function calcGst(items: any[], isInterstate: boolean, tcsRate: unknown = 0) {
   // Each line is rounded to paise here, and the invoice totals are the sum of
   // those rounded values. The previous version accumulated the unrounded
   // amounts, so the stored lines did not add up to the stored total.
@@ -82,7 +82,9 @@ function calcGst(items: any[], isInterstate: boolean) {
   const igst = sumBy(processed, (i) => i.igst);
   const totalGst = sum([cgst, sgst, igst]);
 
-  const payable = subtotal.plus(totalGst);
+  // TCS is collected on the whole consideration, GST included, and is part of what the customer pays.
+  const tcsAmount = paise(subtotal.plus(totalGst).times(dec(tcsRate ?? 0)).dividedBy(100));
+  const payable = subtotal.plus(totalGst).plus(tcsAmount);
   const grandTotal = rupees(payable);
   const roundOff = paise(grandTotal.minus(payable));
 
@@ -94,6 +96,8 @@ function calcGst(items: any[], isInterstate: boolean) {
     totalGst: toJson(totalGst),
     grandTotal: grandTotal.toNumber(),
     roundOff: toJson(roundOff),
+    tcsRate: dec(tcsRate ?? 0).toNumber(),
+    tcsAmount: toJson(tcsAmount),
     items: processed,
   };
 }
@@ -160,7 +164,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), 
 router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
 
-  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [] } = req.body;
+  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate } = req.body;
 
   if (!invoiceDate) return res.status(400).json({ error: "invoiceDate required" });
   if (!customerId && !customCustomerName) return res.status(400).json({ error: "customerId or customerName required" });
@@ -192,7 +196,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
   const supply = resolveSupplyType(business, placeOfSupply);
   if (!supply.ok) return res.status(400).json({ error: supply.error });
 
-  const gstCalc = calcGst(items, supply.isInterstate);
+  const gstCalc = calcGst(items, supply.isInterstate, tcsRate);
 
   // One transaction. Previously the invoice was inserted and then stock was
   // deducted in a loop of separate statements, so a failure part-way left an
@@ -215,6 +219,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
       sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst),
       totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal),
       roundOff: toColumn(gstCalc.roundOff), paidAmount: "0.00",
+      tcsRate: String(gstCalc.tcsRate), tcsAmount: toColumn(gstCalc.tcsAmount),
     }).returning();
 
     // Goods leave on a sale, come back on a credit note, and do not move at all
@@ -241,7 +246,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   // the customer may claim IGST or CGST+SGST credit, so it is the server's to
   // derive from the place of supply — a client that could assert it could
   // mis-state the tax head on an invoice that still totals correctly.
-  const { type, customerId, invoiceDate, dueDate, placeOfSupply, notes, items } = req.body;
+  const { type, customerId, invoiceDate, dueDate, placeOfSupply, notes, items, tcsRate } = req.body;
 
   // An issued invoice is a tax document. Once it is cancelled it is final, and
   // once money has been recorded against it the figures it was paid against
@@ -250,7 +255,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   // are not part of that, so they stay editable. To correct a paid invoice,
   // cancel it (which reverses the receipts) or issue a credit note.
   const editsFigures = Boolean(
-    type || customerId || invoiceDate || placeOfSupply !== undefined || items,
+    type || customerId || invoiceDate || placeOfSupply !== undefined || items || tcsRate !== undefined,
   );
 
   // Everything below is computed from the row as it is *under the lock*. This
@@ -300,9 +305,10 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     // lines nobody edited, and leaving the stored split alone would keep charging
     // the old one.
     const supplyTypeChanged = supply.isInterstate !== locked.isInterstate;
-    const linesToPrice = items ?? (supplyTypeChanged ? (locked.items as any[]) : null);
+    const linesToPrice = items ?? (supplyTypeChanged || tcsRate !== undefined ? (locked.items as any[]) : null);
     if (linesToPrice) {
-      const gstCalc = calcGst(linesToPrice, supply.isInterstate);
+      const gstCalc = calcGst(linesToPrice, supply.isInterstate, tcsRate ?? locked.tcsRate);
+      Object.assign(updates, { tcsRate: String(gstCalc.tcsRate), tcsAmount: toColumn(gstCalc.tcsAmount) });
       const lines = await resolveLineProducts(tx, productsTable, eq, businessId, gstCalc.items);
       Object.assign(updates, { items: lines, subtotal: toColumn(gstCalc.subtotal), cgst: toColumn(gstCalc.cgst), sgst: toColumn(gstCalc.sgst), igst: toColumn(gstCalc.igst), totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal), roundOff: toColumn(gstCalc.roundOff), isInterstate: supply.isInterstate });
     }

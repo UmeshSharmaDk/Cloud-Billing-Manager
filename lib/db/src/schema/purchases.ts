@@ -24,6 +24,10 @@ export const purchasesTable = pgTable("purchases", {
   igst: numeric("igst", { precision: 15, scale: 2 }).notNull().default("0"),
   totalGst: numeric("total_gst", { precision: 15, scale: 2 }).notNull().default("0"),
   grandTotal: numeric("grand_total", { precision: 15, scale: 2 }).notNull().default("0"),
+  /** Tax deducted at source when paying this bill: section (e.g. 194C), rate %, amount (on the taxable value). */
+  tdsSection: text("tds_section"),
+  tdsRate: numeric("tds_rate", { precision: 5, scale: 3 }).notNull().default("0"),
+  tdsAmount: numeric("tds_amount", { precision: 15, scale: 2 }).notNull().default("0"),
   notes: text("notes"),
   items: jsonb("items").notNull().default([]),
   createdAt: timestamp("created_at").notNull().defaultNow(),

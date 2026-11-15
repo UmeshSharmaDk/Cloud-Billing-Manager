@@ -93,6 +93,7 @@ export default function InvoiceDetail() {
             <Row label="SGST" value={money(inv.sgst)} />
           </>
         )}
+        {Number((inv as any).tcsAmount) > 0 && <Row label={`TCS @ ${(inv as any).tcsRate}%`} value={money((inv as any).tcsAmount)} />}
         {!!inv.roundOff && <Row label="Round off" value={money(inv.roundOff)} />}
         <Row label="Grand total" value={money(inv.grandTotal)} />
       </Card>

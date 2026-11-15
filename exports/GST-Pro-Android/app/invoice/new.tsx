@@ -22,6 +22,7 @@ export default function NewInvoice() {
   const [dueDate, setDueDate] = useState(new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10));
   const [placeOfSupply, setPlace] = useState("");
   const [notes, setNotes] = useState("");
+  const [tcs, setTcs] = useState("");
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const { busy, run } = useSave();
 
@@ -36,7 +37,7 @@ export default function NewInvoice() {
       () => api<{ invoice: Invoice }>("/invoices", {
         method: "POST",
         body: {
-          type, invoiceDate, dueDate: dueDate || null, placeOfSupply: place || null, notes: notes.trim() || null,
+          type, invoiceDate, dueDate: dueDate || null, placeOfSupply: place || null, notes: notes.trim() || null, ...(Number(tcs) > 0 ? { tcsRate: Number(tcs) } : {}),
           ...(customer ? { customerId: customer.id } : { customerName: walkIn.trim() }),
           items: toItems(lines, true),
         },
@@ -58,6 +59,7 @@ export default function NewInvoice() {
         <Select label="Type" value={type} options={TYPES} onChange={setType} />
         <Field label="Invoice date *" value={invoiceDate} onChangeText={setInvoiceDate} placeholder="YYYY-MM-DD" />
         <Field label="Due date" value={dueDate} onChangeText={setDueDate} placeholder="YYYY-MM-DD" />
+        <Field label="TCS % (s.206C, optional)" value={tcs} onChangeText={setTcs} keyboardType="decimal-pad" />
         <Field label="Notes" value={notes} onChangeText={setNotes} multiline />
       </Card>
       <LineItems lines={lines} setLines={setLines} price="sellingPrice" withDiscount />

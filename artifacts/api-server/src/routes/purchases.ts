@@ -154,6 +154,16 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery),
   return res.json({ purchases: purchases.map(mapPurchase), total: Number(total) });
 });
 
+/** TDS is withheld on the taxable value (GST excluded); no rate means no TDS. */
+function tdsFields(subtotal: unknown, section: string | null | undefined, rate: unknown) {
+  const r = dec(rate ?? 0);
+  return {
+    tdsSection: r.isZero() ? null : section || null,
+    tdsRate: r.toString(),
+    tdsAmount: toColumn(toJson(paise(dec(subtotal).times(r).dividedBy(100)))),
+  };
+}
+
 router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody), books("purchase"), async (req: Req, res) => {
   const businessId = req.businessId;
 
@@ -162,7 +172,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody),
     vendorId,
     billNumber, billDate,
     invoiceNumber: rawInvoiceNumber, invoiceDate: rawInvoiceDate,
-    dueDate, notes, items = [],
+    dueDate, notes, items = [], tdsSection, tdsRate,
   } = req.body;
 
   const invoiceNumber = billNumber ?? rawInvoiceNumber;
@@ -202,6 +212,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody),
       items: resolvedItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst),
       sgst: toColumn(calc.sgst), igst: toColumn(calc.igst),
       totalGst: toColumn(calc.totalGst), grandTotal: toColumn(calc.grandTotal),
+      ...tdsFields(calc.subtotal, tdsSection, tdsRate),
     }).returning();
 
     return created;
@@ -219,7 +230,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
 
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), books("purchase"), async (req: Req, res) => {
   const businessId = req.businessId;
-  const { vendorId, billNumber, billDate, invoiceNumber: rawNum, invoiceDate: rawDate, dueDate, notes, items, paymentStatus } = req.body;
+  const { vendorId, billNumber, billDate, invoiceNumber: rawNum, invoiceDate: rawDate, dueDate, notes, items, paymentStatus, tdsSection, tdsRate } = req.body;
 
   // Read before writing: the supply type may depend on a vendor or on lines
   // this request is not changing.
@@ -290,8 +301,13 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
         items: lineItems, subtotal: toColumn(calc.subtotal), cgst: toColumn(calc.cgst),
         sgst: toColumn(calc.sgst), igst: toColumn(calc.igst), totalGst: toColumn(calc.totalGst),
         grandTotal: toColumn(calc.grandTotal), isInterstate: supply.isInterstate,
+        ...tdsFields(calc.subtotal, tdsSection === undefined ? locked.tdsSection : tdsSection, tdsRate ?? locked.tdsRate),
       });
     };
+    // TDS changed on its own: re-derive from the stored taxable value.
+    if (!items && (tdsSection !== undefined || tdsRate !== undefined)) {
+      Object.assign(updates, tdsFields(locked.subtotal, tdsSection === undefined ? locked.tdsSection : tdsSection, tdsRate ?? locked.tdsRate));
+    }
 
     if (cancelling) {
       // The goods this bill received go back out.

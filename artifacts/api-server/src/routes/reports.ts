@@ -285,6 +285,64 @@ router.get("/hsn", requireAuth, requireBusiness, validateQuery(MonthYearQuery), 
   return res.json({ month, year, items });
 });
 
+const monthRange = (q: { month?: number; year?: number }) => {
+  const now = new Date();
+  const month = q.month ?? now.getMonth() + 1;
+  const year = q.year ?? now.getFullYear();
+  const mm = String(month).padStart(2, "0");
+  return { month, year, from: `${year}-${mm}-01`, to: `${year}-${mm}-${String(new Date(year, month, 0).getDate()).padStart(2, "0")}` };
+};
+/** PAN is characters 3-12 of a GSTIN; TDS/TCS returns are filed against it. */
+const panOf = (gstin: string | null) => (gstin && gstin.length >= 12 ? gstin.slice(2, 12) : null);
+
+/**
+ * TDS withheld on purchase bills in a month, by section and deductee: what is
+ * due to the government by the 7th of the next month and goes into Form 26Q.
+ */
+router.get("/tds", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const r = monthRange(req.validatedQuery);
+  const rows = await db.select().from(purchasesTable).where(and(
+    eq(purchasesTable.businessId, req.businessId), activePurchase(purchasesTable),
+    gte(purchasesTable.invoiceDate, r.from), lte(purchasesTable.invoiceDate, r.to),
+    sql`${purchasesTable.tdsAmount} > 0`,
+  ));
+  const entries = rows.map((p) => ({
+    id: p.id, section: p.tdsSection ?? "—", vendorName: p.vendorName, pan: panOf(p.vendorGstin),
+    billNumber: p.invoiceNumber, date: p.invoiceDate, taxable: toJson(p.subtotal), rate: Number(p.tdsRate), tds: toJson(p.tdsAmount),
+  }));
+  const bySection = new Map<string, { section: string; bills: number; taxable: ReturnType<typeof dec>; tds: ReturnType<typeof dec> }>();
+  for (const p of rows) {
+    const k = p.tdsSection ?? "—";
+    const s = bySection.get(k) ?? { section: k, bills: 0, taxable: dec(0), tds: dec(0) };
+    s.bills++; s.taxable = s.taxable.plus(dec(p.subtotal)); s.tds = s.tds.plus(dec(p.tdsAmount));
+    bySection.set(k, s);
+  }
+  return res.json({
+    month: r.month, year: r.year,
+    totalTds: toJson(sumBy(rows, (p) => p.tdsAmount)),
+    sections: [...bySection.values()].map((s) => ({ section: s.section, bills: s.bills, taxable: toJson(s.taxable), tds: toJson(s.tds) })),
+    entries,
+  });
+});
+
+/** TCS collected on sales in a month, by customer: Form 27EQ. */
+router.get("/tcs", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const r = monthRange(req.validatedQuery);
+  const rows = await db.select().from(invoicesTable).where(and(
+    eq(invoicesTable.businessId, req.businessId), taxInvoice(invoicesTable),
+    gte(invoicesTable.invoiceDate, r.from), lte(invoicesTable.invoiceDate, r.to),
+    sql`${invoicesTable.tcsAmount} > 0`,
+  ));
+  return res.json({
+    month: r.month, year: r.year,
+    totalTcs: toJson(sumBy(rows, (i) => i.tcsAmount)),
+    entries: rows.map((i) => ({
+      id: i.id, customerName: i.customerName, pan: panOf(i.customerGstin), invoiceNumber: i.invoiceNumber,
+      date: i.invoiceDate, amount: toJson(dec(i.subtotal).plus(dec(i.totalGst))), rate: Number(i.tcsRate), tcs: toJson(i.tcsAmount),
+    })),
+  });
+});
+
 router.get("/stock", requireAuth, requireBusiness, async (req: Req, res) => {
   const businessId = req.businessId;
   const products = await db.select().from(productsTable).where(and(eq(productsTable.businessId, businessId), eq(productsTable.isActive, true)));

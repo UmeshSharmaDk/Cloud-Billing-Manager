@@ -2948,6 +2948,31 @@ const adminEmail = `admin${uniq}@example.test`;
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
 }
 
+// === TDS on purchases, TCS on sales, and their monthly reports ==============
+{
+  const o = await register("tdsowner");
+  sqlExec(`UPDATE businesses SET state_code='27', state='Maharashtra' WHERE user_id=${o.userId}`);
+  const vend = (await call("POST", "/vendors", { token: o.token, body: { name: "Contractor", gstin: "27ABCDE1234F1Z5" } })).data;
+  const bill = await call("POST", "/purchases", { token: o.token, body: { vendorId: vend.id, billDate: "2026-06-10", billNumber: "C-1",
+    tdsSection: "194C", tdsRate: 2, items: [{ description: "Work", quantity: 1, unitPrice: 10000, gstRate: 18 }] } });
+  const b = bill.data?.purchase ?? bill.data;
+  check("tds", "a bill records TDS on its taxable value", bill.status === 201 && b?.tdsAmount === 200 && b?.netPayable === 11600, JSON.stringify({ s: bill.status, t: b?.tdsAmount, n: b?.netPayable }));
+  const edited = await call("PATCH", `/purchases/${b.id}`, { token: o.token, body: { tdsRate: 1 } });
+  check("tds", "changing the rate re-derives the amount", (edited.data?.purchase ?? edited.data)?.tdsAmount === 100, JSON.stringify(edited.data));
+  const tds = (await call("GET", "/reports/tds?month=6&year=2026", { token: o.token })).data;
+  check("tds", "the TDS report groups by section with the deductee PAN",
+    tds?.totalTds === 100 && tds?.sections?.[0]?.section === "194C" && tds?.entries?.[0]?.pan === "ABCDE1234F", JSON.stringify(tds));
+
+  const inv = await call("POST", "/invoices", { token: o.token, body: { invoiceDate: "2026-06-12", customerName: "Big Buyer", customerGstin: "27PQRST6789K1Z2",
+    placeOfSupply: "27", tcsRate: 0.1, items: [{ description: "Goods", quantity: 1, unitPrice: 100000, gstRate: 18 }] } });
+  const i = inv.data?.invoice;
+  check("tcs", "an invoice adds TCS on the GST-inclusive value", inv.status === 201 && i?.tcsAmount === 118 && i?.grandTotal === 118118, JSON.stringify({ s: inv.status, t: i?.tcsAmount, g: i?.grandTotal }));
+  const tcs = (await call("GET", "/reports/tcs?month=6&year=2026", { token: o.token })).data;
+  check("tcs", "the TCS report lists it with the collectee PAN", tcs?.totalTcs === 118 && tcs?.entries?.[0]?.pan === "PQRST6789K", JSON.stringify(tcs));
+  const g3b = (await call("GET", "/reports/gstr3b?month=6&year=2026", { token: o.token })).data;
+  check("tcs", "TCS does not change the GST figures", g3b?.outwardTaxable === 100000 && g3b?.outwardCgst === 9000, JSON.stringify({ t: g3b?.outwardTaxable, c: g3b?.outwardCgst }));
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {
