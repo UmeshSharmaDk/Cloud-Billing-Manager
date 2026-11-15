@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { db, usersTable, businessesTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
+import { db, usersTable, businessesTable, auditLogTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
 import { eq, ne, and, or, ilike, isNull, count, desc, inArray, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
-import { AdminListUsersQuery, AdminUpdateUserBody, IdParam } from "../schemas";
+import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
@@ -124,6 +124,48 @@ router.get("/users", validateQuery(AdminListUsersQuery), async (req: Req, res) =
     .limit(limit).offset((page - 1) * limit);
   const [{ count: total }] = await db.select({ count: count() }).from(usersTable).where(where);
   return res.json({ users: users.map(mapUser), total: Number(total) });
+});
+
+/** A business user this admin may manage: their own, or any for the superadmin. */
+async function managedUser(req: Req) {
+  const conditions = [eq(usersTable.id, req.validatedParams.id), eq(usersTable.role, "user"), isNull(usersTable.deletedAt)];
+  if (req.userRole === "admin") conditions.push(eq(usersTable.createdByAdminId, req.user.id));
+  const [user] = await db.select().from(usersTable).where(and(...conditions)).limit(1);
+  return user ?? null;
+}
+
+// PATCH /admin/users/:id/lock-date — freeze (or unfreeze) the user's books up to a day.
+router.patch("/users/:id/lock-date", validateParams(IdParam), validateBody(LockDateBody), async (req: Req, res) => {
+  const user = await managedUser(req);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  if (!user.businessId) return res.status(400).json({ error: "This user has no business yet." });
+  const [before] = await db.select({ lockDate: businessesTable.lockDate }).from(businessesTable).where(eq(businessesTable.id, user.businessId)).limit(1);
+  const [biz] = await db.update(businessesTable).set({ lockDate: req.body.lockDate })
+    .where(eq(businessesTable.id, user.businessId)).returning();
+  await recordAudit({
+    ...actorFrom(req), action: "business.lock_date_changed", targetType: "business", targetId: biz.id,
+    businessId: biz.id, details: { before: before?.lockDate ?? null, after: biz.lockDate },
+  });
+  return res.json({ lockDate: biz.lockDate });
+});
+
+// GET /admin/users/:id/audit — the user's audit trail: changes to their books and to their account.
+router.get("/users/:id/audit", validateParams(IdParam), validateQuery(AuditPageQuery), async (req: Req, res) => {
+  const user = await managedUser(req);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  const { page, limit } = req.validatedQuery;
+  const where = or(
+    user.businessId ? eq(auditLogTable.businessId, user.businessId) : sql`false`,
+    and(eq(auditLogTable.targetType, "user"), eq(auditLogTable.targetId, user.id)),
+  );
+  const entries = await db.select({
+    id: auditLogTable.id, actorEmail: auditLogTable.actorEmail, action: auditLogTable.action,
+    targetType: auditLogTable.targetType, targetId: auditLogTable.targetId, details: auditLogTable.details,
+    createdAt: auditLogTable.createdAt,
+  }).from(auditLogTable).where(where).orderBy(desc(auditLogTable.createdAt), desc(auditLogTable.id))
+    .limit(limit).offset((page - 1) * limit);
+  const [{ count: total }] = await db.select({ count: count() }).from(auditLogTable).where(where);
+  return res.json({ entries, total: Number(total) });
 });
 
 // GET /admin/users/:id — get a user with all their business data

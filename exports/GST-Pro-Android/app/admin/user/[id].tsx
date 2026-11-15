@@ -17,6 +17,7 @@ export default function AdminUser() {
   const [f, setF] = useState({ name: "", email: "", role: "user" });
   const [confirm, setConfirm] = useState<null | ((pw: string) => void)>(null);
   const [resetting, setResetting] = useState(false);
+  const [locking, setLocking] = useState(false);
   const { busy, run } = useSave();
   const u = q.data;
   useEffect(() => {
@@ -80,6 +81,22 @@ export default function AdminUser() {
       </Card>
       <Button title={user.isActive ? "Deactivate account" : "Activate account"} variant={user.isActive ? "danger" : "primary"} busy={busy} onPress={toggle} />
       <Button title="Reset password" variant="outline" onPress={() => setResetting(true)} />
+      {user.business && (
+        <Card title="Freeze transactions">
+          <Row label="Frozen up to" value={user.business.lockDate ? date(String(user.business.lockDate)) : "Nothing frozen"} />
+          <Button title={user.business.lockDate ? "Change lock date" : "Freeze books"} variant="outline" onPress={() => setLocking(true)} />
+          <Button title="Audit trail" variant="outline" onPress={() => router.push({ pathname: "/admin/audit", params: { id: String(user.id), name: user.name } })} />
+        </Card>
+      )}
+      <Prompt visible={locking} title="Freeze books up to" placeholder="YYYY-MM-DD or none" busy={busy}
+        message="Invoices, purchases, payments and e-way bills dated on or before this day can't be added, edited or cancelled. Type none to unfreeze."
+        onCancel={() => setLocking(false)}
+        onSubmit={(v) => {
+          setLocking(false);
+          const day = v.trim().toLowerCase() === "none" ? null : v.trim();
+          if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return Alert.alert("Enter the date as YYYY-MM-DD");
+          run(() => api(`/admin/users/${user.id}/lock-date`, { method: "PATCH", body: { lockDate: day } }));
+        }} />
 
       <Prompt visible={resetting} secure title="New password" placeholder="12+ characters" busy={busy}
         message={`Set a new password for ${user.name}. Their other sessions are signed out.`} onCancel={() => setResetting(false)}

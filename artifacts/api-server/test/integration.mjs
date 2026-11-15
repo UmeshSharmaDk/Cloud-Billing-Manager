@@ -2848,6 +2848,56 @@ const adminEmail = `admin${uniq}@example.test`;
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id IN (${adm.userId}, ${sa.userId})`);
 }
 
+// === frozen books and the transaction audit trail ===========================
+{
+  const adm = await register("lockadmin");
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
+  const owner = await register("lockowner");
+  sqlExec(`UPDATE users SET created_by_admin_id=${adm.userId} WHERE id=${owner.userId}`);
+  sqlExec(`UPDATE businesses SET state_code='27', state='Maharashtra' WHERE user_id=${owner.userId}`);
+  const other = await register("lockother");
+  const sale = (invoiceDate) => call("POST", "/invoices", { token: owner.token,
+    body: { invoiceDate, customerName: "Walk-in", placeOfSupply: "27",
+            items: [{ description: "Thing", quantity: 1, unitPrice: 100, gstRate: 18, unit: "Nos" }] } });
+
+  const old = (await sale("2026-03-10")).data?.invoice;
+  check("books", "an invoice is created before any freeze", !!old?.id);
+  check("books", "its creation is in the user's audit trail",
+    (await call("GET", `/admin/users/${owner.userId}/audit`, { token: adm.token })).data?.entries?.some((e) => e.action === "invoice.created" && e.targetId === old?.id));
+
+  check("books", "another admin cannot freeze this user's books",
+    (await call("PATCH", `/admin/users/${other.userId}/lock-date`, { token: adm.token, body: { lockDate: "2026-03-31" } })).status === 404);
+  const frozen = await call("PATCH", `/admin/users/${owner.userId}/lock-date`, { token: adm.token, body: { lockDate: "2026-03-31" } });
+  check("books", "the admin freezes the books", frozen.status === 200 && frozen.data?.lockDate === "2026-03-31", `status ${frozen.status}`);
+
+  const backdated = await sale("2026-03-15");
+  check("books", "a new invoice in the frozen period is refused", backdated.status === 409 && backdated.data?.code === "books_frozen", `status ${backdated.status}`);
+  check("books", "editing a frozen invoice is refused",
+    (await call("PATCH", `/invoices/${old.id}`, { token: owner.token, body: { notes: "late edit" } })).status === 409);
+  check("books", "moving a later invoice into the frozen period is refused",
+    (await call("PATCH", `/invoices/${(await sale("2026-04-02")).data?.invoice?.id}`, { token: owner.token, body: { invoiceDate: "2026-03-20" } })).status === 409);
+  check("books", "cancelling a frozen invoice is refused",
+    (await call("PATCH", `/invoices/${old.id}/status`, { token: owner.token, body: { status: "cancelled" } })).status === 409);
+  check("books", "recording a payment on a frozen invoice still works",
+    (await call("PATCH", `/invoices/${old.id}/status`, { token: owner.token, body: { paymentStatus: "paid" } })).status === 200);
+  check("books", "a backdated payment is refused",
+    (await call("POST", "/payments", { token: owner.token, body: { type: "received", amount: 10, date: "2026-02-01", mode: "cash" } })).status === 409);
+  check("books", "invoices after the lock date are unaffected", (await sale("2026-04-05")).status === 201);
+
+  const trail = (await call("GET", `/admin/users/${owner.userId}/audit`, { token: adm.token })).data?.entries ?? [];
+  check("books", "the freeze is in the audit trail", trail.some((e) => e.action === "business.lock_date_changed"));
+  check("books", "the payment is in the audit trail", trail.some((e) => e.action === "invoice.status_changed" && e.targetId === old.id));
+  check("books", "refused changes leave no audit entry", !trail.some((e) => e.details?.date === "2026-03-15"));
+  check("books", "a business user cannot read the admin audit trail",
+    (await call("GET", `/admin/users/${owner.userId}/audit`, { token: owner.token })).status === 403);
+
+  check("books", "the admin unfreezes the books",
+    (await call("PATCH", `/admin/users/${owner.userId}/lock-date`, { token: adm.token, body: { lockDate: null } })).status === 200 &&
+      (await sale("2026-03-15")).status === 201);
+
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

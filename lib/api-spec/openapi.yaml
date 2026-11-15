@@ -1354,6 +1354,53 @@ paths:
         "403": { description: Password confirmation required or incorrect }
         "409": { description: Refused — this would remove the last administrator }
 
+  /admin/users/{id}/lock-date:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    patch:
+      operationId: adminSetLockDate
+      tags: [admin]
+      summary: Freeze a user's books on and before a date (null unfreezes)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lockDate]
+              properties:
+                lockDate: { type: string, format: date, nullable: true }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { lockDate: { type: string, nullable: true } }
+        "404": { description: Not one of this admin's users }
+
+  /admin/users/{id}/audit:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    get:
+      operationId: adminUserAudit
+      tags: [admin]
+      summary: A user's audit trail (changes to their books and account), newest first
+      parameters:
+        - { in: query, name: page,  schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: Entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries: { type: array, items: { type: object, additionalProperties: true } }
+                  total: { type: integer }
+
   /eway-bills:
     get:
       operationId: listEwayBills

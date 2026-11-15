@@ -9,6 +9,8 @@ import { ListPaymentsQuery, CreatePaymentBody } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { resolveTenantRefs } from "../lib/tenant-refs";
 
+import { books } from "../middleware/books";
+
 const router = Router();
 
 /**
@@ -36,7 +38,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListPaymentsQuery), 
   return res.json({ payments: payments.map(mapPayment), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), async (req: Req, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreatePaymentBody), books("payment"), async (req: Req, res) => {
   const businessId = req.businessId;
   const { type, amount, date, mode, referenceNumber, invoiceId, customerId, vendorId, notes } = req.body;
 

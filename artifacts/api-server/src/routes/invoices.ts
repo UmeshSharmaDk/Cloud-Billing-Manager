@@ -11,6 +11,8 @@ import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceS
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
 
+import { books } from "../middleware/books";
+
 const router = Router();
 
 /**
@@ -155,7 +157,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), 
   return res.json({ invoices: invoices.map(mapInvoice), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), async (req: Req, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
 
   const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [] } = req.body;
@@ -233,7 +235,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   return res.json(mapInvoice(invoice));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), async (req: Req, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
   // `isInterstate` is deliberately not read from the body. It decides whether
   // the customer may claim IGST or CGST+SGST credit, so it is the server's to
@@ -339,7 +341,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
  * out from under their invoice. Cancelling keeps the number and the history,
  * takes the invoice out of every total, and puts its goods back in stock.
  */
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
   const [existing] = await db.select({ id: invoicesTable.id }).from(invoicesTable)
     .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId)))
@@ -350,7 +352,7 @@ router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), asy
   });
 });
 
-router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), async (req: Req, res) => {
+router.patch("/:id/status", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceStatusBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
   const { paymentStatus, status, paidAmount, mode, referenceNumber } = req.body;
   const newStatus = paymentStatus ?? status;

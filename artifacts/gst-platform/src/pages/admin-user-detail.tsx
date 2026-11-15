@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useState, useEffect } from "react";
 import { ConfirmPasswordDialog } from "@/components/ConfirmPasswordDialog";
 import { UserRecords } from "@/components/UserRecords";
+import { BooksControl } from "@/components/BooksControl";
 
 export default function AdminUserDetailPage() {
   const [, params] = useRoute("/admin/users/:id");
@@ -215,6 +216,7 @@ export default function AdminUserDetailPage() {
         )}
       </div>
 
+      {user.businessId && <BooksControl userId={userId} lockDate={biz.lockDate ?? null} />}
       {user.businessId && <UserRecords userId={userId} />}
     </div>
   );

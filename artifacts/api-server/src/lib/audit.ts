@@ -39,13 +39,18 @@ export type AuditAction =
   | "admin.plan_end_changed"
   | "capacity_request.created"
   | "capacity_request.approved"
-  | "capacity_request.declined";
+  | "capacity_request.declined"
+  | "business.lock_date_changed"
+  | `${BookKind}.${"created" | "updated" | "deleted" | "status_changed"}`;
+
+export type BookKind = "invoice" | "purchase" | "payment" | "eway_bill";
 
 interface AuditInput {
   actorId: number;
   actorEmail: string;
   action: AuditAction;
-  targetType: "user" | "admin_invitation" | "capacity_request";
+  targetType: "user" | "admin_invitation" | "capacity_request" | "business" | BookKind;
+  businessId?: number | null;
   targetId?: number | null;
   details?: Record<string, unknown>;
   sourceIp?: string | null;
@@ -87,6 +92,7 @@ export async function recordAudit(entry: AuditInput): Promise<void> {
         targetId: entry.targetId ?? null,
         details: scrub(entry.details ?? {}),
         sourceIp: entry.sourceIp ?? null,
+        businessId: entry.businessId ?? null,
       });
     });
   } catch (err) {

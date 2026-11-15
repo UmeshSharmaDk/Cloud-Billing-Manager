@@ -10,6 +10,8 @@ import { applyStockChanges, applyStockMovement, findLineProduct, STOCK_IN } from
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapPurchase } from "../lib/serialise";
 
+import { books } from "../middleware/books";
+
 const router = Router();
 
 /**
@@ -152,7 +154,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListPurchasesQuery),
   return res.json({ purchases: purchases.map(mapPurchase), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody), async (req: Req, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreatePurchaseBody), books("purchase"), async (req: Req, res) => {
   const businessId = req.businessId;
 
   // Accept both billNumber/billDate (frontend convention) and invoiceNumber/invoiceDate
@@ -215,7 +217,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   return res.json(mapPurchase(purchase));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), async (req: Req, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdatePurchaseBody), books("purchase"), async (req: Req, res) => {
   const businessId = req.businessId;
   const { vendorId, billNumber, billDate, invoiceNumber: rawNum, invoiceDate: rawDate, dueDate, notes, items, paymentStatus } = req.body;
 
@@ -328,7 +330,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   return res.json(mapPurchase(purchase));
 });
 
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), books("purchase"), async (req: Req, res) => {
   const businessId = req.businessId;
 
   // Deleting a bill un-receives its goods. Without this the stock it added
