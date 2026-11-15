@@ -47,5 +47,12 @@ export const logger = pino({
           options: { colorize: true },
         },
       }
-    : {}),
+    : {
+        // Hostinger's runtime log viewer reads only JSON lines carrying
+        // `timestamp`, a text `level` and `message`; pino's defaults are
+        // `time`, a numeric level and `msg`, so every line was dropped.
+        messageKey: "message",
+        timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
+        formatters: { level: (label: string) => ({ level: label.toUpperCase() }) },
+      }),
 });

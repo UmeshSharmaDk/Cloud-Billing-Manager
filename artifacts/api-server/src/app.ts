@@ -1,3 +1,4 @@
+import path from "node:path";
 import express, {
   type Express,
   type NextFunction,
@@ -23,6 +24,51 @@ const app: Express = express();
  * caller forge the chain.
  */
 app.set("trust proxy", config.trustProxyHops);
+
+/**
+ * The built web app, when this process also serves it (single-origin hosting
+ * such as Hostinger). Registered ahead of the API's JSON-only headers, with the
+ * same policy the page's <meta> CSP states plus what a meta tag cannot:
+ * frame-ancestors. Hashed assets may be cached; index.html may not.
+ */
+const webDir = process.env["WEB_DIST_DIR"];
+if (webDir) {
+  const web = express.Router();
+  web.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+          fontSrc: ["'self'", "https://fonts.gstatic.com"],
+          imgSrc: ["'self'", "data:", "blob:"],
+          connectSrc: ["'self'"],
+          workerSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+          frameAncestors: ["'none'"],
+        },
+      },
+      frameguard: { action: "deny" },
+      hsts: { maxAge: 31_536_000, includeSubDomains: true, preload: false },
+      referrerPolicy: { policy: "same-origin" },
+    }),
+  );
+  web.use(
+    "/assets",
+    express.static(path.join(webDir, "assets"), { immutable: true, maxAge: "1y", fallthrough: false }),
+  );
+  web.use(express.static(webDir, { index: false, maxAge: "1h" }));
+  // Client-side routes: every other GET gets the app shell.
+  web.get(/.*/, (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(path.join(webDir, "index.html"));
+  });
+  app.use((req, res, next) => (req.path === "/api" || req.path.startsWith("/api/") ? next() : web(req, res, next)));
+}
 
 // Everything here is per-account or per-business data, and some of it is
 // financial: no shared cache or browser back/forward cache should keep a copy.

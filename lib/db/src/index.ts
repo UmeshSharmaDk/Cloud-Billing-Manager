@@ -41,8 +41,22 @@ const poolNumber = (name: string, fallback: number): number => {
   return value;
 };
 
+/**
+ * TLS for hosted Postgres (Supabase). Verified by default: encryption without
+ * authentication is open to an active man-in-the-middle. Supply the
+ * provider's CA as DATABASE_CA_CERT (PEM; literal \\n escapes allowed, since
+ * hosting panels often hold one line). Off unless DATABASE_SSL=true or a CA is
+ * given, so local and Replit databases keep working unchanged.
+ */
+function sslConfig(): pg.PoolConfig["ssl"] {
+  const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
+  if (!ca && process.env.DATABASE_SSL !== "true") return undefined;
+  return ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
+}
+
 export const pool = new Pool({
   connectionString: applicationDatabaseUrl,
+  ssl: sslConfig(),
   max: poolNumber("DB_POOL_MAX", 20),
   // Fail a request that cannot get a connection rather than hanging forever.
   connectionTimeoutMillis: poolNumber("DB_CONNECTION_TIMEOUT_MS", 10_000),
