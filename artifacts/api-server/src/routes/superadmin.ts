@@ -16,7 +16,7 @@ import {
   IdParam,
   MfaResetBody,
   ReviewCapacityRequestBody,
-  UpdateAdminLimitBody,
+  UpdateAdminLimitBody, UpdateAdminPlanBody,
 } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
@@ -152,6 +152,23 @@ router.get("/admin-invitations", requireSuperadmin, async (_req: Req, res) => {
     .orderBy(desc(adminInvitationsTable.createdAt));
   return res.json({ invitations: invitations.map(serializeInvitation) });
 });
+
+router.patch("/admins/:id/plan", requireSuperadmin, validateParams(IdParam),
+  validateBody(UpdateAdminPlanBody), async (req: Req, res) => {
+    const stepUp = await verifyStepUp(req);
+    if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+    const targetId = req.validatedParams.id;
+    const [before] = await db.select({ subscriptionEnd: usersTable.subscriptionEnd }).from(usersTable)
+      .where(and(eq(usersTable.id, targetId), eq(usersTable.role, "admin"), isNull(usersTable.deletedAt))).limit(1);
+    if (!before) return res.status(404).json({ error: "Admin account not found" });
+    const [admin] = await db.update(usersTable).set({ subscriptionEnd: req.body.planEnd })
+      .where(eq(usersTable.id, targetId)).returning();
+    await recordAudit({
+      ...actorFrom(req), action: "admin.plan_end_changed", targetType: "user", targetId,
+      details: { before: before.subscriptionEnd, after: admin.subscriptionEnd },
+    });
+    return res.json(mapUser(admin));
+  });
 
 router.patch("/admins/:id/limit", requireSuperadmin, validateParams(IdParam),
   validateBody(UpdateAdminLimitBody), async (req: Req, res) => {

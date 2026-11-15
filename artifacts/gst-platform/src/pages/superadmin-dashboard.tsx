@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmPasswordDialog } from "@/components/ConfirmPasswordDialog";
+import { authFetch } from "@/lib/api-fetch";
 import {
   ShieldCheck, UserRoundPlus, UsersRound, UserCog, Clock3, CircleAlert, CircleCheck,
   Search, Pencil, ArrowUpRight, X, Check, RefreshCw, Mail, CalendarDays,
@@ -20,7 +21,8 @@ type ActionIntent =
   | { type: "invite"; payload: { name: string; email: string; userLimit: number } }
   | { type: "limit"; id: number; name: string; userLimit: number }
   | { type: "review"; id: number; name: string; decision: "approve" | "decline"; userLimit?: number }
-  | { type: "mfa"; id: number; name: string };
+  | { type: "mfa"; id: number; name: string }
+  | { type: "plan"; id: number; name: string; planEnd: string | null };
 
 const money = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 const date = (value?: string | null) => value ? new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value)) : "—";
@@ -40,6 +42,8 @@ export default function SuperadminDashboardPage() {
   const [invite, setInvite] = useState({ name: "", email: "", userLimit: "" });
   const [intent, setIntent] = useState<ActionIntent | null>(null);
   const [limitEditor, setLimitEditor] = useState<{ id: number; name: string; value: string } | null>(null);
+  const [planEditor, setPlanEditor] = useState<{ id: number; name: string; value: string } | null>(null);
+  const [planPending, setPlanPending] = useState(false);
   const [reviewEditor, setReviewEditor] = useState<{ id: number; name: string; value: string } | null>(null);
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [pageError, setPageError] = useState("");
@@ -96,6 +100,20 @@ export default function SuperadminDashboardPage() {
       });
       return;
     }
+    if (intent.type === "plan") {
+      setPlanPending(true);
+      authFetch(`/api/superadmin/admins/${intent.id}/plan`, { method: "PATCH", body: JSON.stringify({ planEnd: intent.planEnd, confirmPassword }) })
+        .then(async (res) => {
+          const data = await res.json().catch(() => null);
+          if (!res.ok) throw { data };
+          await invalidateAdminData();
+          setPasswordDialogOpen(false); setIntent(null); setPlanEditor(null);
+          setNotice(intent.planEnd ? `${intent.name}'s plan now ends on ${date(intent.planEnd)}.` : `${intent.name}'s plan no longer has an end date.`);
+        })
+        .catch(privilegedError)
+        .finally(() => setPlanPending(false));
+      return;
+    }
     if (intent.type === "mfa") {
       resetMfa.mutate({ id: intent.id, data: { confirmPassword } }, {
         onSuccess: async () => {
@@ -116,7 +134,7 @@ export default function SuperadminDashboardPage() {
       onError: privilegedError,
     });
   };
-  const isPrivilegedPending = createInvite.isPending || updateLimit.isPending || reviewRequest.isPending || resetMfa.isPending;
+  const isPrivilegedPending = createInvite.isPending || updateLimit.isPending || reviewRequest.isPending || resetMfa.isPending || planPending;
 
   const handleInvite = (event: React.FormEvent) => {
     event.preventDefault(); setFormError("");
@@ -177,8 +195,8 @@ export default function SuperadminDashboardPage() {
             <EmptyState icon={<UserCog className="h-6 w-6" />} title={query ? "No matching administrators" : "No administrator accounts yet"} detail={query ? "Try searching with another name or email." : "Invite an administrator to provision a new tenant."} />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-sm">
-                <thead><tr className="border-b bg-[#f4f7f3] text-[11px] uppercase tracking-[.1em] text-muted-foreground"><th className="px-5 py-3 text-left font-semibold">Administrator</th><th className="px-4 py-3 text-center font-semibold">Status</th><th className="px-4 py-3 text-left font-semibold">Managed users</th><th className="px-4 py-3 text-left font-semibold">Allowance</th><th className="px-4 py-3 text-left font-semibold">Created</th><th className="px-5 py-3 text-right font-semibold">Action</th></tr></thead>
+              <table className="w-full min-w-[960px] text-sm">
+                <thead><tr className="border-b bg-[#f4f7f3] text-[11px] uppercase tracking-[.1em] text-muted-foreground"><th className="px-5 py-3 text-left font-semibold">Administrator</th><th className="px-4 py-3 text-center font-semibold">Status</th><th className="px-4 py-3 text-left font-semibold">Managed users</th><th className="px-4 py-3 text-left font-semibold">Allowance</th><th className="px-4 py-3 text-left font-semibold">Plan ends</th><th className="px-4 py-3 text-left font-semibold">Created</th><th className="px-5 py-3 text-right font-semibold">Action</th></tr></thead>
                 <tbody>{filteredAdmins.map((admin) => {
                   const percent = admin.userLimit > 0 ? Math.min(100, admin.userCount / admin.userLimit * 100) : (admin.userCount ? 100 : 0);
                   const full = admin.availableSlots <= 0;
@@ -187,8 +205,9 @@ export default function SuperadminDashboardPage() {
                     <td className="px-4 py-4 text-center"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${admin.isActive ? "bg-emerald-50 text-emerald-800" : "bg-slate-100 text-slate-600"}`}><span className={`h-1.5 w-1.5 rounded-full ${admin.isActive ? "bg-emerald-600" : "bg-slate-400"}`} />{admin.isActive ? "Active" : "Inactive"}</span></td>
                     <td className="px-4 py-4"><div className="font-semibold tabular-nums">{admin.userCount.toLocaleString("en-IN")} <span className="font-normal text-muted-foreground">users</span></div><div className="mt-2 h-1.5 w-28 overflow-hidden rounded-full bg-[#e8ece7]"><div className={`h-full rounded-full transition-[width] duration-300 ${full ? "bg-amber-600" : "bg-[#47866a]"}`} style={{ width: `${percent}%` }} /></div></td>
                     <td className="px-4 py-4"><div className="flex items-center gap-2"><span className="font-semibold tabular-nums">{admin.userLimit.toLocaleString("en-IN")}</span><span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${full ? "bg-amber-100 text-amber-900" : "bg-[#edf4eb] text-[#42644f]"}`}>{admin.availableSlots.toLocaleString("en-IN")} available</span></div></td>
+                    <td className="px-4 py-4 text-xs">{admin.subscriptionEnd ? <span className={new Date(`${admin.subscriptionEnd}T23:59:59`) < new Date() ? "font-semibold text-rose-700" : ""}>{date(admin.subscriptionEnd)}</span> : <span className="text-muted-foreground">No end date</span>}</td>
                     <td className="px-4 py-4 text-xs text-muted-foreground">{date(admin.createdAt)}</td>
-                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">{admin.mfaEnabled && <Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-reset-mfa-${admin.id}`} onClick={() => startConfirm({ type: "mfa", id: admin.id, name: admin.name })}><ShieldCheck className="h-3.5 w-3.5" /> Reset 2FA</Button>}<Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-edit-limit-${admin.id}`} onClick={() => { setFormError(""); setLimitEditor({ id: admin.id, name: admin.name, value: String(admin.userLimit) }); }}><Pencil className="h-3.5 w-3.5" /> Edit limit</Button></div></td>
+                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">{admin.mfaEnabled && <Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-reset-mfa-${admin.id}`} onClick={() => startConfirm({ type: "mfa", id: admin.id, name: admin.name })}><ShieldCheck className="h-3.5 w-3.5" /> Reset 2FA</Button>}<Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-edit-plan-${admin.id}`} onClick={() => { setFormError(""); setPlanEditor({ id: admin.id, name: admin.name, value: admin.subscriptionEnd?.slice(0, 10) ?? "" }); }}><CalendarDays className="h-3.5 w-3.5" /> Plan end</Button><Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-edit-limit-${admin.id}`} onClick={() => { setFormError(""); setLimitEditor({ id: admin.id, name: admin.name, value: String(admin.userLimit) }); }}><Pencil className="h-3.5 w-3.5" /> Edit limit</Button></div></td>
                   </tr>;
                 })}</tbody>
               </table>
@@ -240,6 +259,13 @@ export default function SuperadminDashboardPage() {
         <form className="space-y-4" onSubmit={submitLimit}><div className="rounded-lg bg-[#f4f7f3] p-3 text-sm"><span className="text-muted-foreground">Current usage</span><strong className="ml-2">{admins.find((a) => a.id === limitEditor.id)?.userCount ?? 0} users</strong></div><div className="space-y-1.5"><Label htmlFor="edit-user-limit">New managed-user limit</Label><Input id="edit-user-limit" data-testid="input-edit-user-limit" type="number" min={admins.find((a) => a.id === limitEditor.id)?.userCount ?? 0} max="100000" step="1" value={limitEditor.value} onChange={(e) => setLimitEditor({ ...limitEditor, value: e.target.value })} required /></div>{formError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{formError}</p>}<div className="flex justify-end gap-2 border-t pt-4"><Button variant="outline" type="button" onClick={() => setLimitEditor(null)}>Cancel</Button><Button type="submit">Review change <ChevronRight className="ml-1 h-4 w-4" /></Button></div></form>
       </Modal>}
 
+      {planEditor && <Modal title="Plan end date" eyebrow={planEditor.name} onClose={() => setPlanEditor(null)} icon={<CalendarDays className="h-5 w-5" />}>
+        <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); startConfirm({ type: "plan", id: planEditor.id, name: planEditor.name, planEnd: planEditor.value || null }); }}>
+          <div className="space-y-1.5"><Label htmlFor="plan-end">Last day of the plan</Label><Input id="plan-end" type="date" value={planEditor.value} onChange={(e) => setPlanEditor({ ...planEditor, value: e.target.value })} /><p className="text-xs text-muted-foreground">After this day the administrator and every user they created cannot sign in. Leave empty for no end date.</p></div>
+          <div className="flex justify-end gap-2 border-t pt-4"><Button variant="outline" type="button" onClick={() => setPlanEditor(null)}>Cancel</Button><Button type="submit">Review change <ChevronRight className="ml-1 h-4 w-4" /></Button></div>
+        </form>
+      </Modal>}
+
       {reviewEditor && <Modal title="Approve capacity request" eyebrow={reviewEditor.name} onClose={() => setReviewEditor(null)} icon={<ArrowUpRight className="h-5 w-5" />}>
         <form className="space-y-4" onSubmit={submitApprove}><div className="flex gap-2 rounded-lg border border-amber-200 bg-[#fff9ed] p-3 text-xs leading-5 text-[#574525]"><Info className="mt-0.5 h-4 w-4 shrink-0" /><span>Approval applies the exact user limit entered below. Do not use the requested add-on count as a replacement limit unless that is your intended total.</span></div><div className="space-y-1.5"><Label htmlFor="approved-user-limit">New total user limit</Label><Input id="approved-user-limit" data-testid="input-approved-user-limit" type="number" min="0" max="100000" step="1" value={reviewEditor.value} onChange={(e) => setReviewEditor({ ...reviewEditor, value: e.target.value })} placeholder="Enter the explicit new limit" required /></div>{formError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{formError}</p>}<div className="flex justify-end gap-2 border-t pt-4"><Button variant="outline" type="button" onClick={() => setReviewEditor(null)}>Cancel</Button><Button type="submit" className="bg-[#245d45] hover:bg-[#194b37]">Continue to approval</Button></div></form>
       </Modal>}
@@ -247,9 +273,9 @@ export default function SuperadminDashboardPage() {
       <ConfirmPasswordDialog
         open={passwordDialogOpen}
         onOpenChange={(open) => { setPasswordDialogOpen(open); if (!open) setIntent(null); }}
-        title={intent?.type === "mfa" ? "Confirm two-factor reset" : intent?.type === "review" ? (intent.decision === "approve" ? "Confirm capacity approval" : "Confirm request decline") : intent?.type === "limit" ? "Confirm allowance change" : "Confirm administrator invitation"}
-        description={intent?.type === "mfa" ? `Turn off two-factor authentication for ${intent.name} and sign them out everywhere. Only do this after confirming who is asking, outside this app.` : intent?.type === "review" ? intent.decision === "approve" ? `Approve ${intent.name} with a new user limit of ${intent.userLimit ?? 0}.` : `Decline the capacity request from ${intent.name}. The user limit will not change.` : intent?.type === "limit" ? `Set ${intent.name}’s managed-user limit to ${intent.userLimit}.` : "Send a one-time administrator setup invitation. Your password is required to authorize this action."}
-        confirmLabel={intent?.type === "mfa" ? "Reset 2FA" : intent?.type === "review" ? intent.decision === "approve" ? "Approve request" : "Decline request" : intent?.type === "limit" ? "Save new limit" : "Send invitation"}
+        title={intent?.type === "plan" ? "Confirm plan end date" : intent?.type === "mfa" ? "Confirm two-factor reset" : intent?.type === "review" ? (intent.decision === "approve" ? "Confirm capacity approval" : "Confirm request decline") : intent?.type === "limit" ? "Confirm allowance change" : "Confirm administrator invitation"}
+        description={intent?.type === "plan" ? (intent.planEnd ? `End ${intent.name}'s plan on ${date(intent.planEnd)}. After that day they and their users cannot sign in.` : `Remove the end date from ${intent.name}'s plan.`) : intent?.type === "mfa" ? `Turn off two-factor authentication for ${intent.name} and sign them out everywhere. Only do this after confirming who is asking, outside this app.` : intent?.type === "review" ? intent.decision === "approve" ? `Approve ${intent.name} with a new user limit of ${intent.userLimit ?? 0}.` : `Decline the capacity request from ${intent.name}. The user limit will not change.` : intent?.type === "limit" ? `Set ${intent.name}’s managed-user limit to ${intent.userLimit}.` : "Send a one-time administrator setup invitation. Your password is required to authorize this action."}
+        confirmLabel={intent?.type === "plan" ? "Save plan end" : intent?.type === "mfa" ? "Reset 2FA" : intent?.type === "review" ? intent.decision === "approve" ? "Approve request" : "Decline request" : intent?.type === "limit" ? "Save new limit" : "Send invitation"}
         pending={isPrivilegedPending}
         onConfirm={confirmPrivileged}
       />

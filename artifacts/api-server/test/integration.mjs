@@ -2811,6 +2811,43 @@ const adminEmail = `admin${uniq}@example.test`;
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id IN (${adm.userId}, ${sa.userId})`);
 }
 
+// === admin plans and read-only viewing of a user's records ==================
+{
+  const sa = await register("plansuper");
+  sqlExec(`UPDATE users SET role='superadmin', ${ENROLLED} WHERE id=${sa.userId}`);
+  const adm = await register("planadmin");
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
+  const mine = await register("planuser");
+  sqlExec(`UPDATE users SET created_by_admin_id=${adm.userId} WHERE id=${mine.userId}`);
+  const stranger = await register("planstranger");
+
+  const viewed = await call("GET", `/invoices?asUser=${mine.userId}`, { token: adm.token });
+  check("plans", "an admin reads their user's invoices", viewed.status === 200 && Array.isArray(viewed.data?.invoices), `status ${viewed.status}`);
+  check("plans", "and their reports", (await call("GET", `/reports/gstr3b?asUser=${mine.userId}`, { token: adm.token })).status === 200);
+  check("plans", "viewing is read-only",
+    (await call("POST", `/customers?asUser=${mine.userId}`, { token: adm.token, body: { name: "Nope" } })).status === 403);
+  check("plans", "an admin cannot view another admin's user",
+    (await call("GET", `/invoices?asUser=${stranger.userId}`, { token: adm.token })).status === 404);
+  check("plans", "a business user cannot view anyone",
+    (await call("GET", `/invoices?asUser=${stranger.userId}`, { token: mine.token })).status === 403);
+
+  const path = `/superadmin/admins/${adm.userId}/plan`;
+  check("plans", "setting a plan end needs the superadmin's password",
+    (await call("PATCH", path, { token: sa.token, body: { planEnd: "2020-01-01" } })).status === 400);
+  const ended = await call("PATCH", path, { token: sa.token, body: { planEnd: "2020-01-01", confirmPassword: PASSWORD } });
+  check("plans", "the superadmin sets an admin's plan end", ended.status === 200 && ended.data?.subscriptionEnd === "2020-01-01", `status ${ended.status}`);
+  check("plans", "a lapsed plan refuses the admin's live session", (await call("GET", "/auth/me", { token: adm.token })).status === 403);
+  check("plans", "and their users' sessions", (await call("GET", "/customers", { token: mine.token })).status === 403);
+  check("plans", "and their users' sign-in",
+    (await call("POST", "/auth/login", { body: { email: mine.email, password: PASSWORD } })).status === 403);
+  check("plans", "users of other admins are untouched", (await call("GET", "/customers", { token: stranger.token })).status === 200);
+  const cleared = await call("PATCH", path, { token: sa.token, body: { planEnd: null, confirmPassword: PASSWORD } });
+  check("plans", "clearing the end date restores access",
+    cleared.status === 200 && (await call("GET", "/customers", { token: mine.token })).status === 200, `status ${cleared.status}`);
+
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id IN (${adm.userId}, ${sa.userId})`);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

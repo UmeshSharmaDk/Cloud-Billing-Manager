@@ -217,6 +217,12 @@ export const CreateAdminInvitationBody = z.object({
   userLimit: z.coerce.number().int().min(0).max(100_000).default(15),
 });
 
+export const UpdateAdminPlanBody = z.object({
+  /** Last day the admin and their users may sign in; null removes the end date. */
+  planEnd: z.union([dateString, z.null()]),
+  confirmPassword: z.string().min(1).max(1024),
+});
+
 export const UpdateAdminLimitBody = z.object({
   userLimit: z.coerce.number().int().min(0).max(100_000),
   confirmPassword: z.string().min(1).max(1024),

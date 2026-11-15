@@ -1,15 +1,15 @@
 import { useRoute, useLocation } from "wouter";
 import { useGetUser, useUpdateUser, useToggleUserStatus } from "@workspace/api-client-react";
-import { formatDate, statusBadge, formatCurrency } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowLeft, Building2, FileText, ShoppingCart, Users, Package, Edit2, Save, UserCheck, UserX } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useEffect } from "react";
 import { ConfirmPasswordDialog } from "@/components/ConfirmPasswordDialog";
+import { UserRecords } from "@/components/UserRecords";
 
 export default function AdminUserDetailPage() {
   const [, params] = useRoute("/admin/users/:id");
@@ -30,11 +30,7 @@ export default function AdminUserDetailPage() {
 
   useEffect(() => {
     if (user.id) {
-      setForm({
-        subscriptionStatus: user.subscriptionStatus || "trial",
-        subscriptionEnd: user.subscriptionEnd?.slice(0, 10) || "",
-        role: user.role || "user",
-      });
+      setForm({ role: user.role || "user" });
     }
   }, [user.id]);
 
@@ -49,12 +45,6 @@ export default function AdminUserDetailPage() {
   const changedFields = () => {
     const changed: Record<string, unknown> = {};
     if (form.role !== user.role) changed.role = form.role;
-    if (form.subscriptionStatus !== (user.subscriptionStatus || "trial")) {
-      changed.subscriptionStatus = form.subscriptionStatus;
-    }
-    if (form.subscriptionEnd !== (user.subscriptionEnd?.slice(0, 10) || "")) {
-      changed.subscriptionEnd = form.subscriptionEnd;
-    }
     return changed;
   };
 
@@ -139,7 +129,6 @@ export default function AdminUserDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusBadge(user.subscriptionStatus)}`}>{user.subscriptionStatus}</span>
           <span className={`text-xs px-2 py-1 rounded-full font-medium ${user.isActive ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>{user.isActive ? "Active" : "Inactive"}</span>
           <Button variant="outline" size="sm" className="gap-1" onClick={handleToggleActive} disabled={toggleMutation.isPending}>
             {user.isActive ? <><UserX className="w-3.5 h-3.5" /> Deactivate</> : <><UserCheck className="w-3.5 h-3.5" /> Activate</>}
@@ -186,22 +175,6 @@ export default function AdminUserDetailPage() {
             {editing ? (
               <>
                 <div className="space-y-2">
-                  <Label>Subscription Plan</Label>
-                  <Select value={form.subscriptionStatus} onValueChange={(v) => setForm((f: any) => ({ ...f, subscriptionStatus: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="trial">Trial</SelectItem>
-                      <SelectItem value="monthly">Monthly</SelectItem>
-                      <SelectItem value="yearly">Yearly</SelectItem>
-                      <SelectItem value="expired">Expired</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Subscription End Date</Label>
-                  <Input type="date" value={form.subscriptionEnd} onChange={(e) => setForm((f: any) => ({ ...f, subscriptionEnd: e.target.value }))} />
-                </div>
-                <div className="space-y-2">
                   <Label>Role</Label>
                   <Select value={form.role} onValueChange={(v) => setForm((f: any) => ({ ...f, role: v }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -216,8 +189,6 @@ export default function AdminUserDetailPage() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div><p className="text-xs text-muted-foreground">Role</p><p className="font-medium capitalize">{user.role}</p></div>
                 <div><p className="text-xs text-muted-foreground">Account Status</p><p className={`font-medium ${user.isActive ? "text-emerald-600" : "text-red-600"}`}>{user.isActive ? "Active" : "Inactive"}</p></div>
-                <div><p className="text-xs text-muted-foreground">Subscription</p><p className="font-medium capitalize">{user.subscriptionStatus}</p></div>
-                <div><p className="text-xs text-muted-foreground">Sub. End</p><p className="font-medium">{formatDate(user.subscriptionEnd)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Registered</p><p className="font-medium">{formatDate(user.createdAt)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Business ID</p><p className="font-medium">{user.businessId || "None"}</p></div>
               </div>
@@ -243,6 +214,8 @@ export default function AdminUserDetailPage() {
           </Card>
         )}
       </div>
+
+      {user.businessId && <UserRecords userId={userId} />}
     </div>
   );
 }

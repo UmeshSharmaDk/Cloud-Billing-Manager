@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { router, Stack } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { api } from "@/lib/api";
+import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import type { Invoice } from "@/lib/types";
 import { Button, Card, Chips, colors, ErrorView, Loading, Row, s } from "@/lib/ui";
@@ -11,17 +11,18 @@ const KINDS = ["GSTR-1", "GSTR-3B", "HSN"] as const;
 type R = Record<string, number> & { invoices?: Invoice[]; items?: Record<string, string | number>[] };
 
 export default function Reports() {
+  const { asUser, name } = useLocalSearchParams<{ asUser?: string; name?: string }>();
   const [kind, setKind] = useState<(typeof KINDS)[number]>("GSTR-1");
   const [at, setAt] = useState(() => { const d = new Date(); return { month: d.getMonth() + 1, year: d.getFullYear() }; });
   const step = (n: number) => setAt(({ month, year }) => { const d = new Date(year, month - 1 + n, 1); return { month: d.getMonth() + 1, year: d.getFullYear() }; });
-  const path = `/reports/${kind.toLowerCase().replace("-", "")}?month=${at.month}&year=${at.year}`;
+  const path = viewAs(`/reports/${kind.toLowerCase().replace("-", "")}?month=${at.month}&year=${at.year}`, asUser);
   const q = useQuery({ queryKey: [path], queryFn: () => api<R>(path) });
   const label = new Date(at.year, at.month - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
   const d = q.data;
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
-      <Stack.Screen options={{ title: "GST reports" }} />
+      <Stack.Screen options={{ title: name ? `${name} · reports` : "GST reports" }} />
       <Chips options={KINDS} value={kind} onChange={setKind} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <View style={{ flex: 1 }}><Button title="‹ Prev" variant="outline" onPress={() => step(-1)} /></View>
@@ -75,7 +76,7 @@ export default function Reports() {
           {kind !== "HSN" && !!d.invoices?.length && (
             <Card title="Invoices">
               {d.invoices.map((inv) => (
-                <Pressable key={inv.id} onPress={() => router.push(`/invoice/${inv.id}`)}>
+                <Pressable key={inv.id} onPress={() => router.push({ pathname: "/invoice/[id]", params: { id: String(inv.id), ...(asUser ? { asUser } : {}) } })}>
                   <Row label={`${inv.invoiceNumber} · ${date(inv.invoiceDate)}`} value={money(inv.grandTotal)} />
                 </Pressable>
               ))}

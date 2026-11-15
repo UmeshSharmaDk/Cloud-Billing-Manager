@@ -55,3 +55,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   }
   return data as T;
 }
+
+/** Adds `asUser` so an admin reads one of their users' records (read-only on the server). */
+export const viewAs = (path: string, asUser?: string) =>
+  asUser ? `${path}${path.includes("?") ? "&" : "?"}asUser=${encodeURIComponent(asUser)}` : path;
