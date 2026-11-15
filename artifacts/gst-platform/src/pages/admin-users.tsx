@@ -39,7 +39,7 @@ export default function AdminUsersPage() {
   const [capacitySuccess, setCapacitySuccess] = useState("");
   const [quotaHit, setQuotaHit] = useState(false);
   const [capacityCount, setCapacityCount] = useState("1");
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", joinUserId: "", accessLevel: "entry" });
   const { data, isLoading, isError, refetch } = useListUsers(undefined, {
     query: { queryKey: getListUsersQueryKey(), refetchOnMount: "always" },
   });
@@ -62,10 +62,11 @@ export default function AdminUsersPage() {
     setCreateError("");
     setCreateSuccess("");
     setQuotaHit(false);
-    createUser.mutate({ data: { ...form, role: "user" } }, {
+    const { joinUserId, accessLevel, ...base } = form;
+    createUser.mutate({ data: { ...base, role: "user", ...(joinUserId ? { joinUserId: Number(joinUserId), accessLevel } : {}) } as any }, {
       onSuccess: async () => {
         await queryClient.invalidateQueries({ queryKey: getListUsersQueryKey() });
-        setForm({ name: "", email: "", password: "" });
+        setForm({ name: "", email: "", password: "", joinUserId: "", accessLevel: "entry" });
         setShowCreate(false);
         setCreateSuccess("User account created and added to your workspace.");
       },
@@ -210,6 +211,8 @@ export default function AdminUsersPage() {
                 <div className="space-y-1.5"><Label htmlFor="new-user-name">Full name</Label><Input id="new-user-name" data-testid="input-new-user-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoComplete="name" required /></div>
                 <div className="space-y-1.5"><Label htmlFor="new-user-email">Email address</Label><Input id="new-user-email" data-testid="input-new-user-email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} autoComplete="email" required /></div>
                 <div className="space-y-1.5"><Label htmlFor="new-user-password">Temporary password</Label><Input id="new-user-password" data-testid="input-new-user-password" type="password" minLength={12} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" required /><p className="text-xs text-muted-foreground">Use at least 12 characters.</p></div>
+                <div className="space-y-1.5"><Label htmlFor="new-user-join">Business</Label><select id="new-user-join" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.joinUserId} onChange={(e) => setForm({ ...form, joinUserId: e.target.value })}><option value="">A new client with their own business</option>{users.filter((u: any) => !u.accessLevel && u.businessId).map((u) => <option key={u.id} value={u.id}>Staff of {u.name}'s business</option>)}</select></div>
+                {form.joinUserId && <div className="space-y-1.5"><Label htmlFor="new-user-access">Access</Label><select id="new-user-access" className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.accessLevel} onChange={(e) => setForm({ ...form, accessLevel: e.target.value })}><option value="full">Full: everything the owner can do</option><option value="entry">Data entry: add and edit, no deleting or settings</option><option value="view">View only: for interns or clients</option></select></div>}
                 {createError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{createError}</p>}
                 <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button><Button type="submit" disabled={pending} data-testid="button-create-user">{createUser.isPending && <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />}{createUser.isPending ? "Creating…" : "Create user"}</Button></div>
               </form>

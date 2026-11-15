@@ -326,6 +326,15 @@ export async function requireBusiness(req: any, res: any, next: any) {
     businessId = viewed;
   }
   if (!businessId) return res.status(400).json({ error: "No business" });
+  // Staff, intern and client logins: "view" only reads; "entry" cannot delete
+  // or change the business's own settings.
+  const level = req.query?.asUser === undefined ? req.user?.accessLevel : null;
+  if (level === "view" && req.method !== "GET") {
+    return res.status(403).json({ error: "Your login can view records but not change them.", code: "read_only" });
+  }
+  if (level === "entry" && (req.method === "DELETE" || (req.method !== "GET" && String(req.baseUrl).endsWith("/business")))) {
+    return res.status(403).json({ error: "Your login can't delete records or change business settings.", code: "not_permitted" });
+  }
   req.businessId = businessId;
   // Before the scope is opened, so a rejected request never takes a pooled
   // connection: the limiter exists to protect them.

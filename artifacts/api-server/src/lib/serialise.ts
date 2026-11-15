@@ -24,6 +24,7 @@ export function mapUser(user: User) {
     subscriptionStatus: user.subscriptionStatus,
     subscriptionEnd: user.subscriptionEnd,
     businessId: user.businessId,
+    accessLevel: user.accessLevel ?? null,
     userLimit: user.role === "admin" || user.role === "superadmin" ? user.userLimit : undefined,
     mfaEnabled: user.mfaEnabledAt !== null,
     createdAt: user.createdAt,

@@ -31,7 +31,7 @@ export default function AdminUserDetailPage() {
 
   useEffect(() => {
     if (user.id) {
-      setForm({ role: user.role || "user" });
+      setForm({ role: user.role || "user", accessLevel: user.accessLevel ?? "owner" });
     }
   }, [user.id]);
 
@@ -46,6 +46,7 @@ export default function AdminUserDetailPage() {
   const changedFields = () => {
     const changed: Record<string, unknown> = {};
     if (form.role !== user.role) changed.role = form.role;
+    if (form.accessLevel !== (user.accessLevel ?? "owner")) changed.accessLevel = form.accessLevel;
     return changed;
   };
 
@@ -176,6 +177,12 @@ export default function AdminUserDetailPage() {
             {editing ? (
               <>
                 <div className="space-y-2">
+                  <Label>Access</Label>
+                  <select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.accessLevel} onChange={(e) => setForm((f: any) => ({ ...f, accessLevel: e.target.value }))}>
+                    <option value="owner">Owner</option><option value="full">Full</option><option value="entry">Data entry (no deleting or settings)</option><option value="view">View only</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
                   <Label>Role</Label>
                   <Select value={form.role} onValueChange={(v) => setForm((f: any) => ({ ...f, role: v }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -189,6 +196,7 @@ export default function AdminUserDetailPage() {
             ) : (
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div><p className="text-xs text-muted-foreground">Role</p><p className="font-medium capitalize">{user.role}</p></div>
+                <div><p className="text-xs text-muted-foreground">Access</p><p className="font-medium">{({ full: "Full", entry: "Data entry", view: "View only" } as Record<string, string>)[user.accessLevel] ?? "Owner"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Account Status</p><p className={`font-medium ${user.isActive ? "text-emerald-600" : "text-red-600"}`}>{user.isActive ? "Active" : "Inactive"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Registered</p><p className="font-medium">{formatDate(user.createdAt)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Business ID</p><p className="font-medium">{user.businessId || "None"}</p></div>

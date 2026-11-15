@@ -2906,6 +2906,48 @@ const adminEmail = `admin${uniq}@example.test`;
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
 }
 
+// === staff, intern and client logins with access levels =====================
+{
+  const adm = await register("staffadmin");
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
+  const owner = await register("staffowner");
+  sqlExec(`UPDATE users SET created_by_admin_id=${adm.userId} WHERE id=${owner.userId}`);
+  const stranger = await register("staffstranger");
+  const ownerBiz = sqlValue(`SELECT business_id FROM users WHERE id=${owner.userId}`);
+  const make = (tag, body) => call("POST", "/users", { token: adm.token,
+    body: { name: tag, email: `${tag}${uniq}@example.test`, password: PASSWORD, role: "user", ...body } });
+  const login = async (tag) => (await call("POST", "/auth/login", { body: { email: `${tag}${uniq}@example.test`, password: PASSWORD } })).data?.token;
+
+  check("staff", "a login cannot join another admin's client",
+    (await make("staffx", { joinUserId: stranger.userId })).status === 400);
+  const viewer = await make("staffview", { joinUserId: owner.userId, accessLevel: "view" });
+  check("staff", "an admin adds a view-only login to a client's business",
+    viewer.status === 201 && viewer.data?.accessLevel === "view" && String(viewer.data?.businessId) === ownerBiz, `status ${viewer.status}`);
+  const clerk = await make("staffentry", { joinUserId: owner.userId });
+  check("staff", "a joined login defaults to data entry", clerk.data?.accessLevel === "entry");
+  check("staff", "no second business is created for it",
+    sqlValue(`SELECT count(*) FROM businesses WHERE user_id IN (${viewer.data.id}, ${clerk.data.id})`) === "0");
+
+  const vTok = await login("staffview"), eTok = await login("staffentry");
+  check("staff", "view-only reads the business's records", (await call("GET", "/customers", { token: vTok })).status === 200);
+  check("staff", "but cannot add one",
+    (await call("POST", "/customers", { token: vTok, body: { name: "Nope" } })).data?.code === "read_only");
+  const cust = await call("POST", "/customers", { token: eTok, body: { name: "Entered by clerk" } });
+  check("staff", "data entry adds records to the shared business", cust.status === 201, `status ${cust.status}`);
+  const custId = cust.data?.id ?? cust.data?.customer?.id;
+  check("staff", "the owner sees what staff entered",
+    (await call("GET", "/customers", { token: owner.token })).data?.customers?.some((c) => c.id === custId));
+  check("staff", "data entry cannot delete",
+    (await call("DELETE", `/customers/${custId}`, { token: eTok })).data?.code === "not_permitted");
+  check("staff", "or change business settings",
+    (await call("PATCH", "/business", { token: eTok, body: { name: "Hijacked" } })).data?.code === "not_permitted");
+  const raised = await call("PATCH", `/users/${viewer.data.id}`, { token: adm.token, body: { accessLevel: "full" } });
+  check("staff", "the admin changes a login's access", raised.status === 200 && raised.data?.accessLevel === "full");
+  check("staff", "and it applies at once", (await call("POST", "/customers", { token: vTok, body: { name: "Now allowed" } })).status === 201);
+
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

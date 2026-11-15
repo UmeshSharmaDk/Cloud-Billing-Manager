@@ -2115,6 +2115,13 @@ components:
         businessName:
           type: string
           description: Name of the business created with the account. Defaults to the user's name.
+        joinUserId:
+          type: integer
+          description: Add this login to that client's existing business (staff, intern or client access) instead of creating one.
+        accessLevel:
+          type: string
+          enum: [full, entry, view]
+          description: For a joined login. full = owner's rights; entry = add and edit, no deleting or settings; view = read-only.
         gstin:
           type: string
           nullable: true

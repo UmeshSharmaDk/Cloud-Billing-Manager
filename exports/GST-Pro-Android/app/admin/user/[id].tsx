@@ -9,19 +9,21 @@ import type { Business, User } from "@/lib/types";
 import { Button, Card, ErrorView, Field, Loading, PasswordPrompt, Prompt, Row, s, Select, StatusPill } from "@/lib/ui";
 
 type Detail = User & { business: Business | null; stats: Record<string, number> };
+import { ACCESS } from "@/lib/types";
+const LEVELS = [{ value: "owner", label: "Owner" }, ...ACCESS];
 const ROLES = [{ value: "user", label: "User" }, { value: "admin", label: "Admin" }];
 
 export default function AdminUser() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const q = useQuery({ queryKey: [`/admin/users/${id}`], queryFn: () => api<Detail>(`/admin/users/${encodeURIComponent(id)}`) });
-  const [f, setF] = useState({ name: "", email: "", role: "user" });
+  const [f, setF] = useState({ name: "", email: "", role: "user", accessLevel: "owner" });
   const [confirm, setConfirm] = useState<null | ((pw: string) => void)>(null);
   const [resetting, setResetting] = useState(false);
   const [locking, setLocking] = useState(false);
   const { busy, run } = useSave();
   const u = q.data;
   useEffect(() => {
-    if (u) setF({ name: u.name, email: u.email, role: u.role });
+    if (u) setF({ name: u.name, email: u.email, role: u.role, accessLevel: (u as any).accessLevel ?? "owner" });
   }, [u]);
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
@@ -42,6 +44,7 @@ export default function AdminUser() {
     if (f.name.trim() !== user.name) changed.name = f.name.trim();
     if (f.email.trim() !== user.email) changed.email = f.email.trim();
     if (f.role !== user.role) changed.role = f.role;
+    if (f.accessLevel !== ((user as any).accessLevel ?? "owner")) changed.accessLevel = f.accessLevel;
     if (!Object.keys(changed).length) return Alert.alert("Nothing changed");
     stepUp((pw) => api(`/users/${user.id}`, { method: "PATCH", body: { ...changed, ...(pw ? { confirmPassword: pw } : {}) } }));
   };
@@ -76,6 +79,7 @@ export default function AdminUser() {
       <Card title="Edit user">
         <Field label="Name *" value={f.name} onChangeText={(v) => setF((p) => ({ ...p, name: v }))} />
         <Field label="Email *" value={f.email} keyboardType="email-address" autoCapitalize="none" onChangeText={(v) => setF((p) => ({ ...p, email: v }))} />
+        <Select label="Access" value={f.accessLevel} options={LEVELS} onChange={(v) => setF((p) => ({ ...p, accessLevel: v }))} />
         <Select label="Role" value={f.role} options={ROLES} onChange={(v) => setF((p) => ({ ...p, role: v }))} />
         <Button title="Save changes" busy={busy} onPress={save} />
       </Card>

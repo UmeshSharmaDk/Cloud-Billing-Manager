@@ -13,6 +13,12 @@ export const usersTable = pgTable("users", {
   subscriptionEnd: text("subscription_end"),
   businessId: integer("business_id"),
   createdByAdminId: integer("created_by_admin_id"),
+  /**
+   * What this login may do in its business. Null is the owner (everything).
+   * "full" is the same for a second login, "entry" may add and edit records but
+   * not delete them or change business settings, "view" is read-only.
+   */
+  accessLevel: text("access_level"),
   userLimit: integer("user_limit").notNull().default(15),
   /**
    * Soft delete. A hard DELETE removed only this row and left the business,

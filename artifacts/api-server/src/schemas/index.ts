@@ -174,6 +174,9 @@ export const CreateUserBody = z.object({
   // Every business user needs a business to work in; defaults to the user's name.
   businessName: shortText(200).optional(),
   gstin,
+  /** Add this login to an existing client's business instead of creating one. */
+  joinUserId: entityId.optional(),
+  accessLevel: z.enum(["full", "entry", "view"]).optional(),
   email: z.string().email().max(320),
   password: newPassword,
   role: roleEnum,
@@ -187,6 +190,7 @@ export const CreateUserBody = z.object({
 
 export const UpdateUserBody = z.object({
   name: shortText(200).optional(),
+  accessLevel: z.enum(["owner", "full", "entry", "view"]).optional(),
   email: z.string().email().max(320).optional(),
   role: roleEnum.optional(),
   confirmPassword: z.string().max(1024).optional(),
