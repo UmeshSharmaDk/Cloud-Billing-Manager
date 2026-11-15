@@ -15,13 +15,13 @@ const ROLES = [{ value: "user", label: "User" }, { value: "admin", label: "Admin
 export default function AdminUser() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const q = useQuery({ queryKey: [`/admin/users/${id}`], queryFn: () => api<Detail>(`/admin/users/${encodeURIComponent(id)}`) });
-  const [f, setF] = useState({ subscriptionStatus: "trial", subscriptionEnd: "", role: "user" });
+  const [f, setF] = useState({ name: "", email: "", subscriptionStatus: "trial", subscriptionEnd: "", role: "user" });
   const [confirm, setConfirm] = useState<null | ((pw: string) => void)>(null);
   const [resetting, setResetting] = useState(false);
   const { busy, run } = useSave();
   const u = q.data;
   useEffect(() => {
-    if (u) setF({ subscriptionStatus: u.subscriptionStatus || "trial", subscriptionEnd: u.subscriptionEnd?.slice(0, 10) ?? "", role: u.role });
+    if (u) setF({ name: u.name, email: u.email, subscriptionStatus: u.subscriptionStatus || "trial", subscriptionEnd: u.subscriptionEnd?.slice(0, 10) ?? "", role: u.role });
   }, [u]);
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
@@ -38,6 +38,9 @@ export default function AdminUser() {
 
   const save = () => {
     const changed: Record<string, string> = {};
+    if (!f.name.trim() || !f.email.trim()) return Alert.alert("Missing details", "Name and email are required.");
+    if (f.name.trim() !== user.name) changed.name = f.name.trim();
+    if (f.email.trim() !== user.email) changed.email = f.email.trim();
     if (f.role !== user.role) changed.role = f.role;
     if (f.subscriptionStatus !== (user.subscriptionStatus || "trial")) changed.subscriptionStatus = f.subscriptionStatus;
     if (f.subscriptionEnd !== (user.subscriptionEnd?.slice(0, 10) ?? "")) changed.subscriptionEnd = f.subscriptionEnd;
@@ -64,7 +67,9 @@ export default function AdminUser() {
           <Row label="Products" value={String(user.stats.productCount)} />
         </Card>
       )}
-      <Card title="Subscription and role">
+      <Card title="Edit user">
+        <Field label="Name *" value={f.name} onChangeText={(v) => setF((p) => ({ ...p, name: v }))} />
+        <Field label="Email *" value={f.email} keyboardType="email-address" autoCapitalize="none" onChangeText={(v) => setF((p) => ({ ...p, email: v }))} />
         <Select label="Plan" value={f.subscriptionStatus} options={PLANS} onChange={(v) => setF((p) => ({ ...p, subscriptionStatus: v }))} />
         <Field label="Plan ends (YYYY-MM-DD)" value={f.subscriptionEnd} onChangeText={(v) => setF((p) => ({ ...p, subscriptionEnd: v }))} />
         <Select label="Role" value={f.role} options={ROLES} onChange={(v) => setF((p) => ({ ...p, role: v }))} />
