@@ -90,6 +90,10 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   Indian FY (April–March), never reused, unique per business at the database level
 - Privileged admin actions are recorded in `audit_log` and require the admin to re-enter their own
   password (`confirmPassword` in the body)
+- Admins and superadmins must have TOTP two-factor authentication on before any admin route answers
+  (`403 mfa_enrolment_required` otherwise; the web app sends them to `/security`). Login for an MFA
+  account returns `{ mfaRequired, mfaToken }` and finishes at `/auth/mfa/login`. A superadmin can
+  reset another admin's MFA. See "Two-factor authentication for administrators" in SECURITY-REVIEW.md
 
 ## Product
 

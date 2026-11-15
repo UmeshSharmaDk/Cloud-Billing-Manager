@@ -40,6 +40,7 @@ import type {
   CapacityRequestReviewInput,
   ChangePassword200,
   ChangePasswordInput,
+  ConfirmPasswordInput,
   CreateEwayBill201,
   Customer,
   CustomerInput,
@@ -73,7 +74,13 @@ import type {
   ListUsersParams,
   ListVendorsParams,
   LoginInput,
+  LoginResult,
   LogoutAll200,
+  MfaCodeInput,
+  MfaEnableResponse,
+  MfaLoginInput,
+  MfaRecoveryCodesResponse,
+  MfaSetupResponse,
   MonthlyRevenue,
   Payment,
   PaymentInput,
@@ -205,9 +212,9 @@ export const getLoginUrl = () => {
 /**
  * @summary Login
  */
-export const login = async (loginInput: LoginInput, options?: RequestInit): Promise<AuthResponse> => {
+export const login = async (loginInput: LoginInput, options?: RequestInit): Promise<LoginResult> => {
 
-  return customFetch<AuthResponse>(getLoginUrl(),
+  return customFetch<LoginResult>(getLoginUrl(),
   {
     ...options,
     method: 'POST',
@@ -263,6 +270,293 @@ export const useLogin = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getLoginMutationOptions(options));
+    }
+
+export const getLoginMfaUrl = () => {
+
+
+
+
+  return `/api/auth/mfa/login`
+}
+
+/**
+ * @summary Finish signing in with an authenticator or recovery code
+ */
+export const loginMfa = async (mfaLoginInput: MfaLoginInput, options?: RequestInit): Promise<AuthResponse> => {
+
+  return customFetch<AuthResponse>(getLoginMfaUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaLoginInput,)
+  }
+);}
+
+
+
+
+export const getLoginMfaMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof loginMfa>>, TError,{data: BodyType<MfaLoginInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof loginMfa>>, TError,{data: BodyType<MfaLoginInput>}, TContext> => {
+
+const mutationKey = ['loginMfa'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof loginMfa>>, {data: BodyType<MfaLoginInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  loginMfa(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LoginMfaMutationResult = NonNullable<Awaited<ReturnType<typeof loginMfa>>>
+    export type LoginMfaMutationBody = BodyType<MfaLoginInput>
+    export type LoginMfaMutationError = ErrorType<void>
+
+    /**
+ * @summary Finish signing in with an authenticator or recovery code
+ */
+export const useLoginMfa = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof loginMfa>>, TError,{data: BodyType<MfaLoginInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof loginMfa>>,
+        TError,
+        {data: BodyType<MfaLoginInput>},
+        TContext
+      > => {
+      return useMutation(getLoginMfaMutationOptions(options));
+    }
+
+export const getSetupMfaUrl = () => {
+
+
+
+
+  return `/api/auth/mfa/setup`
+}
+
+/**
+ * Needs the caller's own password. Returns a new secret that does not count until /auth/mfa/enable confirms a code from it.
+ * @summary Start two-factor enrolment (administrators only)
+ */
+export const setupMfa = async (confirmPasswordInput: ConfirmPasswordInput, options?: RequestInit): Promise<MfaSetupResponse> => {
+
+  return customFetch<MfaSetupResponse>(getSetupMfaUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      confirmPasswordInput,)
+  }
+);}
+
+
+
+
+export const getSetupMfaMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setupMfa>>, TError,{data: BodyType<ConfirmPasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof setupMfa>>, TError,{data: BodyType<ConfirmPasswordInput>}, TContext> => {
+
+const mutationKey = ['setupMfa'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof setupMfa>>, {data: BodyType<ConfirmPasswordInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  setupMfa(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SetupMfaMutationResult = NonNullable<Awaited<ReturnType<typeof setupMfa>>>
+    export type SetupMfaMutationBody = BodyType<ConfirmPasswordInput>
+    export type SetupMfaMutationError = ErrorType<void>
+
+    /**
+ * @summary Start two-factor enrolment (administrators only)
+ */
+export const useSetupMfa = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setupMfa>>, TError,{data: BodyType<ConfirmPasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof setupMfa>>,
+        TError,
+        {data: BodyType<ConfirmPasswordInput>},
+        TContext
+      > => {
+      return useMutation(getSetupMfaMutationOptions(options));
+    }
+
+export const getEnableMfaUrl = () => {
+
+
+
+
+  return `/api/auth/mfa/enable`
+}
+
+/**
+ * Revokes every other session the account holds and re-issues this one. The recovery codes are returned here and never again.
+ * @summary Confirm a code and turn two-factor authentication on
+ */
+export const enableMfa = async (mfaCodeInput: MfaCodeInput, options?: RequestInit): Promise<MfaEnableResponse> => {
+
+  return customFetch<MfaEnableResponse>(getEnableMfaUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaCodeInput,)
+  }
+);}
+
+
+
+
+export const getEnableMfaMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof enableMfa>>, TError,{data: BodyType<MfaCodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof enableMfa>>, TError,{data: BodyType<MfaCodeInput>}, TContext> => {
+
+const mutationKey = ['enableMfa'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof enableMfa>>, {data: BodyType<MfaCodeInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  enableMfa(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type EnableMfaMutationResult = NonNullable<Awaited<ReturnType<typeof enableMfa>>>
+    export type EnableMfaMutationBody = BodyType<MfaCodeInput>
+    export type EnableMfaMutationError = ErrorType<void>
+
+    /**
+ * @summary Confirm a code and turn two-factor authentication on
+ */
+export const useEnableMfa = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof enableMfa>>, TError,{data: BodyType<MfaCodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof enableMfa>>,
+        TError,
+        {data: BodyType<MfaCodeInput>},
+        TContext
+      > => {
+      return useMutation(getEnableMfaMutationOptions(options));
+    }
+
+export const getRegenerateMfaRecoveryCodesUrl = () => {
+
+
+
+
+  return `/api/auth/mfa/recovery-codes`
+}
+
+/**
+ * Takes an authenticator code; a recovery code is not accepted here.
+ * @summary Replace the recovery codes
+ */
+export const regenerateMfaRecoveryCodes = async (mfaCodeInput: MfaCodeInput, options?: RequestInit): Promise<MfaRecoveryCodesResponse> => {
+
+  return customFetch<MfaRecoveryCodesResponse>(getRegenerateMfaRecoveryCodesUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      mfaCodeInput,)
+  }
+);}
+
+
+
+
+export const getRegenerateMfaRecoveryCodesMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof regenerateMfaRecoveryCodes>>, TError,{data: BodyType<MfaCodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof regenerateMfaRecoveryCodes>>, TError,{data: BodyType<MfaCodeInput>}, TContext> => {
+
+const mutationKey = ['regenerateMfaRecoveryCodes'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof regenerateMfaRecoveryCodes>>, {data: BodyType<MfaCodeInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  regenerateMfaRecoveryCodes(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RegenerateMfaRecoveryCodesMutationResult = NonNullable<Awaited<ReturnType<typeof regenerateMfaRecoveryCodes>>>
+    export type RegenerateMfaRecoveryCodesMutationBody = BodyType<MfaCodeInput>
+    export type RegenerateMfaRecoveryCodesMutationError = ErrorType<void>
+
+    /**
+ * @summary Replace the recovery codes
+ */
+export const useRegenerateMfaRecoveryCodes = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof regenerateMfaRecoveryCodes>>, TError,{data: BodyType<MfaCodeInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof regenerateMfaRecoveryCodes>>,
+        TError,
+        {data: BodyType<MfaCodeInput>},
+        TContext
+      > => {
+      return useMutation(getRegenerateMfaRecoveryCodesMutationOptions(options));
     }
 
 export const getChangePasswordUrl = () => {
@@ -5318,6 +5612,79 @@ export const useUpdateSuperadminAdminLimit = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getUpdateSuperadminAdminLimitMutationOptions(options));
+    }
+
+export const getResetAdminMfaUrl = (id: number,) => {
+
+
+
+
+  return `/api/superadmin/admins/${id}/mfa-reset`
+}
+
+/**
+ * For an administrator who has lost both their authenticator and their recovery codes. Needs the superadmin's own password, cannot target the caller, revokes the target's sessions, and is recorded in the audit log. The administrator must enrol again before the admin panel answers.
+ * @summary Turn off an administrator's two-factor authentication
+ */
+export const resetAdminMfa = async (id: number,
+    confirmPasswordInput: ConfirmPasswordInput, options?: RequestInit): Promise<User> => {
+
+  return customFetch<User>(getResetAdminMfaUrl(id),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      confirmPasswordInput,)
+  }
+);}
+
+
+
+
+export const getResetAdminMfaMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resetAdminMfa>>, TError,{id: number;data: BodyType<ConfirmPasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof resetAdminMfa>>, TError,{id: number;data: BodyType<ConfirmPasswordInput>}, TContext> => {
+
+const mutationKey = ['resetAdminMfa'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof resetAdminMfa>>, {id: number;data: BodyType<ConfirmPasswordInput>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  resetAdminMfa(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ResetAdminMfaMutationResult = NonNullable<Awaited<ReturnType<typeof resetAdminMfa>>>
+    export type ResetAdminMfaMutationBody = BodyType<ConfirmPasswordInput>
+    export type ResetAdminMfaMutationError = ErrorType<void>
+
+    /**
+ * @summary Turn off an administrator's two-factor authentication
+ */
+export const useResetAdminMfa = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof resetAdminMfa>>, TError,{id: number;data: BodyType<ConfirmPasswordInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof resetAdminMfa>>,
+        TError,
+        {id: number;data: BodyType<ConfirmPasswordInput>},
+        TContext
+      > => {
+      return useMutation(getResetAdminMfaMutationOptions(options));
     }
 
 export const getListCapacityRequestsUrl = () => {

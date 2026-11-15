@@ -1,6 +1,6 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { and, count, desc, eq, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import {
   db,
   rootDb,
@@ -14,6 +14,7 @@ import {
   CreateAdminInvitationBody,
   CreateCapacityRequestBody,
   IdParam,
+  MfaResetBody,
   ReviewCapacityRequestBody,
   UpdateAdminLimitBody,
 } from "../schemas";
@@ -23,6 +24,8 @@ import { mapUser } from "../lib/serialise";
 import type { AuthedRequest, IdParams } from "../lib/http";
 import { mailer, adminInvitationMessage, describeMailError } from "../lib/mailer";
 import { config } from "../lib/config";
+import { assertNotSelf } from "../lib/admin-guards";
+import { clearFailures, mfaKey } from "../middleware/rate-limit";
 
 export const DEFAULT_ADMIN_USER_LIMIT = 15;
 export const ADDITIONAL_USER_PRICE_INR = 1000;
@@ -197,6 +200,55 @@ router.patch("/admins/:id/limit", requireSuperadmin, validateParams(IdParam),
     });
 
     return res.json(mapUser(result.admin));
+  });
+
+/**
+ * Turn off two-factor authentication for an administrator who has lost their
+ * authenticator and their recovery codes.
+ *
+ * The superadmin confirms their own password, cannot do it to themselves, and
+ * the reset revokes every session the target holds. The target can then sign
+ * in with their password and must enrol again before the admin panel answers.
+ */
+router.post("/admins/:id/mfa-reset", requireSuperadmin, validateParams(IdParam),
+  validateBody(MfaResetBody), async (req: Req, res) => {
+    const targetId = req.validatedParams.id;
+    const self = assertNotSelf(req.user.id, targetId);
+    if (self) return res.status(400).json({ error: self });
+
+    const stepUp = await verifyStepUp(req);
+    if (!stepUp.ok) return sendStepUpFailure(res, stepUp);
+
+    const [before] = await db.select().from(usersTable)
+      .where(and(
+        eq(usersTable.id, targetId),
+        inArray(usersTable.role, ["admin", "superadmin"]),
+        isNull(usersTable.deletedAt),
+      ))
+      .limit(1);
+    if (!before) return res.status(404).json({ error: "Admin account not found" });
+
+    const [admin] = await db.update(usersTable)
+      .set({
+        mfaSecret: null,
+        mfaEnabledAt: null,
+        mfaLastStep: null,
+        mfaRecoveryCodes: null,
+        tokenVersion: sql`${usersTable.tokenVersion} + 1`,
+      })
+      .where(eq(usersTable.id, targetId))
+      .returning();
+    await clearFailures([mfaKey(targetId)]);
+
+    await recordAudit({
+      ...actorFrom(req),
+      action: "user.mfa_reset",
+      targetType: "user",
+      targetId,
+      details: { wasEnabled: before.mfaEnabledAt !== null },
+    });
+
+    return res.json(mapUser(admin));
   });
 
 router.get("/capacity-requests", requireAdmin, async (req: Req, res) => {

@@ -35,6 +35,7 @@ import AdminUsersPage from "@/pages/admin-users";
 import AdminUserDetailPage from "@/pages/admin-user-detail";
 import SuperadminDashboardPage from "@/pages/superadmin-dashboard";
 import AcceptAdminInvitePage from "@/pages/accept-admin-invite";
+import SecurityPage from "@/pages/security";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 1000 * 60 } }
@@ -56,6 +57,7 @@ function AdminRoute({ component: Component }: { component: React.ComponentType }
   if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
   if (!user) return <Redirect to="/login" />;
   if (user.role !== "admin") return <Redirect to="/dashboard" />;
+  if (!user.mfaEnabled) return <Redirect to="/security" />;
   return <AppShell><Component /></AppShell>;
 }
 
@@ -64,7 +66,17 @@ function SuperadminRoute({ component: Component }: { component: React.ComponentT
   if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
   if (!user) return <Redirect to="/login" />;
   if (user.role !== "superadmin") return <Redirect to={user.role === "admin" ? "/admin" : "/dashboard"} />;
+  if (!user.mfaEnabled) return <Redirect to="/security" />;
   return <AppShell><Component /></AppShell>;
+}
+
+/** Two-factor setup. Reachable by administrators before they have it. */
+function SecurityRoute() {
+  const { user, isLoading } = useAuth();
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (!user) return <Redirect to="/login" />;
+  if (user.role !== "admin" && user.role !== "superadmin") return <Redirect to="/dashboard" />;
+  return <AppShell><SecurityPage /></AppShell>;
 }
 
 function Router() {
@@ -101,6 +113,7 @@ function Router() {
       <Route path="/admin/users">{() => <AdminRoute component={AdminUsersPage} />}</Route>
       <Route path="/admin/users/:id">{() => <AdminRoute component={AdminUserDetailPage} />}</Route>
       <Route path="/superadmin">{() => <SuperadminRoute component={SuperadminDashboardPage} />}</Route>
+      <Route path="/security" component={SecurityRoute} />
       <Route component={NotFound} />
     </Switch>
   );

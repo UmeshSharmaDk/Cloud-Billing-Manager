@@ -60,7 +60,8 @@ const optionalDate = z
   .optional();
 
 /** A row id. Bounded to `integer` so a larger one is a 400, not a driver error. */
-const entityId = z.coerce.number().int().positive().max(2_147_483_647);
+const ID_MAX = 2_147_483_647; // int4, the type of every id column
+const entityId = z.coerce.number().int().positive().max(ID_MAX);
 
 /**
  * Money. The numeric columns are `numeric(15, 2)`, so anything at or above
@@ -237,6 +238,30 @@ export const AcceptAdminInvitationBody = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Two-factor authentication
+// ---------------------------------------------------------------------------
+
+/** A six-digit authenticator code, or a recovery code where one is accepted. */
+const mfaCode = z.string().trim().min(6).max(32);
+
+export const MfaSetupBody = z.object({
+  confirmPassword: z.string().min(1).max(1024),
+});
+
+export const MfaCodeBody = z.object({
+  code: mfaCode,
+});
+
+export const MfaLoginBody = z.object({
+  mfaToken: z.string().min(1).max(2048),
+  code: mfaCode,
+});
+
+export const MfaResetBody = z.object({
+  confirmPassword: z.string().min(1).max(1024),
+});
+
+// ---------------------------------------------------------------------------
 // Business
 // ---------------------------------------------------------------------------
 
@@ -299,21 +324,32 @@ export const ListProductsQuery = z.object({
   lowStock: z.enum(["true", "false"]).optional(),
 });
 
-export const CreateProductBody = z.object({
+const productShape = {
   name: shortText(200),
   unit: shortText(20),
   sku: optionalText(60),
   hsnCode: optionalText(12),
   purchasePrice: money.nullish(),
   sellingPrice: money.nullish(),
-  gstRate: gstRate.default(18),
-  stockQuantity: quantity.default(0),
+  gstRate,
+  stockQuantity: quantity,
   lowStockThreshold: quantity.nullish(),
   description: optionalText(2000),
   category: optionalText(100),
+};
+
+export const CreateProductBody = z.object({
+  ...productShape,
+  gstRate: gstRate.default(18),
+  stockQuantity: quantity.default(0),
 });
 
-export const UpdateProductBody = CreateProductBody.partial().extend({
+/**
+ * Built from the shape without the defaults, not from `CreateProductBody`.
+ * Zod 4 applies a `.default()` even under `.partial()`, so a PATCH that only
+ * renamed a product would also have reset its GST rate to 18 and its stock to 0.
+ */
+export const UpdateProductBody = z.object(productShape).partial().extend({
   isActive: z.boolean().optional(),
 });
 
@@ -611,5 +647,5 @@ export const UpdateEwayBillBody = z.object({
 export const IdParam = z.object({
   // Plain decimal digits. `z.coerce.number()` read "0x10" as 16 and "1e3" as
   // 1000, so `/customers/0x10` addressed customer 16.
-  id: z.string().regex(/^\d{1,10}$/, "Expected a numeric id").transform(Number).pipe(entityId),
+  id: z.string().regex(/^\d{1,10}$/, "Expected a numeric id").transform(Number).pipe(z.number().int().positive().max(ID_MAX)),
 });

@@ -107,6 +107,34 @@ async function call(method, path, { token, body, jar, csrf = true, origin, heade
   return { status: res.status, data, headers: res.headers };
 }
 
+/**
+ * Administrators need a second factor before any admin route answers, so the
+ * suite promotes accounts the way an operator would promote one that has
+ * already enrolled: every `SET role='admin'` below also sets this fixed secret.
+ * `signIn` answers the code step for those accounts.
+ */
+const { totpAt, currentStep } = await import("../src/lib/mfa.ts");
+const MFA_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+const ENROLLED = `mfa_secret='${MFA_SECRET}', mfa_enabled_at=now(), mfa_last_step=NULL`;
+/** Demotions put the account back as it was, second factor included. */
+const NOT_ENROLLED = "mfa_secret=NULL, mfa_enabled_at=NULL, mfa_last_step=NULL";
+const totpNow = () => totpAt(MFA_SECRET, currentStep());
+
+/**
+ * Sign in, answering the second factor if the account has one.
+ *
+ * A code is spent once per 30-second step, and the suite signs the same
+ * administrator in more than once a step, so the fixture forgets the last
+ * spent step first. That is operator-level state manipulation, like the
+ * promotions themselves; replay is tested on its own in the MFA section.
+ */
+async function signIn(email, password, opts = {}) {
+  const r = await call("POST", "/auth/login", { ...opts, body: { email, password } });
+  if (r.status !== 200 || !r.data?.mfaRequired) return r;
+  sqlExec(`UPDATE users SET mfa_last_step=NULL WHERE email='${email}'`);
+  return call("POST", "/auth/mfa/login", { ...opts, body: { mfaToken: r.data.mfaToken, code: totpNow() } });
+}
+
 const uniq = Date.now();
 const PASSWORD = "correct-horse-battery-staple";
 
@@ -316,12 +344,12 @@ for (const [path, id] of [["customers", aCust.id], ["vendors", aVend.id],
 const adminEmail = `admin${uniq}@example.test`;
 {
   // Promote Alice directly in the database, as an operator would.
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${alice.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${alice.userId}`);
   // Alice's token still says role=user, but the row now says admin.
   const r = await call("GET", "/admin/stats", { token: alice.token });
   check("F-07", "promotion takes effect on the existing token", r.status === 200, `status ${r.status}`);
 
-  sqlExec(`UPDATE users SET role='user' WHERE id=${alice.userId}`);
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${alice.userId}`);
   const r2 = await call("GET", "/admin/stats", { token: alice.token });
   check("F-07", "demotion takes effect immediately (was 7 days)", r2.status === 403, `status ${r2.status}`);
 }
@@ -580,7 +608,7 @@ const adminEmail = `admin${uniq}@example.test`;
 // also costing a 19 MiB Argon2 hash.
 {
   const su = await register("stepup");
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${su.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${su.userId}`);
   const T = { token: su.token };
 
   const victim = await register("stepupvictim");
@@ -611,7 +639,7 @@ const adminEmail = `admin${uniq}@example.test`;
     `status ${correct.status}`);
 
   sqlExec(`DELETE FROM login_attempts WHERE key = 'user:${su.userId}'`);
-  sqlExec(`UPDATE users SET role='user' WHERE id=${su.userId}`);
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${su.userId}`);
 }
 
 // === review: change-password is rate-limited too ===========================
@@ -636,7 +664,7 @@ const adminEmail = `admin${uniq}@example.test`;
 // === review: admin accounts can only be created by invitation ==============
 {
   const mk = await register("mkadmin");
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${mk.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${mk.userId}`);
   const T = { token: mk.token };
   const stamp = Date.now();
 
@@ -669,7 +697,7 @@ const adminEmail = `admin${uniq}@example.test`;
   check("admin-create", "a duplicate address is a 409, not a 500", dup.status === 409,
     `status ${dup.status}`);
 
-  sqlExec(`UPDATE users SET role='user' WHERE id=${mk.userId}`);
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${mk.userId}`);
 }
 
 // === review: signing out revokes the token, not just the cookie ============
@@ -738,7 +766,7 @@ const adminEmail = `admin${uniq}@example.test`;
 // 200 while the change it had just made was discarded.
 {
   const au = await register("auditfail");
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${au.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${au.userId}`);
   const target = await register("audittarget");
   sqlExec(`UPDATE users SET created_by_admin_id=${au.userId} WHERE id=${target.userId}`);
 
@@ -756,7 +784,7 @@ const adminEmail = `admin${uniq}@example.test`;
       stored === "Renamed Under Audit Failure", `stored "${stored}"`);
   } finally {
     sqlExec(`ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS tmp_reject_audit`);
-    sqlExec(`UPDATE users SET role='user' WHERE id=${au.userId}`);
+    sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${au.userId}`);
   }
 }
 
@@ -1011,14 +1039,14 @@ const adminEmail = `admin${uniq}@example.test`;
   check("superadmin-gate", "a plain user is refused", plainAdmins.status === 403, `status ${plainAdmins.status}`);
 
   const sa = await register("saidentity");
-  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${sa.userId}`);
+  sqlExec(`UPDATE users SET role='superadmin', ${ENROLLED} WHERE id=${sa.userId}`);
   const holder = await register("saholder");
   const subject = await register("sasubject");
   const clash = await call("PATCH", `/users/${subject.userId}`, { token: sa.token, body: { email: holder.email } });
   check("superadmin-identity", "changing a user's email to a taken address is a 409, not a 500", clash.status === 409, `status ${clash.status}`);
 
   const adm = await register("saadmintarget");
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${adm.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
   const newEmail = `renamed${Date.now()}@example.test`;
   const bare = await call("PATCH", `/users/${adm.userId}`, { token: sa.token, body: { email: newEmail } });
   check("superadmin-identity", "changing an administrator's email needs password confirmation", bare.status === 403, `status ${bare.status}`);
@@ -1931,18 +1959,18 @@ const adminEmail = `admin${uniq}@example.test`;
 
   // Promote alice for tenant-admin routes. The spare account acts as the
   // separately bootstrapped platform superadmin in this isolated test DB.
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${alice.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${alice.userId}`);
   sqlExec(`UPDATE users SET created_by_admin_id=${alice.userId} WHERE id=${bob.userId}`);
   const spare = await register("spare");
-  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${spare.userId}`);
+  sqlExec(`UPDATE users SET role='superadmin', ${ENROLLED} WHERE id=${spare.userId}`);
 
   const NEW_PASSWORD = "a-brand-new-passphrase-99";
   const jar = newJar();
   await call("GET", "/healthz", { jar });
-  await call("POST", "/auth/login", { jar, body: { email: alice.email, password: NEW_PASSWORD } });
+  await signIn(alice.email, NEW_PASSWORD, { jar });
   const superJar = newJar();
   await call("GET", "/healthz", { jar: superJar });
-  await call("POST", "/auth/login", { jar: superJar, body: { email: spare.email, password: PASSWORD } });
+  await signIn(spare.email, PASSWORD, { jar: superJar });
 
   const noStepUp = await call("POST", `/users/${bob.userId}/reset-password`, {
     jar, body: { newPassword: "another-good-passphrase-77" },
@@ -2009,7 +2037,7 @@ const adminEmail = `admin${uniq}@example.test`;
     `WHERE role='admin' AND is_active AND deleted_at IS NULL AND id <> ${alice.userId}`,
   );
   if (others) {
-    sqlExec(`UPDATE users SET role='user' WHERE id IN (${others})`);
+    sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id IN (${others})`);
   }
   check("F-13", "precondition: alice is the only active administrator",
     q(`SELECT count(*) FROM users WHERE role='admin' AND is_active AND deleted_at IS NULL`) === "1");
@@ -2025,9 +2053,9 @@ const adminEmail = `admin${uniq}@example.test`;
   check("F-13", "...nor deactivated", lastAdminOff.status === 409, `status ${lastAdminOff.status}`);
 
   if (others) {
-    sqlExec(`UPDATE users SET role='admin' WHERE id IN (${others})`);
+    sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id IN (${others})`);
   }
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${spare.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${spare.userId}`);
 
   // Soft delete keeps the tenant's records rather than orphaning them.
   const victim = await register("victim");
@@ -2300,7 +2328,7 @@ const adminEmail = `admin${uniq}@example.test`;
       && Number.isFinite(m.purchases) && Number.isFinite(m.gst)));
 
   // Admin stats: seeded above, so only structural invariants are safe to assert.
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${biz.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${biz.userId}`);
   sqlExec(`UPDATE users SET created_by_admin_id=${biz.userId} ` +
     `WHERE role='user' AND deleted_at IS NULL AND created_by_admin_id IS NULL`);
   const ad = (await call("GET", "/admin/stats", T)).data;
@@ -2315,7 +2343,7 @@ const adminEmail = `admin${uniq}@example.test`;
     ad.recentUsers.length <= 10 &&
     ad.recentUsers.every((u, i, a) => i === 0 || new Date(a[i - 1].createdAt) >= new Date(u.createdAt)));
   sqlExec(`UPDATE users SET created_by_admin_id=NULL WHERE created_by_admin_id=${biz.userId}`);
-  sqlExec(`UPDATE users SET role='user' WHERE id=${biz.userId}`);
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${biz.userId}`);
 }
 
 
@@ -2357,11 +2385,11 @@ const adminEmail = `admin${uniq}@example.test`;
   // An admin reset revokes the target's sessions.
   const target = await register("resettarget");
   const admin = await register("resetadmin");
-  sqlExec(`UPDATE users SET role='admin' WHERE id=${admin.userId}`);
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${admin.userId}`);
   sqlExec(`UPDATE users SET created_by_admin_id=${admin.userId} WHERE id=${target.userId}`);
   const ajar = newJar();
   await call("GET", "/healthz", { jar: ajar });
-  await call("POST", "/auth/login", { jar: ajar, body: { email: admin.email, password: PW } });
+  await signIn(admin.email, PW, { jar: ajar });
   const reset = await call("POST", `/users/${target.userId}/reset-password`, {
     jar: ajar, body: { newPassword: "yet-another-good-passphrase-44", confirmPassword: PW },
   });
@@ -2373,7 +2401,7 @@ const adminEmail = `admin${uniq}@example.test`;
 // === superadmin: invitation-only admin setup and capacity review ===========
 {
   const operator = await register("platformoperator");
-  sqlExec(`UPDATE users SET role='superadmin' WHERE id=${operator.userId}`);
+  sqlExec(`UPDATE users SET role='superadmin', ${ENROLLED} WHERE id=${operator.userId}`);
   const adminEmail = `invited-${uniq}@example.test`;
   const createdInvite = await call("POST", "/superadmin/admin-invitations", {
     token: operator.token,
@@ -2416,6 +2444,22 @@ const adminEmail = `admin${uniq}@example.test`;
   });
   check("superadmin", "an invitation token can only be redeemed once",
     reused.status === 400, `status ${reused.status}`);
+
+  // A new administrator has no second factor yet, and the admin routes refuse
+  // to answer until they enrol. Enrolment is driven through the API here, end
+  // to end, and its fresh session replaces the one the invitation issued.
+  const notEnrolled = await call("GET", "/admin/stats", { token: accepted.data?.token });
+  check("mfa", "an administrator without MFA is sent to enrol by the admin routes",
+    notEnrolled.status === 403 && notEnrolled.data?.code === "mfa_enrolment_required", `status ${notEnrolled.status}`);
+  const inviteSetup = await call("POST", "/auth/mfa/setup", {
+    token: accepted.data?.token, body: { confirmPassword: ADMIN_PASSWORD },
+  });
+  const inviteEnable = await call("POST", "/auth/mfa/enable", {
+    token: accepted.data?.token, body: { code: totpAt(inviteSetup.data?.secret ?? "", currentStep()) },
+  });
+  check("mfa", "the invited administrator enrols and gets a new session",
+    inviteEnable.status === 200 && typeof inviteEnable.data?.token === "string", `status ${inviteEnable.status}`);
+  if (accepted.data) accepted.data.token = inviteEnable.data?.token;
 
   const deniedAdminList = await call("GET", "/superadmin/admins", { token: accepted.data?.token });
   check("superadmin", "a tenant admin cannot read the platform admin directory",
@@ -2532,7 +2576,7 @@ const adminEmail = `admin${uniq}@example.test`;
     afterApproval.status === 201, `status ${afterApproval.status}`);
 
   const otherAdmin = await register("othercapacity");
-  sqlExec(`UPDATE users SET role='admin', user_limit=1 WHERE id=${otherAdmin.userId}`);
+  sqlExec(`UPDATE users SET role='admin', user_limit=1, ${ENROLLED} WHERE id=${otherAdmin.userId}`);
   const otherChild = await call("POST", "/users", {
     token: otherAdmin.token,
     body: { name: "Other Tenant User", email: `other-child-${uniq}@example.test`, password: childPassword, role: "user" },
@@ -2616,6 +2660,155 @@ const adminEmail = `admin${uniq}@example.test`;
   check("superadmin", "concurrent redemption creates exactly one admin account",
     inviteRace.status === 201 && acceptanceStatuses[0] === 201 && acceptanceStatuses[1] === 400,
     `invite ${inviteRace.status}; accepts ${acceptanceStatuses.join(", ")}`);
+}
+
+// === two-factor authentication for administrators ============================
+{
+  const q = sqlValue;
+  const plainUser = await register("mfaplain");
+  const plainSetup = await call("POST", "/auth/mfa/setup", { token: plainUser.token, body: { confirmPassword: PASSWORD } });
+  check("mfa", "an ordinary user cannot enrol", plainSetup.status === 403, `status ${plainSetup.status}`);
+
+  // Promoted without a second factor: the role alone is not enough.
+  const adm = await register("mfaadmin");
+  const other = await register("mfaother");
+  sqlExec(`UPDATE users SET role='admin' WHERE id=${adm.userId}`);
+  const gated = await call("GET", "/admin/stats", { token: adm.token });
+  check("mfa", "an admin without MFA is refused by /admin",
+    gated.status === 403 && gated.data?.code === "mfa_enrolment_required", `status ${gated.status}`);
+  const gatedUsers = await call("GET", "/users", { token: adm.token });
+  check("mfa", "...and by the admin user routes", gatedUsers.status === 403, `status ${gatedUsers.status}`);
+  const gatedRead = await call("GET", `/users/${other.userId}`, { token: adm.token });
+  check("mfa", "...including reading another user by id", gatedRead.status === 403, `status ${gatedRead.status}`);
+  const gatedSuper = await call("GET", "/superadmin/capacity-requests", { token: adm.token });
+  check("mfa", "...and by the superadmin router", gatedSuper.status === 403, `status ${gatedSuper.status}`);
+
+  const noPw = await call("POST", "/auth/mfa/setup", { token: adm.token, body: {} });
+  check("mfa", "setup needs the account's password", noPw.status === 400 || noPw.status === 403, `status ${noPw.status}`);
+  const wrongPw = await call("POST", "/auth/mfa/setup", { token: adm.token, body: { confirmPassword: "not-the-password" } });
+  check("mfa", "setup refuses a wrong password", wrongPw.status === 403, `status ${wrongPw.status}`);
+  const setup = await call("POST", "/auth/mfa/setup", { token: adm.token, body: { confirmPassword: PASSWORD } });
+  const secret = setup.data?.secret ?? "";
+  check("mfa", "setup returns a secret, an otpauth URI and a QR image",
+    setup.status === 200 && /^[A-Z2-7]{32}$/.test(secret) &&
+      String(setup.data?.otpauthUri).startsWith("otpauth://totp/") &&
+      String(setup.data?.qrCodeDataUrl).startsWith("data:image/png;base64,"), `status ${setup.status}`);
+  const stillGated = await call("GET", "/admin/stats", { token: adm.token });
+  check("mfa", "a secret that was never confirmed changes nothing", stillGated.status === 403);
+  const pendingLogin = await call("POST", "/auth/login", { body: { email: adm.email, password: PASSWORD } });
+  check("mfa", "...including sign-in, which still issues a session directly",
+    pendingLogin.status === 200 && typeof pendingLogin.data?.token === "string" && !pendingLogin.data?.mfaRequired);
+
+  const step = currentStep();
+  const wrongCode = totpAt(secret, step) === "000000" ? "111111" : "000000";
+  const badEnable = await call("POST", "/auth/mfa/enable", { token: adm.token, body: { code: wrongCode } });
+  check("mfa", "a wrong code does not enable MFA", badEnable.status === 400, `status ${badEnable.status}`);
+  const enable = await call("POST", "/auth/mfa/enable", { token: adm.token, body: { code: totpAt(secret, step) } });
+  const recoveryCodes = enable.data?.recoveryCodes ?? [];
+  check("mfa", "a correct code enables MFA and returns ten recovery codes",
+    enable.status === 200 && recoveryCodes.length === 10, `status ${enable.status}`);
+  check("mfa", "enabling revokes the sessions opened with a password alone",
+    (await call("GET", "/auth/me", { token: adm.token })).status === 401 &&
+      (await call("GET", "/auth/me", { token: pendingLogin.data?.token })).status === 401);
+  const admToken = enable.data?.token;
+  const me = await call("GET", "/auth/me", { token: admToken });
+  check("mfa", "the session issued by enrolment works and reports MFA on",
+    me.status === 200 && me.data?.mfaEnabled === true);
+  check("mfa", "...and opens the admin routes", (await call("GET", "/admin/stats", { token: admToken })).status === 200);
+  check("mfa", "enrolment is audited",
+    Number(q(`SELECT count(*) FROM audit_log WHERE action='user.mfa_enabled' AND target_id=${adm.userId}`)) === 1);
+  const storedCodes = q(`SELECT array_to_string(mfa_recovery_codes, ',') FROM users WHERE id=${adm.userId}`);
+  check("mfa", "recovery codes are stored hashed",
+    storedCodes.split(",").length === 10 && !recoveryCodes.some((c) => storedCodes.includes(c.replace("-", ""))));
+  check("mfa", "the audit row holds no secret",
+    !q(`SELECT details::text FROM audit_log WHERE action='user.mfa_enabled' AND target_id=${adm.userId}`).includes(secret));
+  check("mfa", "a second setup is refused once MFA is on",
+    (await call("POST", "/auth/mfa/setup", { token: admToken, body: { confirmPassword: PASSWORD } })).status === 409);
+
+  // Signing in now takes two steps.
+  const jar = newJar();
+  await call("GET", "/healthz", { jar });
+  const first = await call("POST", "/auth/login", { jar, body: { email: adm.email, password: PASSWORD } });
+  check("mfa", "a correct password alone yields a challenge, not a session",
+    first.status === 200 && first.data?.mfaRequired === true && !first.data?.token && !jar.has("gst_session"),
+    `status ${first.status}`);
+  const mfaToken = first.data?.mfaToken;
+  check("mfa", "the challenge token is not a session",
+    (await call("GET", "/auth/me", { token: mfaToken })).status === 401);
+  check("mfa", "a session token is not a challenge token",
+    (await call("POST", "/auth/mfa/login", { body: { mfaToken: admToken, code: totpAt(secret, step + 1) } })).status === 401);
+  check("mfa", "a wrong code is refused",
+    (await call("POST", "/auth/mfa/login", { body: { mfaToken, code: wrongCode } })).status === 401);
+  check("mfa", "the code that enabled MFA cannot be replayed",
+    (await call("POST", "/auth/mfa/login", { body: { mfaToken, code: totpAt(secret, step) } })).status === 401);
+  const second = await call("POST", "/auth/mfa/login", { jar, body: { mfaToken, code: totpAt(secret, step + 1) } });
+  check("mfa", "a fresh code completes sign-in with a cookie session",
+    second.status === 200 && jar.has("gst_session") && second.data?.user?.mfaEnabled === true, `status ${second.status}`);
+  check("mfa", "...that the admin routes accept", (await call("GET", "/admin/stats", { jar })).status === 200);
+  check("mfa", "a code is spent once, even inside its 30 seconds",
+    (await call("POST", "/auth/mfa/login", { body: { mfaToken, code: totpAt(secret, step + 1) } })).status === 401);
+
+  // A recovery code works once, in place of the authenticator.
+  const viaRecovery = await call("POST", "/auth/mfa/login", { body: { mfaToken, code: recoveryCodes[0].toLowerCase() } });
+  check("mfa", "a recovery code signs in, typed loosely", viaRecovery.status === 200, `status ${viaRecovery.status}`);
+  check("mfa", "...and only once",
+    (await call("POST", "/auth/mfa/login", { body: { mfaToken, code: recoveryCodes[0] } })).status === 401);
+  check("mfa", "using a recovery code is audited",
+    Number(q(`SELECT count(*) FROM audit_log WHERE action='user.mfa_recovery_code_used' AND target_id=${adm.userId}`)) === 1);
+  check("mfa", "nine recovery codes remain",
+    q(`SELECT cardinality(mfa_recovery_codes) FROM users WHERE id=${adm.userId}`) === "9");
+
+  // Guessing codes is limited per account, and a correct password does not reset the count.
+  const guesses = [];
+  for (let i = 0; i < 12; i++) {
+    guesses.push((await call("POST", "/auth/mfa/login", { body: { mfaToken, code: String(100000 + i) } })).status);
+  }
+  check("mfa", "repeated wrong codes lock the second factor", guesses.includes(429), guesses.join(","));
+  const relog = await call("POST", "/auth/login", { body: { email: adm.email, password: PASSWORD } });
+  const afterRelog = await call("POST", "/auth/mfa/login", { body: { mfaToken: relog.data?.mfaToken, code: recoveryCodes[1] } });
+  check("mfa", "a correct password does not lift the code lockout", afterRelog.status === 429, `status ${afterRelog.status}`);
+  sqlExec(`DELETE FROM login_attempts WHERE key='mfa:${adm.userId}'`);
+
+  // Replacing recovery codes takes an authenticator code, never a recovery code.
+  check("mfa", "a recovery code cannot mint new recovery codes",
+    (await call("POST", "/auth/mfa/recovery-codes", { token: admToken, body: { code: recoveryCodes[2] } })).status === 400);
+  sqlExec(`UPDATE users SET mfa_last_step=NULL WHERE id=${adm.userId}`);
+  const regen = await call("POST", "/auth/mfa/recovery-codes", { token: admToken, body: { code: totpAt(secret, currentStep()) } });
+  check("mfa", "an authenticator code replaces the recovery codes",
+    regen.status === 200 && regen.data?.recoveryCodes?.length === 10, `status ${regen.status}`);
+  const relog2 = await call("POST", "/auth/login", { body: { email: adm.email, password: PASSWORD } });
+  check("mfa", "the old recovery codes stop working",
+    (await call("POST", "/auth/mfa/login", { body: { mfaToken: relog2.data?.mfaToken, code: recoveryCodes[3] } })).status === 401);
+
+  // A superadmin can reset an administrator who has lost both.
+  const sa = await register("mfasuper");
+  sqlExec(`UPDATE users SET role='superadmin', ${ENROLLED} WHERE id=${sa.userId}`);
+  const resetPath = `/superadmin/admins/${adm.userId}/mfa-reset`;
+  check("mfa", "a tenant admin cannot reset MFA",
+    (await call("POST", resetPath, { token: admToken, body: { confirmPassword: PASSWORD } })).status === 403);
+  check("mfa", "a reset needs the superadmin's own password",
+    (await call("POST", resetPath, { token: sa.token, body: { confirmPassword: "wrong-password" } })).status === 403);
+  check("mfa", "a superadmin cannot reset their own",
+    (await call("POST", `/superadmin/admins/${sa.userId}/mfa-reset`, { token: sa.token, body: { confirmPassword: PASSWORD } })).status === 400);
+  check("mfa", "an ordinary user is not a reset target",
+    (await call("POST", `/superadmin/admins/${other.userId}/mfa-reset`, { token: sa.token, body: { confirmPassword: PASSWORD } })).status === 404);
+  const reset = await call("POST", resetPath, { token: sa.token, body: { confirmPassword: PASSWORD } });
+  check("mfa", "the superadmin reset succeeds", reset.status === 200 && reset.data?.mfaEnabled === false, `status ${reset.status}`);
+  check("mfa", "the reset revokes the administrator's sessions",
+    (await call("GET", "/auth/me", { token: admToken })).status === 401);
+  check("mfa", "the reset is audited against its actor",
+    q(`SELECT actor_id FROM audit_log WHERE action='user.mfa_reset' AND target_id=${adm.userId}`) === String(sa.userId));
+  check("mfa", "the reset clears the secret and codes",
+    q(`SELECT coalesce(mfa_secret, '') || coalesce(array_to_string(mfa_recovery_codes, ','), '') FROM users WHERE id=${adm.userId}`) === "");
+  const afterReset = await call("POST", "/auth/login", { body: { email: adm.email, password: PASSWORD } });
+  check("mfa", "after a reset the password signs in, and the admin routes ask for enrolment again",
+    afterReset.status === 200 && typeof afterReset.data?.token === "string" &&
+      (await call("GET", "/admin/stats", { token: afterReset.data?.token })).data?.code === "mfa_enrolment_required");
+  const listed = await call("GET", "/superadmin/admins", { token: sa.token });
+  check("mfa", "the admin directory shows who has MFA",
+    listed.status === 200 && listed.data?.admins?.find((a) => a.id === adm.userId)?.mfaEnabled === false);
+
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id IN (${adm.userId}, ${sa.userId})`);
 }
 
 // ---------------------------------------------------------------------------

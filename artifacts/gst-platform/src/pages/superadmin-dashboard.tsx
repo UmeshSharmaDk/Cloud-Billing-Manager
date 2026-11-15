@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   getListSuperadminAdminsQueryKey, getListAdminInvitationsQueryKey, getListCapacityRequestsQueryKey,
   useListSuperadminAdmins, useListAdminInvitations, useListCapacityRequests,
-  useCreateAdminInvitation, useUpdateSuperadminAdminLimit, useReviewCapacityRequest,
+  useCreateAdminInvitation, useUpdateSuperadminAdminLimit, useReviewCapacityRequest, useResetAdminMfa,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,8 @@ import {
 type ActionIntent =
   | { type: "invite"; payload: { name: string; email: string; userLimit: number } }
   | { type: "limit"; id: number; name: string; userLimit: number }
-  | { type: "review"; id: number; name: string; decision: "approve" | "decline"; userLimit?: number };
+  | { type: "review"; id: number; name: string; decision: "approve" | "decline"; userLimit?: number }
+  | { type: "mfa"; id: number; name: string };
 
 const money = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 const date = (value?: string | null) => value ? new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" }).format(new Date(value)) : "—";
@@ -33,6 +34,7 @@ export default function SuperadminDashboardPage() {
   const createInvite = useCreateAdminInvitation();
   const updateLimit = useUpdateSuperadminAdminLimit();
   const reviewRequest = useReviewCapacityRequest();
+  const resetMfa = useResetAdminMfa();
   const [query, setQuery] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState({ name: "", email: "", userLimit: "" });
@@ -94,6 +96,17 @@ export default function SuperadminDashboardPage() {
       });
       return;
     }
+    if (intent.type === "mfa") {
+      resetMfa.mutate({ id: intent.id, data: { confirmPassword } }, {
+        onSuccess: async () => {
+          await invalidateAdminData();
+          setPasswordDialogOpen(false); setIntent(null);
+          setNotice(`Two-factor authentication was reset for ${intent.name}. They must set it up again before using the admin panel.`);
+        },
+        onError: privilegedError,
+      });
+      return;
+    }
     reviewRequest.mutate({ id: intent.id, data: { decision: intent.decision, ...(intent.decision === "approve" ? { userLimit: intent.userLimit } : {}), confirmPassword } }, {
       onSuccess: async () => {
         await invalidateAdminData();
@@ -103,7 +116,7 @@ export default function SuperadminDashboardPage() {
       onError: privilegedError,
     });
   };
-  const isPrivilegedPending = createInvite.isPending || updateLimit.isPending || reviewRequest.isPending;
+  const isPrivilegedPending = createInvite.isPending || updateLimit.isPending || reviewRequest.isPending || resetMfa.isPending;
 
   const handleInvite = (event: React.FormEvent) => {
     event.preventDefault(); setFormError("");
@@ -170,12 +183,12 @@ export default function SuperadminDashboardPage() {
                   const percent = admin.userLimit > 0 ? Math.min(100, admin.userCount / admin.userLimit * 100) : (admin.userCount ? 100 : 0);
                   const full = admin.availableSlots <= 0;
                   return <tr key={admin.id} data-testid={`row-admin-${admin.id}`} className="border-b last:border-0 transition-colors hover:bg-[#f7faf7]">
-                    <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#e6eee4] text-sm font-bold text-[#315644]">{admin.name.split(/\s+/).map((n) => n[0]).slice(0, 2).join("").toUpperCase()}</div><div><p className="font-semibold">{admin.name}</p><p className="mt-0.5 text-xs text-muted-foreground">{admin.email}</p></div></div></td>
+                    <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#e6eee4] text-sm font-bold text-[#315644]">{admin.name.split(/\s+/).map((n) => n[0]).slice(0, 2).join("").toUpperCase()}</div><div><p className="font-semibold">{admin.name}</p><p className="mt-0.5 text-xs text-muted-foreground">{admin.email}</p><p className={`mt-1 text-[10px] font-semibold uppercase tracking-wide ${admin.mfaEnabled ? "text-emerald-700" : "text-amber-700"}`}>{admin.mfaEnabled ? "2FA on" : "2FA not set up"}</p></div></div></td>
                     <td className="px-4 py-4 text-center"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${admin.isActive ? "bg-emerald-50 text-emerald-800" : "bg-slate-100 text-slate-600"}`}><span className={`h-1.5 w-1.5 rounded-full ${admin.isActive ? "bg-emerald-600" : "bg-slate-400"}`} />{admin.isActive ? "Active" : "Inactive"}</span></td>
                     <td className="px-4 py-4"><div className="font-semibold tabular-nums">{admin.userCount.toLocaleString("en-IN")} <span className="font-normal text-muted-foreground">users</span></div><div className="mt-2 h-1.5 w-28 overflow-hidden rounded-full bg-[#e8ece7]"><div className={`h-full rounded-full transition-[width] duration-300 ${full ? "bg-amber-600" : "bg-[#47866a]"}`} style={{ width: `${percent}%` }} /></div></td>
                     <td className="px-4 py-4"><div className="flex items-center gap-2"><span className="font-semibold tabular-nums">{admin.userLimit.toLocaleString("en-IN")}</span><span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${full ? "bg-amber-100 text-amber-900" : "bg-[#edf4eb] text-[#42644f]"}`}>{admin.availableSlots.toLocaleString("en-IN")} available</span></div></td>
                     <td className="px-4 py-4 text-xs text-muted-foreground">{date(admin.createdAt)}</td>
-                    <td className="px-5 py-4 text-right"><Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-edit-limit-${admin.id}`} onClick={() => { setFormError(""); setLimitEditor({ id: admin.id, name: admin.name, value: String(admin.userLimit) }); }}><Pencil className="h-3.5 w-3.5" /> Edit limit</Button></td>
+                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">{admin.mfaEnabled && <Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-reset-mfa-${admin.id}`} onClick={() => startConfirm({ type: "mfa", id: admin.id, name: admin.name })}><ShieldCheck className="h-3.5 w-3.5" /> Reset 2FA</Button>}<Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-edit-limit-${admin.id}`} onClick={() => { setFormError(""); setLimitEditor({ id: admin.id, name: admin.name, value: String(admin.userLimit) }); }}><Pencil className="h-3.5 w-3.5" /> Edit limit</Button></div></td>
                   </tr>;
                 })}</tbody>
               </table>
@@ -234,9 +247,9 @@ export default function SuperadminDashboardPage() {
       <ConfirmPasswordDialog
         open={passwordDialogOpen}
         onOpenChange={(open) => { setPasswordDialogOpen(open); if (!open) setIntent(null); }}
-        title={intent?.type === "review" ? (intent.decision === "approve" ? "Confirm capacity approval" : "Confirm request decline") : intent?.type === "limit" ? "Confirm allowance change" : "Confirm administrator invitation"}
-        description={intent?.type === "review" ? intent.decision === "approve" ? `Approve ${intent.name} with a new user limit of ${intent.userLimit ?? 0}.` : `Decline the capacity request from ${intent.name}. The user limit will not change.` : intent?.type === "limit" ? `Set ${intent.name}’s managed-user limit to ${intent.userLimit}.` : "Send a one-time administrator setup invitation. Your password is required to authorize this action."}
-        confirmLabel={intent?.type === "review" ? intent.decision === "approve" ? "Approve request" : "Decline request" : intent?.type === "limit" ? "Save new limit" : "Send invitation"}
+        title={intent?.type === "mfa" ? "Confirm two-factor reset" : intent?.type === "review" ? (intent.decision === "approve" ? "Confirm capacity approval" : "Confirm request decline") : intent?.type === "limit" ? "Confirm allowance change" : "Confirm administrator invitation"}
+        description={intent?.type === "mfa" ? `Turn off two-factor authentication for ${intent.name} and sign them out everywhere. Only do this after confirming who is asking, outside this app.` : intent?.type === "review" ? intent.decision === "approve" ? `Approve ${intent.name} with a new user limit of ${intent.userLimit ?? 0}.` : `Decline the capacity request from ${intent.name}. The user limit will not change.` : intent?.type === "limit" ? `Set ${intent.name}’s managed-user limit to ${intent.userLimit}.` : "Send a one-time administrator setup invitation. Your password is required to authorize this action."}
+        confirmLabel={intent?.type === "mfa" ? "Reset 2FA" : intent?.type === "review" ? intent.decision === "approve" ? "Approve request" : "Decline request" : intent?.type === "limit" ? "Save new limit" : "Send invitation"}
         pending={isPrivilegedPending}
         onConfirm={confirmPrivileged}
       />

@@ -30,6 +30,10 @@ export type AuditAction =
   | "user.status_changed"
   | "user.subscription_changed"
   | "admin.created"
+  | "user.mfa_enabled"
+  | "user.mfa_recovery_codes_regenerated"
+  | "user.mfa_reset"
+  | "user.mfa_recovery_code_used"
   | "admin.invitation_sent"
   | "admin.user_limit_changed"
   | "capacity_request.created"
@@ -55,6 +59,9 @@ const REDACTED_KEYS = new Set([
   "passwordHash",
   "token",
   "secret",
+  "mfaSecret",
+  "recoveryCodes",
+  "code",
 ]);
 
 function scrub(details: Record<string, unknown>): Record<string, unknown> {

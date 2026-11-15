@@ -24,7 +24,7 @@ export const LoginBody = zod.object({
   "password": zod.string()
 })
 
-export const LoginResponse = zod.object({
+export const LoginResponse = zod.union([zod.object({
   "token": zod.string(),
   "user": zod.object({
   "id": zod.number(),
@@ -35,8 +35,97 @@ export const LoginResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })
+}),zod.object({
+  "mfaRequired": zod.literal(true),
+  "mfaToken": zod.string()
+})])
+
+
+/**
+ * @summary Finish signing in with an authenticator or recovery code
+ */
+export const loginMfaBodyCodeMin = 6;
+export const loginMfaBodyCodeMax = 32;
+
+
+
+export const LoginMfaBody = zod.object({
+  "mfaToken": zod.string(),
+  "code": zod.string().min(loginMfaBodyCodeMin).max(loginMfaBodyCodeMax).describe('A six-digit authenticator code, or a recovery code')
+})
+
+export const LoginMfaResponse = zod.object({
+  "token": zod.string(),
+  "user": zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.string(),
+  "isActive": zod.boolean(),
+  "subscriptionStatus": zod.string().nullish(),
+  "subscriptionEnd": zod.string().nullish(),
+  "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
+  "createdAt": zod.string().optional()
+})
+})
+
+
+/**
+ * Needs the caller's own password. Returns a new secret that does not count until /auth/mfa/enable confirms a code from it.
+ * @summary Start two-factor enrolment (administrators only)
+ */
+
+
+
+export const SetupMfaBody = zod.object({
+  "confirmPassword": zod.string().min(1)
+})
+
+export const SetupMfaResponse = zod.object({
+  "secret": zod.string().describe('Base32, for typing into an authenticator by hand'),
+  "otpauthUri": zod.string(),
+  "qrCodeDataUrl": zod.string().describe('A PNG data URL of the otpauthUri')
+})
+
+
+/**
+ * Revokes every other session the account holds and re-issues this one. The recovery codes are returned here and never again.
+ * @summary Confirm a code and turn two-factor authentication on
+ */
+export const enableMfaBodyCodeMin = 6;
+export const enableMfaBodyCodeMax = 32;
+
+
+
+export const EnableMfaBody = zod.object({
+  "code": zod.string().min(enableMfaBodyCodeMin).max(enableMfaBodyCodeMax)
+})
+
+export const EnableMfaResponse = zod.object({
+  "recoveryCodes": zod.array(zod.string()),
+  "token": zod.string()
+})
+
+
+/**
+ * Takes an authenticator code; a recovery code is not accepted here.
+ * @summary Replace the recovery codes
+ */
+export const regenerateMfaRecoveryCodesBodyCodeMin = 6;
+export const regenerateMfaRecoveryCodesBodyCodeMax = 32;
+
+
+
+export const RegenerateMfaRecoveryCodesBody = zod.object({
+  "code": zod.string().min(regenerateMfaRecoveryCodesBodyCodeMin).max(regenerateMfaRecoveryCodesBodyCodeMax)
+})
+
+export const RegenerateMfaRecoveryCodesResponse = zod.object({
+  "recoveryCodes": zod.array(zod.string())
 })
 
 
@@ -98,6 +187,7 @@ export const GetMeResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })
 
@@ -131,6 +221,7 @@ export const ListUsersResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })),
   "total": zod.number()
@@ -166,6 +257,7 @@ export const GetUserResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })
 
@@ -194,6 +286,7 @@ export const UpdateUserResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })
 
@@ -226,6 +319,7 @@ export const ToggleUserStatusResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })
 
@@ -1620,6 +1714,7 @@ export const AdminListUsersResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })),
   "total": zod.number()
@@ -1661,6 +1756,7 @@ export const AdminUpdateUserResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })
 
@@ -1810,6 +1906,7 @@ export const ListSuperadminAdminsResponse = zod.object({
   "name": zod.string(),
   "email": zod.string(),
   "isActive": zod.boolean(),
+  "mfaEnabled": zod.boolean().optional(),
   "userLimit": zod.number(),
   "userCount": zod.number(),
   "availableSlots": zod.number(),
@@ -1883,11 +1980,41 @@ export const UpdateSuperadminAdminLimitResponse = zod.object({
   "name": zod.string(),
   "email": zod.string(),
   "isActive": zod.boolean(),
+  "mfaEnabled": zod.boolean().optional(),
   "userLimit": zod.number(),
   "userCount": zod.number(),
   "availableSlots": zod.number(),
   "createdAt": zod.string(),
   "additionalUserPriceInr": zod.number().optional()
+})
+
+
+/**
+ * For an administrator who has lost both their authenticator and their recovery codes. Needs the superadmin's own password, cannot target the caller, revokes the target's sessions, and is recorded in the audit log. The administrator must enrol again before the admin panel answers.
+ * @summary Turn off an administrator's two-factor authentication
+ */
+export const ResetAdminMfaParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+
+
+
+export const ResetAdminMfaBody = zod.object({
+  "confirmPassword": zod.string().min(1)
+})
+
+export const ResetAdminMfaResponse = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "email": zod.string(),
+  "role": zod.string(),
+  "isActive": zod.boolean(),
+  "subscriptionStatus": zod.string().nullish(),
+  "subscriptionEnd": zod.string().nullish(),
+  "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
+  "createdAt": zod.string().optional()
 })
 
 
@@ -1991,6 +2118,7 @@ export const GetAdminStatsResponse = zod.object({
   "subscriptionStatus": zod.string().nullish(),
   "subscriptionEnd": zod.string().nullish(),
   "businessId": zod.number().nullish(),
+  "mfaEnabled": zod.boolean().optional(),
   "createdAt": zod.string().optional()
 })).optional()
 })

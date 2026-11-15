@@ -11,7 +11,7 @@ import { Decimal, dec, toJson } from "./money";
 
 /**
  * The public view of a user. Everything not listed here — `passwordHash`,
- * `tokenVersion`, `deletedAt` — stays server-side, so adding a sensitive
+ * `tokenVersion`, `deletedAt`, the MFA secret and recovery codes — stays server-side, so adding a sensitive
  * column to the table cannot leak it through an existing endpoint.
  */
 export function mapUser(user: User) {
@@ -25,6 +25,7 @@ export function mapUser(user: User) {
     subscriptionEnd: user.subscriptionEnd,
     businessId: user.businessId,
     userLimit: user.role === "admin" || user.role === "superadmin" ? user.userLimit : undefined,
+    mfaEnabled: user.mfaEnabledAt !== null,
     createdAt: user.createdAt,
   };
 }

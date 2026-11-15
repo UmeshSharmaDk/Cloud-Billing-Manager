@@ -64,6 +64,12 @@ function lockDurationMs(failures: number): number {
 export const userKey = (userId: number) => `user:${userId}`;
 export const loginKey = (email: string, ip: string | undefined) =>
   `login:${ip ?? "unknown"}|${email.toLowerCase().slice(0, 200)}`;
+/**
+ * Second-factor guesses, per account. Separate from `userKey` because a correct
+ * password clears that one: someone holding the password could otherwise reset
+ * their own count with every login and guess codes without limit.
+ */
+export const mfaKey = (userId: number) => `mfa:${userId}`;
 export const registerKey = (email: string) => `register:${email.toLowerCase().slice(0, 200)}`;
 
 /**

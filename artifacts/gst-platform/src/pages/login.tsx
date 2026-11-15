@@ -6,19 +6,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useLogin } from "@workspace/api-client-react";
+import { useLogin, useLoginMfa } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // Set when the password was right and the account also needs a code.
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [code, setCode] = useState("");
   const { login } = useAuth();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
   const mutation = useLogin({
     mutation: {
-      onSuccess: (data: any) => {
+      onSuccess: (data) => {
+        if ("mfaRequired" in data) {
+          setPassword("");
+          setMfaToken(data.mfaToken);
+          return;
+        }
         login(data.user);
       },
       onError: () => {
@@ -26,6 +34,23 @@ export default function LoginPage() {
       },
     },
   });
+
+  const mfaMutation = useLoginMfa({
+    mutation: {
+      onSuccess: (data) => login(data.user),
+      onError: (err: any) => {
+        setCode("");
+        // The five-minute window ran out, or the account changed: start over.
+        if (err?.status === 401 && /expired/i.test(err?.data?.error ?? "")) setMfaToken(null);
+        toast({ title: "Sign-in failed", description: err?.data?.error ?? "That code is not valid.", variant: "destructive" });
+      },
+    },
+  });
+
+  const handleCode = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mfaToken) mfaMutation.mutate({ data: { mfaToken, code: code.trim() } });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,6 +74,19 @@ export default function LoginPage() {
             <CardDescription>Enter your credentials to access the platform</CardDescription>
           </CardHeader>
           <CardContent>
+            {mfaToken ? (
+            <form onSubmit={handleCode} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="mfa-code">Authenticator code</Label>
+                <Input id="mfa-code" inputMode="numeric" autoComplete="one-time-code" placeholder="123456" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus maxLength={32} />
+                <p className="text-xs text-muted-foreground">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+              </div>
+              <Button type="submit" className="w-full" disabled={mfaMutation.isPending}>
+                {mfaMutation.isPending ? "Checking..." : "Verify"}
+              </Button>
+              <button type="button" onClick={() => { setMfaToken(null); setCode(""); }} className="w-full text-center text-sm text-muted-foreground hover:underline">Use a different account</button>
+            </form>
+            ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email address</Label>
@@ -62,6 +100,7 @@ export default function LoginPage() {
                 {mutation.isPending ? "Signing in..." : "Sign In"}
               </Button>
             </form>
+            )}
 
             <p className="text-center text-sm text-muted-foreground mt-6">
               New business?{" "}

@@ -18,5 +18,6 @@ export interface User {
   subscriptionEnd?: string | null;
   /** @nullable */
   businessId?: number | null;
+  mfaEnabled?: boolean;
   createdAt?: string;
 }

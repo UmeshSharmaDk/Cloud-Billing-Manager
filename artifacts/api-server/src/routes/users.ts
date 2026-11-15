@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable } from "@workspace/db";
 import { eq, ilike, or, and, count, isNull } from "drizzle-orm";
-import { requireAuth, requireAdmin } from "./auth";
+import { requireAuth, requireAdmin, hasAdminAccess } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
 import { hashPassword } from "../lib/password";
@@ -150,7 +150,8 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
  */
 
 router.get("/:id", validateParams(IdParam), async (req: Req, res) => {
-  if (req.userRole !== "admin" && req.userRole !== "superadmin" && req.userId !== req.validatedParams.id) {
+  // An administrator without a second factor reads only themselves, like anyone.
+  if (!hasAdminAccess(req.user) && req.userId !== req.validatedParams.id) {
     return res.status(403).json({ error: "Forbidden" });
   }
   const [user] = await db.select().from(usersTable)
