@@ -35,6 +35,27 @@ One-time setup:
 
 Pull requests touching this folder get an unsigned compile check.
 
+## Updates
+
+Installed apps keep themselves current, the same way the CRM app does:
+
+| What changed | How it reaches phones | What the user sees |
+| --- | --- | --- |
+| JavaScript (screens, forms, logic) | **Over the air.** On every merge to main that touches this folder, *Android app update (over the air)* publishes it | Downloaded in the background; it runs on the next launch, or after tapping **Restart** on the "An update is ready" bar |
+| Native (a new `expo-*` or `react-native-*` module, permissions, plugins, Expo upgrade) | **New APK.** A merge to main that changes `package.json` or `app.json` runs *Android APK (internal)* and publishes the APK | An "Update available" dialog. **Update** downloads it and opens Android's installer |
+
+Both are published to the repository's public `android-app` release. The
+server reads it there: `/api/updates/manifest` serves the Expo Updates
+protocol, and `/api/app/android/latest` (signed-in users) names the newest APK.
+
+**Bump `expo.runtimeVersion` in `app.json` whenever you make a native change.**
+A phone only takes an over-the-air update built for its own runtime version,
+which keeps new JavaScript off an APK that lacks the native code it needs.
+Phones on the old runtime are offered the new APK instead.
+
+Apps installed from an APK built before the updater existed have no
+update check: install one newer APK by hand, and every later one is offered.
+
 ## Local development
 
 ```

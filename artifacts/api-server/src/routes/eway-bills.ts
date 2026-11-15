@@ -7,6 +7,8 @@ import { validateBody, validateParams, validateQuery } from "../middleware/valid
 import { CreateEwayBillBody, UpdateEwayBillBody, ListEwayBillsQuery, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 
+import { books } from "../middleware/books";
+
 const router = Router();
 
 /**
@@ -45,7 +47,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListEwayBillsQuery),
   return res.json({ bills: bills.map(mapBill), total: Number(total) });
 });
 
-router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody), async (req: Req, res) => {
+router.post("/", requireAuth, requireBusiness, validateBody(CreateEwayBillBody), books("eway_bill"), async (req: Req, res) => {
   const businessId = req.businessId;
 
   const {
@@ -104,7 +106,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   return res.json(mapBill(bill));
 });
 
-router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateEwayBillBody), async (req: Req, res) => {
+router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateEwayBillBody), books("eway_bill"), async (req: Req, res) => {
   const businessId = req.businessId;
   const {
     status, ewbNo, ewbDate, validUpto,
@@ -135,7 +137,7 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
   return res.json(mapBill(bill));
 });
 
-router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+router.delete("/:id", requireAuth, requireBusiness, validateParams(IdParam), books("eway_bill"), async (req: Req, res) => {
   const businessId = req.businessId;
   await db.delete(ewayBillsTable)
     .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, businessId)));

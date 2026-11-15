@@ -7,8 +7,8 @@ import { date, money } from "@/lib/format";
 import type { Invoice } from "@/lib/types";
 import { Button, Card, Chips, colors, ErrorView, Loading, Row, s } from "@/lib/ui";
 
-const KINDS = ["GSTR-1", "GSTR-3B", "HSN"] as const;
-type R = Record<string, number> & { invoices?: Invoice[]; items?: Record<string, string | number>[] };
+const KINDS = ["GSTR-1", "GSTR-3B", "HSN", "TDS", "TCS"] as const;
+type R = Record<string, number> & { invoices?: Invoice[]; items?: Record<string, string | number>[]; entries?: Record<string, any>[]; sections?: Record<string, any>[] };
 
 export default function Reports() {
   const { asUser, name } = useLocalSearchParams<{ asUser?: string; name?: string }>();
@@ -73,7 +73,20 @@ export default function Reports() {
               ))}
             </Card>
           )}
-          {kind !== "HSN" && !!d.invoices?.length && (
+          {(kind === "TDS" || kind === "TCS") && (
+            <Card title={kind === "TDS" ? `TDS withheld · ${money(d.totalTds)}` : `TCS collected · ${money(d.totalTcs)}`}>
+              <Text style={s.muted}>Deposit by the 7th of next month.</Text>
+              {d.sections?.map((x) => <Row key={x.section} label={`Section ${x.section} · ${x.bills} bills`} value={money(x.tds)} />)}
+              {!d.entries?.length && <Text style={s.muted}>Nothing for {label}.</Text>}
+              {d.entries?.map((e) => (
+                <View key={e.id} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border }}>
+                  <Row label={kind === "TDS" ? e.vendorName : e.customerName} value={money(kind === "TDS" ? e.tds : e.tcs)} />
+                  <Text style={s.muted}>{e.pan ?? "No PAN"} · {kind === "TDS" ? `${e.section} · ${e.billNumber}` : e.invoiceNumber} · {date(e.date)} · {e.rate}% of {money(kind === "TDS" ? e.taxable : e.amount)}</Text>
+                </View>
+              ))}
+            </Card>
+          )}
+          {(kind === "GSTR-1" || kind === "GSTR-3B") && !!d.invoices?.length && (
             <Card title="Invoices">
               {d.invoices.map((inv) => (
                 <Pressable key={inv.id} onPress={() => router.push({ pathname: "/invoice/[id]", params: { id: String(inv.id), ...(asUser ? { asUser } : {}) } })}>

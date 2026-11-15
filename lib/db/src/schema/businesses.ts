@@ -23,6 +23,12 @@ export const businessesTable = pgTable("businesses", {
   bankIfsc: text("bank_ifsc"),
   bankBranch: text("bank_branch"),
   termsConditions: text("terms_conditions"),
+  /**
+   * Books are frozen on and before this day (YYYY-MM-DD): invoices, purchases,
+   * payments and e-way bills dated then cannot be added, edited or cancelled.
+   * Set by the business's administrator; null means nothing is frozen.
+   */
+  lockDate: text("lock_date"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

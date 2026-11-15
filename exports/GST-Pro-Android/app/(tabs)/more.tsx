@@ -1,3 +1,5 @@
+import * as Application from "expo-application";
+import { currentUpdateLabel } from "@/lib/AppUpdates";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Constants from "expo-constants";
 import { router, type Href } from "expo-router";
@@ -37,7 +39,8 @@ export function AccountCard() {
         <Row label="Role" value={user?.role ?? ""} />
         {!!user?.subscriptionEnd && <Row label="Plan ends" value={date(user.subscriptionEnd)} />}
         <Row label="Server" value={API_BASE.replace("https://", "")} />
-        <Row label="App version" value={Constants.expoConfig?.version ?? ""} />
+        <Row label="App version" value={`${Constants.expoConfig?.version ?? ""} (build ${Application.nativeBuildVersion ?? "?"})`} />
+        {currentUpdateLabel() && <Row label="Updates" value={currentUpdateLabel()!} />}
       </View>
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
         <MenuLink title="Password and sessions" icon="key-outline" href="/password" />

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, jsonb, timestamp, index } from "drizzle-orm/pg-core";
 
 /**
  * Append-only record of privileged actions.
@@ -24,7 +24,11 @@ export const auditLogTable = pgTable("audit_log", {
   /** Changed fields, before and after. Never contains credentials. */
   details: jsonb("details").notNull().default({}),
   sourceIp: text("source_ip"),
+  /** The business whose books the action touched, for its audit trail. */
+  businessId: integer("business_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  businessIdx: index("audit_log_business_idx").on(table.businessId, table.createdAt),
+}));
 
 export type AuditLogEntry = typeof auditLogTable.$inferSelect;

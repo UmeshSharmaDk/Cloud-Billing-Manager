@@ -174,6 +174,9 @@ export const CreateUserBody = z.object({
   // Every business user needs a business to work in; defaults to the user's name.
   businessName: shortText(200).optional(),
   gstin,
+  /** Add this login to an existing client's business instead of creating one. */
+  joinUserId: entityId.optional(),
+  accessLevel: z.enum(["full", "entry", "view"]).optional(),
   email: z.string().email().max(320),
   password: newPassword,
   role: roleEnum,
@@ -187,6 +190,7 @@ export const CreateUserBody = z.object({
 
 export const UpdateUserBody = z.object({
   name: shortText(200).optional(),
+  accessLevel: z.enum(["owner", "full", "entry", "view"]).optional(),
   email: z.string().email().max(320).optional(),
   role: roleEnum.optional(),
   confirmPassword: z.string().max(1024).optional(),
@@ -216,6 +220,15 @@ export const CreateAdminInvitationBody = z.object({
   confirmPassword: z.string().min(1).max(1024),
   userLimit: z.coerce.number().int().min(0).max(100_000).default(15),
 });
+
+export const LockDateBody = z.object({
+  /** Books are frozen on and before this day; null unfreezes them. */
+  lockDate: z.union([dateString, z.null()]),
+});
+
+export const AuditPageQuery = z.object({ ...paginationShape });
+
+export const ClientsQuery = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional() });
 
 export const UpdateAdminPlanBody = z.object({
   /** Last day the admin and their users may sign in; null removes the end date. */
@@ -443,12 +456,20 @@ export const CreateInvoiceBody = z
     placeOfSupply: optionalText(2),
     notes: optionalText(2000),
     items: lineItems,
+    tcsRate: z.coerce.number().finite().min(0).max(10).optional(),
   })
   .refine((b) => b.customerId !== undefined || Boolean(b.customerName), {
     message: "customerId or customerName is required",
   });
 
+const tcsRate = z.coerce.number().finite().min(0).max(10).optional();
+const tdsShape = {
+  tdsSection: optionalText(10),
+  tdsRate: z.coerce.number().finite().min(0).max(30).optional(),
+};
+
 export const UpdateInvoiceBody = z.object({
+  tcsRate,
   type: invoiceType.optional(),
   customerId: entityId.optional(),
   invoiceDate: dateString.optional(),
@@ -496,12 +517,15 @@ export const CreatePurchaseBody = z
     dueDate: optionalDate,
     notes: optionalText(2000),
     items: lineItems,
+    tdsSection: optionalText(10),
+    tdsRate: z.coerce.number().finite().min(0).max(30).optional(),
   })
   .refine((b) => Boolean(b.billDate ?? b.invoiceDate), {
     message: "billDate is required",
   });
 
 export const UpdatePurchaseBody = z.object({
+  ...tdsShape,
   vendorId: entityId.optional(),
   billNumber: optionalText(60),
   invoiceNumber: optionalText(60),
@@ -520,6 +544,15 @@ export const UpdatePurchaseBody = z.object({
 export const ListPaymentsQuery = z.object({
   ...paginationShape,
   type: z.enum(["in", "out", "received", "paid"]).optional(),
+});
+
+export const MatchStatementBody = z.object({
+  rows: z.array(z.object({
+    date: z.string().max(40),
+    description: z.string().max(500),
+    amount: z.coerce.number().finite().min(-1e12).max(1e12),
+    reference: z.string().max(100).nullish(),
+  })).min(1).max(2000),
 });
 
 export const CreatePaymentBody = z.object({

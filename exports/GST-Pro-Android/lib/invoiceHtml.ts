@@ -36,6 +36,7 @@ export function invoiceHtml(inv: Invoice, biz: Business | undefined, cust: Custo
     <table style="margin-top:8px"><tr><th>#</th><th>Description</th><th>HSN</th><th>Qty</th><th>Rate</th><th>Disc</th><th>Taxable</th><th>GST</th><th>Amount</th></tr>${rows}</table>
     <table class="tot">
       <tr><td>Taxable value</td><td class="r">${money(inv.subtotal)}</td></tr>${tax}
+      ${Number((inv as any).tcsAmount) > 0 ? `<tr><td>TCS @ ${(inv as any).tcsRate}% (s.206C)</td><td class="r">${money((inv as any).tcsAmount)}</td></tr>` : ""}
       ${inv.roundOff ? `<tr><td>Round off</td><td class="r">${money(inv.roundOff)}</td></tr>` : ""}
       <tr><th>Grand total</th><th class="r">${money(inv.grandTotal)}</th></tr>
     </table>

@@ -1,12 +1,16 @@
 import { router, Stack } from "expo-router";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Alert } from "react-native";
 import { api, ApiError } from "@/lib/api";
 import { useSave } from "@/lib/save";
-import { Button, Card, Field, Form } from "@/lib/ui";
+import { ACCESS, type User } from "@/lib/types";
+import { Button, Card, Field, Form, Select } from "@/lib/ui";
 
 export default function NewUser() {
-  const [v, setV] = useState({ name: "", email: "", password: "", businessName: "", gstin: "" });
+  const [v, setV] = useState({ name: "", email: "", password: "", businessName: "", gstin: "", joinUserId: "", accessLevel: "entry" });
+  const owners = useQuery({ queryKey: ["/users", "owners"], queryFn: () => api<{ users: (User & { accessLevel?: string | null; businessId?: number | null })[] }>("/users?limit=100") });
+  const hosts = (owners.data?.users ?? []).filter((u) => !u.accessLevel && u.businessId).map((u) => ({ value: String(u.id), label: `Staff of ${u.name}'s business` }));
   const set = (k: keyof typeof v) => (x: string) => setV((p) => ({ ...p, [k]: x }));
   const { busy, run } = useSave();
 
@@ -14,7 +18,7 @@ export default function NewUser() {
     if (!v.name.trim() || !v.email.trim()) return Alert.alert("Missing details", "Name and email are required.");
     if (v.password.length < 12) return Alert.alert("Password too short", "Use at least 12 characters.");
     run(
-      () => api("/users", { method: "POST", body: { name: v.name.trim(), email: v.email.trim(), password: v.password, role: "user", businessName: v.businessName.trim() || undefined, gstin: v.gstin.trim().toUpperCase() || undefined } }),
+      () => api("/users", { method: "POST", body: { name: v.name.trim(), email: v.email.trim(), password: v.password, role: "user", ...(v.joinUserId ? { joinUserId: Number(v.joinUserId), accessLevel: v.accessLevel } : { businessName: v.businessName.trim() || undefined, gstin: v.gstin.trim().toUpperCase() || undefined }) } }),
       () => { Alert.alert("User created", "They can sign in with this email and password."); router.back(); },
       (e) => {
         if (!(e instanceof ApiError) || e.code !== "user_limit_reached") return false;
@@ -34,8 +38,13 @@ export default function NewUser() {
         <Field label="Name *" value={v.name} onChangeText={set("name")} />
         <Field label="Email *" value={v.email} onChangeText={set("email")} keyboardType="email-address" autoCapitalize="none" />
         <Field label="Password (12+ characters) *" value={v.password} onChangeText={set("password")} secureTextEntry autoCapitalize="none" />
-        <Field label="Business name (defaults to their name)" value={v.businessName} onChangeText={set("businessName")} />
-        <Field label="GSTIN" value={v.gstin} onChangeText={set("gstin")} autoCapitalize="characters" maxLength={15} />
+        <Select label="Business" value={v.joinUserId} options={[{ value: "", label: "A new client with their own business" }, ...hosts]} onChange={set("joinUserId")} />
+        {v.joinUserId ? <Select label="Access" value={v.accessLevel} options={ACCESS} onChange={set("accessLevel")} /> : (
+          <>
+            <Field label="Business name (defaults to their name)" value={v.businessName} onChangeText={set("businessName")} />
+            <Field label="GSTIN" value={v.gstin} onChangeText={set("gstin")} autoCapitalize="characters" maxLength={15} />
+          </>
+        )}
         <Button title="Create user" busy={busy} onPress={submit} />
       </Card>
     </Form>

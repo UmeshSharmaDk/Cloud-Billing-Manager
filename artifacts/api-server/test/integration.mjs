@@ -2848,6 +2848,155 @@ const adminEmail = `admin${uniq}@example.test`;
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id IN (${adm.userId}, ${sa.userId})`);
 }
 
+// === frozen books and the transaction audit trail ===========================
+{
+  const adm = await register("lockadmin");
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
+  const owner = await register("lockowner");
+  sqlExec(`UPDATE users SET created_by_admin_id=${adm.userId} WHERE id=${owner.userId}`);
+  sqlExec(`UPDATE businesses SET state_code='27', state='Maharashtra' WHERE user_id=${owner.userId}`);
+  const other = await register("lockother");
+  const sale = (invoiceDate) => call("POST", "/invoices", { token: owner.token,
+    body: { invoiceDate, customerName: "Walk-in", placeOfSupply: "27",
+            items: [{ description: "Thing", quantity: 1, unitPrice: 100, gstRate: 18, unit: "Nos" }] } });
+
+  const old = (await sale("2026-03-10")).data?.invoice;
+  check("books", "an invoice is created before any freeze", !!old?.id);
+  check("books", "its creation is in the user's audit trail",
+    (await call("GET", `/admin/users/${owner.userId}/audit`, { token: adm.token })).data?.entries?.some((e) => e.action === "invoice.created" && e.targetId === old?.id));
+
+  check("books", "another admin cannot freeze this user's books",
+    (await call("PATCH", `/admin/users/${other.userId}/lock-date`, { token: adm.token, body: { lockDate: "2026-03-31" } })).status === 404);
+  const frozen = await call("PATCH", `/admin/users/${owner.userId}/lock-date`, { token: adm.token, body: { lockDate: "2026-03-31" } });
+  check("books", "the admin freezes the books", frozen.status === 200 && frozen.data?.lockDate === "2026-03-31", `status ${frozen.status}`);
+
+  const backdated = await sale("2026-03-15");
+  check("books", "a new invoice in the frozen period is refused", backdated.status === 409 && backdated.data?.code === "books_frozen", `status ${backdated.status}`);
+  check("books", "editing a frozen invoice is refused",
+    (await call("PATCH", `/invoices/${old.id}`, { token: owner.token, body: { notes: "late edit" } })).status === 409);
+  check("books", "moving a later invoice into the frozen period is refused",
+    (await call("PATCH", `/invoices/${(await sale("2026-04-02")).data?.invoice?.id}`, { token: owner.token, body: { invoiceDate: "2026-03-20" } })).status === 409);
+  check("books", "cancelling a frozen invoice is refused",
+    (await call("PATCH", `/invoices/${old.id}/status`, { token: owner.token, body: { status: "cancelled" } })).status === 409);
+  check("books", "recording a payment on a frozen invoice still works",
+    (await call("PATCH", `/invoices/${old.id}/status`, { token: owner.token, body: { paymentStatus: "paid" } })).status === 200);
+  check("books", "a backdated payment is refused",
+    (await call("POST", "/payments", { token: owner.token, body: { type: "received", amount: 10, date: "2026-02-01", mode: "cash" } })).status === 409);
+  check("books", "invoices after the lock date are unaffected", (await sale("2026-04-05")).status === 201);
+
+  const trail = (await call("GET", `/admin/users/${owner.userId}/audit`, { token: adm.token })).data?.entries ?? [];
+  check("books", "the freeze is in the audit trail", trail.some((e) => e.action === "business.lock_date_changed"));
+  check("books", "the payment is in the audit trail", trail.some((e) => e.action === "invoice.status_changed" && e.targetId === old.id));
+  check("books", "refused changes leave no audit entry", !trail.some((e) => e.details?.date === "2026-03-15"));
+  check("books", "a business user cannot read the admin audit trail",
+    (await call("GET", `/admin/users/${owner.userId}/audit`, { token: owner.token })).status === 403);
+
+  check("books", "the admin unfreezes the books",
+    (await call("PATCH", `/admin/users/${owner.userId}/lock-date`, { token: adm.token, body: { lockDate: null } })).status === 200 &&
+      (await sale("2026-03-15")).status === 201);
+
+  const clients = await call("GET", "/admin/clients?month=2026-04", { token: adm.token });
+  const mine = clients.data?.clients?.find((c) => c.id === owner.userId);
+  check("consultant", "the dashboard lists the admin's clients only",
+    clients.status === 200 && !!mine && !clients.data.clients.some((c) => c.id === other.userId), `status ${clients.status}`);
+  check("consultant", "with the month's sales and GST", mine?.invoices === 2 && mine?.sales === 236 && mine?.outputGst === 36, JSON.stringify(mine));
+  check("consultant", "and what is still owed", mine?.receivable === 354, String(mine?.receivable));
+  check("consultant", "a business user cannot open it", (await call("GET", "/admin/clients", { token: owner.token })).status === 403);
+
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
+}
+
+// === staff, intern and client logins with access levels =====================
+{
+  const adm = await register("staffadmin");
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
+  const owner = await register("staffowner");
+  sqlExec(`UPDATE users SET created_by_admin_id=${adm.userId} WHERE id=${owner.userId}`);
+  const stranger = await register("staffstranger");
+  const ownerBiz = sqlValue(`SELECT business_id FROM users WHERE id=${owner.userId}`);
+  const make = (tag, body) => call("POST", "/users", { token: adm.token,
+    body: { name: tag, email: `${tag}${uniq}@example.test`, password: PASSWORD, role: "user", ...body } });
+  const login = async (tag) => (await call("POST", "/auth/login", { body: { email: `${tag}${uniq}@example.test`, password: PASSWORD } })).data?.token;
+
+  check("staff", "a login cannot join another admin's client",
+    (await make("staffx", { joinUserId: stranger.userId })).status === 400);
+  const viewer = await make("staffview", { joinUserId: owner.userId, accessLevel: "view" });
+  check("staff", "an admin adds a view-only login to a client's business",
+    viewer.status === 201 && viewer.data?.accessLevel === "view" && String(viewer.data?.businessId) === ownerBiz, `status ${viewer.status}`);
+  const clerk = await make("staffentry", { joinUserId: owner.userId });
+  check("staff", "a joined login defaults to data entry", clerk.data?.accessLevel === "entry");
+  check("staff", "no second business is created for it",
+    sqlValue(`SELECT count(*) FROM businesses WHERE user_id IN (${viewer.data.id}, ${clerk.data.id})`) === "0");
+
+  const vTok = await login("staffview"), eTok = await login("staffentry");
+  check("staff", "view-only reads the business's records", (await call("GET", "/customers", { token: vTok })).status === 200);
+  check("staff", "but cannot add one",
+    (await call("POST", "/customers", { token: vTok, body: { name: "Nope" } })).data?.code === "read_only");
+  const cust = await call("POST", "/customers", { token: eTok, body: { name: "Entered by clerk" } });
+  check("staff", "data entry adds records to the shared business", cust.status === 201, `status ${cust.status}`);
+  const custId = cust.data?.id ?? cust.data?.customer?.id;
+  check("staff", "the owner sees what staff entered",
+    (await call("GET", "/customers", { token: owner.token })).data?.customers?.some((c) => c.id === custId));
+  check("staff", "data entry cannot delete",
+    (await call("DELETE", `/customers/${custId}`, { token: eTok })).data?.code === "not_permitted");
+  check("staff", "or change business settings",
+    (await call("PATCH", "/business", { token: eTok, body: { name: "Hijacked" } })).data?.code === "not_permitted");
+  const raised = await call("PATCH", `/users/${viewer.data.id}`, { token: adm.token, body: { accessLevel: "full" } });
+  check("staff", "the admin changes a login's access", raised.status === 200 && raised.data?.accessLevel === "full");
+  check("staff", "and it applies at once", (await call("POST", "/customers", { token: vTok, body: { name: "Now allowed" } })).status === 201);
+
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
+}
+
+// === TDS on purchases, TCS on sales, and their monthly reports ==============
+{
+  const o = await register("tdsowner");
+  sqlExec(`UPDATE businesses SET state_code='27', state='Maharashtra' WHERE user_id=${o.userId}`);
+  const vend = (await call("POST", "/vendors", { token: o.token, body: { name: "Contractor", gstin: "27ABCDE1234F1Z5" } })).data;
+  const bill = await call("POST", "/purchases", { token: o.token, body: { vendorId: vend.id, billDate: "2026-06-10", billNumber: "C-1",
+    tdsSection: "194C", tdsRate: 2, items: [{ description: "Work", quantity: 1, unitPrice: 10000, gstRate: 18 }] } });
+  const b = bill.data?.purchase ?? bill.data;
+  check("tds", "a bill records TDS on its taxable value", bill.status === 201 && b?.tdsAmount === 200 && b?.netPayable === 11600, JSON.stringify({ s: bill.status, t: b?.tdsAmount, n: b?.netPayable }));
+  const edited = await call("PATCH", `/purchases/${b.id}`, { token: o.token, body: { tdsRate: 1 } });
+  check("tds", "changing the rate re-derives the amount", (edited.data?.purchase ?? edited.data)?.tdsAmount === 100, JSON.stringify(edited.data));
+  const tds = (await call("GET", "/reports/tds?month=6&year=2026", { token: o.token })).data;
+  check("tds", "the TDS report groups by section with the deductee PAN",
+    tds?.totalTds === 100 && tds?.sections?.[0]?.section === "194C" && tds?.entries?.[0]?.pan === "ABCDE1234F", JSON.stringify(tds));
+
+  const inv = await call("POST", "/invoices", { token: o.token, body: { invoiceDate: "2026-06-12", customerName: "Big Buyer", customerGstin: "27PQRST6789K1Z2",
+    placeOfSupply: "27", tcsRate: 0.1, items: [{ description: "Goods", quantity: 1, unitPrice: 100000, gstRate: 18 }] } });
+  const i = inv.data?.invoice;
+  check("tcs", "an invoice adds TCS on the GST-inclusive value", inv.status === 201 && i?.tcsAmount === 118 && i?.grandTotal === 118118, JSON.stringify({ s: inv.status, t: i?.tcsAmount, g: i?.grandTotal }));
+  const tcs = (await call("GET", "/reports/tcs?month=6&year=2026", { token: o.token })).data;
+  check("tcs", "the TCS report lists it with the collectee PAN", tcs?.totalTcs === 118 && tcs?.entries?.[0]?.pan === "PQRST6789K", JSON.stringify(tcs));
+  const g3b = (await call("GET", "/reports/gstr3b?month=6&year=2026", { token: o.token })).data;
+  check("tcs", "TCS does not change the GST figures", g3b?.outwardTaxable === 100000 && g3b?.outwardCgst === 9000, JSON.stringify({ t: g3b?.outwardTaxable, c: g3b?.outwardCgst }));
+
+  // Bank statement import: suggest, then record through the ordinary endpoints.
+  const m = await call("POST", "/payments/match", { token: o.token, body: { rows: [
+    { date: "2026-06-20", description: `NEFT BIG BUYER ${i.invoiceNumber}`, amount: 118118 },
+    { date: "2026-06-21", description: "RTGS CONTRACTOR", amount: -11700 },
+    { date: "2026-06-22", description: "Bank charges", amount: -59 },
+  ] } });
+  const [mi, mp, none] = m.data?.matches ?? [];
+  check("bank", "a credit matches the invoice named in its narration", mi?.kind === "invoice" && mi?.id === i.id && mi?.by === "number" && mi?.due === 118118, JSON.stringify(m.data));
+  check("bank", "a debit matches the bill whose net payable equals it", mp?.kind === "purchase" && mp?.id === b.id && mp?.by === "amount");
+  check("bank", "an unrelated line is left unmatched", none === null);
+  const other = await register("bankother");
+  const theirs = (await call("POST", "/payments/match", { token: other.token, body: { rows: [{ date: "2026-06-20", description: i.invoiceNumber, amount: 118118 }] } })).data;
+  check("bank", "another business's invoices are never suggested", theirs?.matches?.[0] === null, JSON.stringify(theirs));
+  await call("POST", "/payments", { token: o.token, body: { type: "received", invoiceId: i.id, amount: 118118, date: "2026-06-20", mode: "bank_transfer" } });
+  const again = (await call("POST", "/payments/match", { token: o.token, body: { rows: [{ date: "2026-06-20", description: i.invoiceNumber, amount: 118118 }] } })).data;
+  check("bank", "a paid invoice is no longer suggested", again?.matches?.[0] === null, JSON.stringify(again));
+}
+
+// === App updates ===========================================================
+{
+  const bad = await call("GET", "/updates/manifest", { headers: { "expo-platform": "web", "expo-runtime-version": "1" } });
+  check("app updates", "the update manifest refuses an unknown platform", bad.status === 400);
+  check("app updates", "the APK check needs a signed-in user", (await call("GET", "/app/android/latest")).status === 401);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

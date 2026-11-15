@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AppUpdates } from "@/lib/AppUpdates";
 import { AuthProvider } from "@/lib/auth";
 import { colors } from "@/lib/ui";
 
@@ -24,6 +25,7 @@ export default function RootLayout() {
           <Stack.Screen name="invoice/[id]" options={{ title: "Invoice" }} />
           <Stack.Screen name="customer/[id]" options={{ title: "Customer" }} />
         </Stack>
+        <AppUpdates />
       </AuthProvider>
     </QueryClientProvider>
   );

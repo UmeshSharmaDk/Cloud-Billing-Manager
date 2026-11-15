@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FileDown } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TdsTcsReport } from "@/components/TdsTcsReport";
 
 function parseMonth(monthStr: string) {
   const [year, month] = monthStr.split("-").map(Number);
@@ -37,7 +38,7 @@ export default function ReportsPage() {
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">GST Reports</h1>
-          <p className="text-muted-foreground text-sm">Generate GSTR-1, GSTR-3B, HSN Summary and other compliance reports</p>
+          <p className="text-muted-foreground text-sm">GSTR-1, GSTR-3B, HSN summary, TDS and TCS for the month</p>
         </div>
         <div className="flex items-center gap-2">
           <Label htmlFor="month" className="text-sm font-medium whitespace-nowrap">Select Month:</Label>
@@ -46,11 +47,15 @@ export default function ReportsPage() {
       </div>
 
       <Tabs defaultValue="gstr1">
-        <TabsList className="grid grid-cols-3 w-full max-w-lg">
+        <TabsList className="grid grid-cols-5 w-full max-w-2xl">
           <TabsTrigger value="gstr1">GSTR-1</TabsTrigger>
           <TabsTrigger value="gstr3b">GSTR-3B</TabsTrigger>
           <TabsTrigger value="hsn">HSN Summary</TabsTrigger>
+          <TabsTrigger value="tds">TDS</TabsTrigger>
+          <TabsTrigger value="tcs">TCS</TabsTrigger>
         </TabsList>
+        <TabsContent value="tds" className="mt-4"><TdsTcsReport kind="tds" month={Number(month.slice(5))} year={Number(month.slice(0, 4))} /></TabsContent>
+        <TabsContent value="tcs" className="mt-4"><TdsTcsReport kind="tcs" month={Number(month.slice(5))} year={Number(month.slice(0, 4))} /></TabsContent>
 
         {/* ─── GSTR-1 ─── */}
         <TabsContent value="gstr1" className="mt-4 space-y-4">

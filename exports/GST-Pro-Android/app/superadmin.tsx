@@ -7,7 +7,7 @@ import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import { Button, Card, colors, ErrorView, Field, Loading, PasswordPrompt, Prompt, Row, s, StatusPill } from "@/lib/ui";
 import { AccountCard, MenuLink } from "./(tabs)/more";
-import { Stat, type CapacityRequest } from "./admin";
+import { Clients, Stat, type CapacityRequest } from "./admin";
 
 type Admin = { id: number; name: string; email: string; isActive: boolean; mfaEnabled?: boolean; userLimit: number; userCount: number; availableSlots: number; subscriptionEnd?: string | null };
 type Invite = { id: number; name: string; email: string; userLimit: number; expiresAt: string };
@@ -69,6 +69,7 @@ export default function Superadmin() {
         <Stat label="Extra user price" value={money(d.additionalUserPriceInr)} />
       </View>
 
+      <Clients />
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
         <MenuLink title="Manage and edit users" icon="people-outline" href="/admin/users" />
         <MenuLink title="Add a user" icon="person-add-outline" href="/admin/new-user" />

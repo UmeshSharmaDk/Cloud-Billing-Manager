@@ -136,4 +136,11 @@ export type EwayBill = {
   [k: string]: unknown;
 };
 
+export type AccessLevel = "full" | "entry" | "view" | null;
+export const ACCESS = [
+  { value: "full", label: "Full: everything the owner can do" },
+  { value: "entry", label: "Data entry: add and edit, no deleting or settings" },
+  { value: "view", label: "View only: for interns or clients" },
+];
+
 export type Business = Record<string, string | number | null> & { id: number; name: string };

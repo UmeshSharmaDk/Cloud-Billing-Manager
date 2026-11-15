@@ -23,6 +23,9 @@ export const invoicesTable = pgTable("invoices", {
   roundOff: numeric("round_off", { precision: 10, scale: 2 }).notNull().default("0"),
   grandTotal: numeric("grand_total", { precision: 15, scale: 2 }).notNull().default("0"),
   paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).notNull().default("0"),
+  /** Tax collected at source (s.206C) on this sale: rate %, and the amount added to the total. */
+  tcsRate: numeric("tcs_rate", { precision: 5, scale: 3 }).notNull().default("0"),
+  tcsAmount: numeric("tcs_amount", { precision: 15, scale: 2 }).notNull().default("0"),
   notes: text("notes"),
   items: jsonb("items").notNull().default([]),
   createdAt: timestamp("created_at").notNull().defaultNow(),

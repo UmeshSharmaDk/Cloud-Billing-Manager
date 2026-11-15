@@ -149,7 +149,7 @@ export default function InvoiceNewPage() {
   const today = new Date().toISOString().slice(0, 10);
   const due = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
 
-  const [form, setForm] = useState({ invoiceDate: today, dueDate: due, placeOfSupply: "", notes: "" });
+  const [form, setForm] = useState({ invoiceDate: today, dueDate: due, placeOfSupply: "", notes: "", tcsRate: "" });
   const [customer, setCustomer] = useState<{ id: number | null; name: string; stateCode: string }>({ id: null, name: "", stateCode: "" });
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const mutation = useCreateInvoice();
@@ -186,6 +186,7 @@ export default function InvoiceNewPage() {
       dueDate: form.dueDate,
       placeOfSupply,
       notes: form.notes,
+      ...(Number(form.tcsRate) > 0 ? { tcsRate: Number(form.tcsRate) } : {}),
       items: items.map(it => ({
         productId: it.productId, description: it.description, hsnCode: it.hsnCode,
         quantity: it.quantity, unit: it.unit, unitPrice: it.unitPrice,
@@ -234,6 +235,7 @@ export default function InvoiceNewPage() {
                 <Label>Place of Supply (State Code)</Label>
                 <Input value={form.placeOfSupply} onChange={(e) => setForm(f => ({ ...f, placeOfSupply: e.target.value }))} placeholder={customer.stateCode || "e.g. 27"} maxLength={2} />
               </div>
+              <div className="space-y-2"><Label>TCS % (s.206C, optional)</Label><Input type="number" min="0" max="10" step="0.001" value={form.tcsRate} onChange={(e) => setForm(f => ({ ...f, tcsRate: e.target.value }))} placeholder="e.g. 0.1" /></div>
               <div className="space-y-2"><Label>Notes</Label><Input value={form.notes} onChange={(e) => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Optional note..." /></div>
             </CardContent>
           </Card>

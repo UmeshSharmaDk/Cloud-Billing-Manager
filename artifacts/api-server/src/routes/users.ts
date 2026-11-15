@@ -57,7 +57,7 @@ router.get("/", requireAdmin, validateQuery(ListUsersQuery), async (req: Req, re
 });
 
 router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
-  const { name, email, password, role, subscriptionStatus, subscriptionEnd, businessName, gstin } = req.body;
+  const { name, email, password, role, subscriptionStatus, subscriptionEnd, businessName, gstin, joinUserId, accessLevel } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
 
   if (req.userRole === "admin" && role !== "user") {
@@ -105,6 +105,17 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
       return { kind: "duplicate" as const };
     }
 
+    // A staff, intern or client login joins a business the caller already manages.
+    let joinBusinessId: number | null = null;
+    if (joinUserId) {
+      const [host] = await tx.select().from(usersTable)
+        .where(and(eq(usersTable.id, joinUserId), eq(usersTable.role, "user"), isNull(usersTable.deletedAt))).limit(1);
+      if (!host?.businessId || (req.userRole === "admin" && host.createdByAdminId !== req.user.id)) {
+        return { kind: "no-host" as const };
+      }
+      joinBusinessId = host.businessId;
+    }
+
     const [user] = await tx.insert(usersTable).values({
       name,
       email: normalisedEmail,
@@ -114,7 +125,10 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
       subscriptionStatus,
       subscriptionEnd,
       createdByAdminId: req.userRole === "admin" ? req.user.id : null,
+      businessId: joinBusinessId,
+      accessLevel: joinBusinessId ? accessLevel ?? "entry" : null,
     }).returning();
+    if (joinBusinessId) return { kind: "created" as const, user };
     // Same as self-registration: the account gets its own business, or every
     // business route answers "No business". The user edits it in Settings.
     const [business] = await tx.insert(businessesTable).values({
@@ -138,6 +152,7 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
       currency: "INR",
     });
   }
+  if (result.kind === "no-host") return res.status(400).json({ error: "Choose one of your clients to add this login to." });
   if (result.kind === "duplicate") return res.status(409).json({ error: "That email address is already registered" });
 
   const user = result.user;
@@ -173,7 +188,7 @@ router.get("/:id", validateParams(IdParam), async (req: Req, res) => {
 router.patch("/:id", requireAdmin, validateParams(IdParam), validateBody(UpdateUserBody),
   async (req: Req, res) => {
     const targetId = req.validatedParams.id;
-    const { name, email, role, subscriptionStatus, subscriptionEnd } = req.body;
+    const { name, email, role, subscriptionStatus, subscriptionEnd, accessLevel } = req.body;
 
     const [before] = await db.select().from(usersTable).where(eq(usersTable.id, targetId)).limit(1);
     if (!before || before.deletedAt) return res.status(404).json({ error: "User not found" });
@@ -212,6 +227,7 @@ router.patch("/:id", requireAdmin, validateParams(IdParam), validateBody(UpdateU
 
     const updates: any = {};
     if (name) updates.name = name;
+    if (accessLevel) updates.accessLevel = accessLevel === "owner" ? null : accessLevel;
     if (newEmail) updates.email = newEmail;
     if (role) updates.role = role;
     if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;

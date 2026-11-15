@@ -55,6 +55,12 @@ export default function PurchaseDetail() {
           </>
         )}
         <Row label="Grand total" value={money(p.grandTotal)} />
+        {Number((p as any).tdsAmount) > 0 && (
+          <>
+            <Row label={`TDS ${(p as any).tdsSection ? `u/s ${(p as any).tdsSection} ` : ""}@ ${(p as any).tdsRate}%`} value={`− ${money((p as any).tdsAmount)}`} />
+            <Row label="Net payable" value={money((p as any).netPayable)} />
+          </>
+        )}
       </Card>
       {!!p.notes && <Card><Text style={s.muted}>{p.notes}</Text></Card>}
     </ScrollView>

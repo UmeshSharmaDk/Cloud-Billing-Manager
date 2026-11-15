@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Building2, FileText, TrendingUp, Shield } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
+import { ClientsBoard } from "@/components/ClientsBoard";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
 const COLORS = ["hsl(217,91%,50%)", "hsl(160,60%,45%)", "hsl(30,80%,55%)", "hsl(340,75%,55%)"];
@@ -127,6 +128,7 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
       </div>
+      <ClientsBoard />
     </div>
   );
 }

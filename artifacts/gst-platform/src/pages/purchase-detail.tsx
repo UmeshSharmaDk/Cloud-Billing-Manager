@@ -117,6 +117,10 @@ export default function PurchaseDetailPage() {
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Taxable</span><span>{formatCurrency(p.subtotal)}</span></div>
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total GST (ITC)</span><span className="text-blue-600 font-medium">{formatCurrency(p.totalGst)}</span></div>
               <div className="flex justify-between py-2 border-t-2 font-bold text-base"><span>Total</span><span>{formatCurrency(p.grandTotal)}</span></div>
+              {Number(p.tdsAmount) > 0 && <>
+                <div className="flex justify-between py-1 text-sm"><span>TDS {p.tdsSection ? `u/s ${p.tdsSection} ` : ""}@ {p.tdsRate}%</span><span>− {formatCurrency(p.tdsAmount)}</span></div>
+                <div className="flex justify-between py-1 font-semibold"><span>Net payable to vendor</span><span>{formatCurrency(p.netPayable)}</span></div>
+              </>}
               {currentStatus !== "paid" && (
                 <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} disabled={mutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
