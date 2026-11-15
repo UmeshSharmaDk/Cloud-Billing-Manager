@@ -21,6 +21,31 @@ export function Stat({ label, value }: { label: string; value: string | number }
   );
 }
 
+type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number };
+
+/** Consultant view: each client's month at a glance; tap to open the client. */
+export function Clients() {
+  const [at, setAt] = useState(() => new Date().toISOString().slice(0, 7));
+  const step = (n: number) => setAt((m) => { const d = new Date(Number(m.slice(0, 4)), Number(m.slice(5)) - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; });
+  const q = useQuery({ queryKey: ["/admin/clients", at], queryFn: () => api<{ clients: Client[] }>(`/admin/clients?month=${at}`) });
+  const label = new Date(Number(at.slice(0, 4)), Number(at.slice(5)) - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  return (
+    <Card title={`Clients · ${label}`}>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <View style={{ flex: 1 }}><Button title="‹ Prev" variant="outline" onPress={() => step(-1)} /></View>
+        <View style={{ flex: 1 }}><Button title="Next ›" variant="outline" onPress={() => step(1)} /></View>
+      </View>
+      {q.isLoading ? <Loading /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : !q.data?.clients.length ? <Text style={s.muted}>No clients yet.</Text> :
+        q.data.clients.map((c) => (
+          <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
+            <Row label={c.business?.name ?? c.name} value={money(c.sales ?? 0)} />
+            <Text style={s.muted}>{c.invoices ?? 0} invoices · GST {money(c.netGst ?? 0)} · owed {money(c.receivable ?? 0)}{c.business?.lockDate ? ` · frozen to ${date(c.business.lockDate)}` : ""}</Text>
+          </Pressable>
+        ))}
+    </Card>
+  );
+}
+
 export default function AdminHome() {
   const { request } = useLocalSearchParams<{ request?: string }>();
   const stats = useQuery({ queryKey: ["/admin/stats"], queryFn: () => api<Stats>("/admin/stats") });
@@ -46,6 +71,7 @@ export default function AdminHome() {
         <Stat label="Trial / monthly / yearly" value={`${d.trialCount ?? 0} / ${d.monthlyCount ?? 0} / ${d.yearlyCount ?? 0}`} />
         <Stat label="Invoices" value={d.totalInvoices ?? 0} />
       </View>
+      <Clients />
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
         <MenuLink title="Manage users" icon="people-outline" href="/admin/users" />
         <MenuLink title="Add a user" icon="person-add-outline" href="/admin/new-user" />

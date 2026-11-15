@@ -5,7 +5,8 @@ import { requireAuth, requireAdmin } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
-import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery } from "../schemas";
+import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery, ClientsQuery } from "../schemas";
+import { taxInvoice, receivableInvoice, invoiceSign, activePurchase } from "../lib/tax-documents";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
 import { assertNotLastAdmin, assertNotSelf } from "../lib/admin-guards";
@@ -124,6 +125,72 @@ router.get("/users", validateQuery(AdminListUsersQuery), async (req: Req, res) =
     .limit(limit).offset((page - 1) * limit);
   const [{ count: total }] = await db.select({ count: count() }).from(usersTable).where(where);
   return res.json({ users: users.map(mapUser), total: Number(total) });
+});
+
+/**
+ * GET /admin/clients — the consultant dashboard: every business this admin
+ * manages, with the month's sales and purchases, GST, money still owed to it,
+ * and when it last invoiced. Four grouped queries, whatever the client count.
+ */
+router.get("/clients", validateQuery(ClientsQuery), async (req: Req, res) => {
+  const month = req.validatedQuery.month ?? new Date().toISOString().slice(0, 7);
+  const from = `${month}-01`;
+  const to = `${month}-31`; // dates are YYYY-MM-DD text, so this bounds the month
+  const visible = req.userRole === "admin"
+    ? and(eq(usersTable.role, "user"), isNull(usersTable.deletedAt), eq(usersTable.createdByAdminId, req.user.id))
+    : and(eq(usersTable.role, "user"), isNull(usersTable.deletedAt));
+  const users = await db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, isActive: usersTable.isActive, businessId: usersTable.businessId })
+    .from(usersTable).where(visible).orderBy(usersTable.name);
+  const ids = users.map((u) => u.businessId).filter((id): id is number => id !== null);
+  if (!ids.length) return res.json({ month, clients: users.map((u) => ({ ...u, business: null })) });
+
+  const sign = invoiceSign(invoicesTable);
+  const [bizRows, sales, purchases, owed] = await Promise.all([
+    db.select({ id: businessesTable.id, name: businessesTable.name, gstin: businessesTable.gstin, lockDate: businessesTable.lockDate })
+      .from(businessesTable).where(inArray(businessesTable.id, ids)),
+    db.select({
+      businessId: invoicesTable.businessId,
+      sales: sql<string>`coalesce(sum(${sign} * ${invoicesTable.grandTotal}), 0)`,
+      outputGst: sql<string>`coalesce(sum(${sign} * ${invoicesTable.totalGst}), 0)`,
+      invoices: count(),
+    }).from(invoicesTable)
+      .where(and(inArray(invoicesTable.businessId, ids), taxInvoice(invoicesTable), sql`${invoicesTable.invoiceDate} BETWEEN ${from} AND ${to}`))
+      .groupBy(invoicesTable.businessId),
+    db.select({
+      businessId: purchasesTable.businessId,
+      purchases: sql<string>`coalesce(sum(${purchasesTable.grandTotal}), 0)`,
+      inputGst: sql<string>`coalesce(sum(${purchasesTable.totalGst}), 0)`,
+    }).from(purchasesTable)
+      .where(and(inArray(purchasesTable.businessId, ids), activePurchase(purchasesTable), sql`${purchasesTable.invoiceDate} BETWEEN ${from} AND ${to}`))
+      .groupBy(purchasesTable.businessId),
+    db.select({
+      businessId: invoicesTable.businessId,
+      receivable: sql<string>`coalesce(sum(${invoicesTable.grandTotal} - ${invoicesTable.paidAmount}) FILTER (WHERE ${invoicesTable.status} <> 'paid'), 0)`,
+      lastInvoiceAt: sql<string | null>`max(${invoicesTable.createdAt})`,
+    }).from(invoicesTable)
+      .where(and(inArray(invoicesTable.businessId, ids), receivableInvoice(invoicesTable)))
+      .groupBy(invoicesTable.businessId),
+  ]);
+  const by = <T extends { businessId: number }>(rows: T[]) => new Map(rows.map((r) => [r.businessId, r]));
+  const s = by(sales), p = by(purchases), o = by(owed);
+  const biz = new Map(bizRows.map((b) => [b.id, b]));
+  const num = (v: unknown) => Number(v ?? 0);
+
+  return res.json({
+    month,
+    clients: users.map((u) => {
+      const b = u.businessId ? biz.get(u.businessId) : undefined;
+      if (!b) return { ...u, business: null };
+      const si = s.get(b.id), pi = p.get(b.id), oi = o.get(b.id);
+      const outputGst = num(si?.outputGst), inputGst = num(pi?.inputGst);
+      return {
+        ...u, business: b,
+        sales: num(si?.sales), invoices: num(si?.invoices), purchases: num(pi?.purchases),
+        outputGst, inputGst, netGst: Math.round((outputGst - inputGst) * 100) / 100,
+        receivable: num(oi?.receivable), lastInvoiceAt: oi?.lastInvoiceAt ?? null,
+      };
+    }),
+  });
 });
 
 /** A business user this admin may manage: their own, or any for the superadmin. */

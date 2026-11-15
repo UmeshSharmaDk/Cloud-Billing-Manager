@@ -2895,6 +2895,14 @@ const adminEmail = `admin${uniq}@example.test`;
     (await call("PATCH", `/admin/users/${owner.userId}/lock-date`, { token: adm.token, body: { lockDate: null } })).status === 200 &&
       (await sale("2026-03-15")).status === 201);
 
+  const clients = await call("GET", "/admin/clients?month=2026-04", { token: adm.token });
+  const mine = clients.data?.clients?.find((c) => c.id === owner.userId);
+  check("consultant", "the dashboard lists the admin's clients only",
+    clients.status === 200 && !!mine && !clients.data.clients.some((c) => c.id === other.userId), `status ${clients.status}`);
+  check("consultant", "with the month's sales and GST", mine?.invoices === 2 && mine?.sales === 236 && mine?.outputGst === 36, JSON.stringify(mine));
+  check("consultant", "and what is still owed", mine?.receivable === 354, String(mine?.receivable));
+  check("consultant", "a business user cannot open it", (await call("GET", "/admin/clients", { token: owner.token })).status === 403);
+
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
 }
 

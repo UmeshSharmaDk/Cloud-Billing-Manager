@@ -1354,6 +1354,24 @@ paths:
         "403": { description: Password confirmation required or incorrect }
         "409": { description: Refused — this would remove the last administrator }
 
+  /admin/clients:
+    get:
+      operationId: adminClients
+      tags: [admin]
+      summary: Consultant dashboard — each managed client's month (sales, purchases, GST, receivable)
+      parameters:
+        - { in: query, name: month, schema: { type: string, pattern: "^\\d{4}-\\d{2}$" } }
+      responses:
+        "200":
+          description: Clients
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  month: { type: string }
+                  clients: { type: array, items: { type: object, additionalProperties: true } }
+
   /admin/users/{id}/lock-date:
     parameters:
       - { in: path, name: id, required: true, schema: { type: integer } }

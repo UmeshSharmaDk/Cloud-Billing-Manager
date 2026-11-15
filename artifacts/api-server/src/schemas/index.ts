@@ -224,6 +224,8 @@ export const LockDateBody = z.object({
 
 export const AuditPageQuery = z.object({ ...paginationShape });
 
+export const ClientsQuery = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional() });
+
 export const UpdateAdminPlanBody = z.object({
   /** Last day the admin and their users may sign in; null removes the end date. */
   planEnd: z.union([dateString, z.null()]),
