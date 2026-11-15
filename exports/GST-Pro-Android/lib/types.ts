@@ -5,6 +5,7 @@ export type User = {
   email: string;
   role: "user" | "admin" | "superadmin" | string;
   isActive: boolean;
+  mfaEnabled?: boolean;
   subscriptionStatus?: string | null;
   subscriptionEnd?: string | null;
   createdAt?: string;

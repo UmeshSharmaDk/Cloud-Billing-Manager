@@ -6,7 +6,11 @@ import type { User } from "./types";
 type Auth = {
   user: User | null;
   ready: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
+  /** Resolves to an mfaToken when the account needs an authenticator code next. */
+  signIn: (email: string, password: string) => Promise<string | null>;
+  finishMfa: (mfaToken: string, code: string) => Promise<void>;
+  /** Swap in a new session token (two-factor enrolment issues one) and reload the user. */
+  adopt: (token: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -40,11 +44,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [forget]);
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const res = await api<{ token: string; user: User }>("/auth/login", { method: "POST", body: { email, password } });
+  const start = useCallback(async (res: { token: string; user: User }) => {
     await saveToken(res.token);
     setSession(res.token, forget);
     setUser(res.user);
+  }, [forget]);
+
+  const signIn = useCallback(async (email: string, password: string) => {
+    const res = await api<{ token: string; user: User } | { mfaRequired: true; mfaToken: string }>("/auth/login", { method: "POST", body: { email, password } });
+    if ("mfaRequired" in res) return res.mfaToken;
+    await start(res);
+    return null;
+  }, [start]);
+
+  const finishMfa = useCallback(async (mfaToken: string, code: string) => {
+    await start(await api<{ token: string; user: User }>("/auth/mfa/login", { method: "POST", body: { mfaToken, code } }));
+  }, [start]);
+
+  const adopt = useCallback(async (token: string) => {
+    await saveToken(token);
+    setSession(token, forget);
+    setUser(await api<User>("/auth/me"));
   }, [forget]);
 
   const signOut = useCallback(async () => {
@@ -53,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await forget();
   }, [forget]);
 
-  return <AuthContext.Provider value={{ user, ready, signIn, signOut }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, ready, signIn, finishMfa, adopt, signOut }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

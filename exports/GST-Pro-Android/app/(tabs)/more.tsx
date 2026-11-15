@@ -41,6 +41,7 @@ export function AccountCard() {
       </View>
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
         <MenuLink title="Password and sessions" icon="key-outline" href="/password" />
+        {user?.role !== "user" && <MenuLink title="Two-factor sign-in" icon="shield-checkmark-outline" href="/security" />}
       </View>
       <Button title="Sign out" variant="outline" onPress={signOut} />
     </View>
