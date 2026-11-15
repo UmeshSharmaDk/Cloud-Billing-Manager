@@ -5,7 +5,7 @@ import { requireAuth, requireAdmin } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
-import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery, ClientsQuery } from "../schemas";
+import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery, ClientsQuery, UpdateBusinessBody } from "../schemas";
 import { taxInvoice, receivableInvoice, invoiceSign, activePurchase } from "../lib/tax-documents";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
@@ -200,6 +200,20 @@ async function managedUser(req: Req) {
   const [user] = await db.select().from(usersTable).where(and(...conditions)).limit(1);
   return user ?? null;
 }
+
+// PATCH /admin/users/:id/business — the admin keeps a client's business settings up to date.
+router.patch("/users/:id/business", validateParams(IdParam), validateBody(UpdateBusinessBody), async (req: Req, res) => {
+  const user = await managedUser(req);
+  if (!user) return res.status(404).json({ error: "User not found" });
+  if (!user.businessId) return res.status(400).json({ error: "This user has no business yet." });
+  if (Object.keys(req.body).length === 0) return res.status(400).json({ error: "Nothing to update" });
+  const [biz] = await db.update(businessesTable).set(req.body).where(eq(businessesTable.id, user.businessId)).returning();
+  await recordAudit({
+    ...actorFrom(req), action: "business.updated_by_admin", targetType: "business", targetId: biz.id,
+    businessId: biz.id, details: { fields: Object.keys(req.body) },
+  });
+  return res.json(biz);
+});
 
 // PATCH /admin/users/:id/lock-date — freeze (or unfreeze) the user's books up to a day.
 router.patch("/users/:id/lock-date", validateParams(IdParam), validateBody(LockDateBody), async (req: Req, res) => {

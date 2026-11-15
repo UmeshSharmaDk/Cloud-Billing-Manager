@@ -1,4 +1,5 @@
 import { useRoute, useLocation } from "wouter";
+import { BusinessEditor } from "@/components/BusinessFields";
 import { useGetUser, useUpdateUser, useToggleUserStatus } from "@workspace/api-client-react";
 import { formatDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -205,23 +206,7 @@ export default function AdminUserDetailPage() {
           </CardContent>
         </Card>
 
-        {/* Business Info */}
-        {biz.id && (
-          <Card>
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Building2 className="w-4 h-4" /> Business Profile</CardTitle></CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div className="col-span-2"><p className="text-xs text-muted-foreground">Business Name</p><p className="font-semibold text-base">{biz.name}</p></div>
-                {biz.gstin && <div><p className="text-xs text-muted-foreground">GSTIN</p><p className="font-mono text-xs">{biz.gstin}</p></div>}
-                {biz.pan && <div><p className="text-xs text-muted-foreground">PAN</p><p className="font-mono text-xs">{biz.pan}</p></div>}
-                {biz.phone && <div><p className="text-xs text-muted-foreground">Phone</p><p className="font-medium">{biz.phone}</p></div>}
-                {biz.email && <div><p className="text-xs text-muted-foreground">Email</p><p className="font-medium">{biz.email}</p></div>}
-                {biz.city && <div><p className="text-xs text-muted-foreground">Location</p><p className="font-medium">{biz.city}, {biz.state}</p></div>}
-                {biz.bankName && <div className="col-span-2"><p className="text-xs text-muted-foreground">Bank</p><p className="font-medium">{biz.bankName} — {biz.bankIfsc}</p></div>}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {biz.id && <BusinessEditor userId={userId} business={biz} onSaved={refetch} />}
       </div>
 
       {user.businessId && <BooksControl userId={userId} lockDate={biz.lockDate ?? null} />}

@@ -41,6 +41,7 @@ export type AuditAction =
   | "capacity_request.approved"
   | "capacity_request.declined"
   | "business.lock_date_changed"
+  | "business.updated_by_admin"
   | `${BookKind}.${"created" | "updated" | "deleted" | "status_changed"}`;
 
 export type BookKind = "invoice" | "purchase" | "payment" | "eway_bill";

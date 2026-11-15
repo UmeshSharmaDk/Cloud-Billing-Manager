@@ -2918,6 +2918,18 @@ const adminEmail = `admin${uniq}@example.test`;
     body: { name: tag, email: `${tag}${uniq}@example.test`, password: PASSWORD, role: "user", ...body } });
   const login = async (tag) => (await call("POST", "/auth/login", { body: { email: `${tag}${uniq}@example.test`, password: PASSWORD } })).data?.token;
 
+  // The admin fills in the client's business settings while adding them.
+  const client = await make("bizclient", { business: { name: "Client Traders", gstin: "27ABCDE1234F1Z5", city: "Pune", state: "Maharashtra", stateCode: "27", bankName: "HDFC", upiId: "client@okhdfcbank", invoicePrefix: "CT" } });
+  const cTok = await login("bizclient");
+  const cBiz = (await call("GET", "/business", { token: cTok })).data;
+  check("admin business", "details given at creation are the user's business settings",
+    client.status === 201 && cBiz?.name === "Client Traders" && cBiz?.city === "Pune" && cBiz?.upiId === "client@okhdfcbank" && cBiz?.invoicePrefix === "CT", JSON.stringify({ s: client.status, d: client.data?.error, cBiz }));
+  const edited = await call("PATCH", `/admin/users/${client.data.id}/business`, { token: adm.token, body: { phone: "9876543210", city: "Mumbai" } });
+  check("admin business", "the admin edits them later", edited.status === 200 && edited.data?.city === "Mumbai" && edited.data?.name === "Client Traders", JSON.stringify(edited.data));
+  check("admin business", "but not for another admin's user",
+    (await call("PATCH", `/admin/users/${stranger.userId}/business`, { token: adm.token, body: { city: "X" } })).status === 404);
+  check("admin business", "and the user can still change them", (await call("PATCH", "/business", { token: cTok, body: { city: "Nashik" } })).data?.city === "Nashik");
+
   check("staff", "a login cannot join another admin's client",
     (await make("staffx", { joinUserId: stranger.userId })).status === 400);
   const viewer = await make("staffview", { joinUserId: owner.userId, accessLevel: "view" });

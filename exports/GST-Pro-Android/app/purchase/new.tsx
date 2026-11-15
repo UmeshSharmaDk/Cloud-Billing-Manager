@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, Stack } from "expo-router";
 import { useState } from "react";
-import { Alert } from "react-native";
+import { Alert, Text, View } from "react-native";
+import { annotateResult } from "@/lib/bill-text";
+import { chooseFile, fileText, takePhoto } from "@/lib/importFile";
 import { api } from "@/lib/api";
-import { emptyLine, LineItems, lineError, toItems, type Line } from "@/lib/LineItems";
+import { emptyLine, LineItems, lineError, toItems, useAllProducts, type Line } from "@/lib/LineItems";
 import { today, useSave } from "@/lib/save";
 import type { Purchase, Vendor } from "@/lib/types";
-import { Button, Card, Field, Form, Select } from "@/lib/ui";
+import { Button, Card, colors, Field, Form, Select } from "@/lib/ui";
 
 export default function NewPurchase() {
   const vendors = useQuery({ queryKey: ["/vendors", "picker"], queryFn: () => api<{ vendors: Vendor[] }>("/vendors?limit=100") }).data?.vendors ?? [];
@@ -17,6 +19,35 @@ export default function NewPurchase() {
   const [tds, setTds] = useState({ section: "", rate: "" });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const { busy, run } = useSave();
+  const products = useAllProducts().data?.products ?? [];
+  const [reading, setReading] = useState(false);
+  const [imported, setImported] = useState<string | null>(null);
+
+  /** Fill the form from a photo or file of the vendor's bill, the same way the website does. */
+  const importBill = async (pick: typeof takePhoto) => {
+    try {
+      const file = await pick();
+      if (!file) return;
+      setReading(true);
+      const result = annotateResult(await fileText(file), [], "image");
+      if (!result.items.length) return Alert.alert("No items found", "The bill could not be read. Try a sharper, straight-on photo, or add the items by hand.");
+      setLines(result.items.map((it) => {
+        const match = products.find((p) => p.name.toLowerCase().trim() === it.description.toLowerCase().trim());
+        return {
+          productId: match?.id ?? null, description: it.description, hsnCode: it.hsnCode || match?.hsnCode || "",
+          quantity: String(it.quantity), unit: it.unit || match?.unit || "Nos", unitPrice: String(it.unitPrice),
+          gstRate: String(it.gstRate ?? (match ? Number(match.gstRate) : 18)), discount: "0",
+        };
+      }));
+      if (result.detected.billNumber) setBillNumber(result.detected.billNumber);
+      if (result.detected.billDate) setBillDate(result.detected.billDate);
+      setImported(`${result.items.length} item${result.items.length === 1 ? "" : "s"} read from ${file.name}. Check every line before saving.`);
+    } catch (e) {
+      Alert.alert("Could not import", e instanceof Error ? e.message : String(e));
+    } finally {
+      setReading(false);
+    }
+  };
 
   const submit = () => {
     if (!vendorId) return Alert.alert("Vendor needed", "Pick the vendor who sent this bill.");
@@ -34,6 +65,14 @@ export default function NewPurchase() {
   return (
     <Form>
       <Stack.Screen options={{ title: "New purchase bill" }} />
+      <Card title="Import bill">
+        <Text style={{ color: colors.muted, fontSize: 13 }}>Photograph the vendor's bill, or pick an image, Excel or CSV file, and the items are filled in for you.</Text>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flex: 1 }}><Button title="Take photo" variant="outline" busy={reading} onPress={() => importBill(takePhoto)} /></View>
+          <View style={{ flex: 1 }}><Button title="Choose file" variant="outline" busy={reading} onPress={() => importBill(chooseFile)} /></View>
+        </View>
+        {imported && <Text style={{ color: colors.text, fontSize: 13 }}>{imported}</Text>}
+      </Card>
       <Card title="Bill">
         <Select label="Vendor *" value={vendorId} onChange={setVendorId} placeholder={vendors.length ? "Select…" : "Add a vendor first"}
           options={vendors.map((v) => ({ value: String(v.id), label: v.gstin ? `${v.name} · ${v.gstin}` : v.name }))} />

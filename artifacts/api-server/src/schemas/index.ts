@@ -177,6 +177,8 @@ export const CreateUserBody = z.object({
   /** Add this login to an existing client's business instead of creating one. */
   joinUserId: entityId.optional(),
   accessLevel: z.enum(["full", "entry", "view"]).optional(),
+  /** The new client's business settings (address, bank, UPI, terms…), filled in by the admin. */
+  business: z.lazy(() => UpdateBusinessBody).optional(),
   email: z.string().email().max(320),
   password: newPassword,
   role: roleEnum,

@@ -6,9 +6,9 @@ purchases, inventory, customers, vendors, payments, e-way bills, GST reports
 (GSTR-1, GSTR-3B, HSN) and business settings; admins manage their users and
 capacity; the superadmin manages admins, invitations and capacity requests.
 
-Two website-only pieces remain: importing a purchase bill from a PDF or photo,
-and the link in admin-invite emails, which opens the website to set a password
-before signing in here. There is no sign-up: admins create user accounts.
+Bills and bank statements are imported from a photo (on-device OCR), an image,
+Excel or CSV; PDFs are imported on the website. The link in admin-invite emails
+opens the website to set a password before signing in here. There is no sign-up: admins create user accounts.
 
 It talks to the API with a bearer token kept in the device keystore
 (`expo-secure-store`); the server skips its browser CSRF check for bearer

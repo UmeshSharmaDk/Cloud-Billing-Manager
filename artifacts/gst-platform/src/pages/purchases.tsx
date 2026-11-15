@@ -5,7 +5,7 @@ import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Search, ShoppingCart } from "lucide-react";
+import { Plus, Search, ShoppingCart, Upload } from "lucide-react";
 
 export default function PurchasesPage() {
   const [search, setSearch] = useState("");
@@ -27,9 +27,14 @@ export default function PurchasesPage() {
           <h1 className="text-2xl font-bold">Purchase Bills</h1>
           <p className="text-muted-foreground text-sm">Track all supplier purchases and GST input credit</p>
         </div>
-        <Link href="/purchases/new">
-          <Button className="gap-2"><Plus className="w-4 h-4" /> New Purchase</Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href="/purchases/new">
+            <Button variant="outline" className="gap-2"><Upload className="w-4 h-4" /> Import bill file</Button>
+          </Link>
+          <Link href="/purchases/new">
+            <Button className="gap-2"><Plus className="w-4 h-4" /> New Purchase</Button>
+          </Link>
+        </div>
       </div>
 
       <div className="relative">

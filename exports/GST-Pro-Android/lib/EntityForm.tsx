@@ -64,13 +64,13 @@ const asStrings = (o: Record<string, unknown>) =>
  * Create or edit form for one record. `load` prefills it; the save goes to
  * `target` with `method`, then the screen closes.
  */
-export function EntityForm({ fields, load, target, method, defaults, submitLabel = "Save", onSaved }: {
-  fields: FieldSpec[]; load?: string; target: string; method: "POST" | "PATCH";
+export function EntityForm({ fields, load, pick, target, method, defaults, submitLabel = "Save", onSaved }: {
+  fields: FieldSpec[]; load?: string; /** Read the record from this key of what `load` returns. */ pick?: string; target: string; method: "POST" | "PATCH";
   defaults?: Values; submitLabel?: string; onSaved?: (r: any) => void;
 }) {
   const q = useQuery({ queryKey: [load], queryFn: () => api<Record<string, unknown>>(load!), enabled: !!load });
   const [v, setV] = useState<Values>(defaults ?? {});
-  useEffect(() => { if (q.data) setV(asStrings(q.data)); }, [q.data]);
+  useEffect(() => { if (q.data) setV(asStrings((pick ? q.data[pick] : q.data) as Record<string, unknown> ?? {})); }, [q.data, pick]);
   const { busy, run } = useSave();
   const set = (k: string, x: string) => setV((p) => ({ ...p, [k]: x }));
 
@@ -100,4 +100,25 @@ export const partyFields: FieldSpec[] = [
   { key: "city", label: "City" },
   { key: "state", label: "State", kind: "state" },
   { key: "pincode", label: "Pincode", kind: "phone" },
+];
+
+/** A business's settings: the user edits them under Settings, and their admin fills them in when adding the user. */
+export const businessFields: FieldSpec[] = [
+  { key: "name", label: "Business name", required: true },
+  { key: "gstin", label: "GSTIN", kind: "upper" },
+  { key: "pan", label: "PAN", kind: "upper" },
+  { key: "phone", label: "Phone", kind: "phone" },
+  { key: "email", label: "Email", kind: "email" },
+  { key: "website", label: "Website", kind: "email" },
+  { key: "address", label: "Address" },
+  { key: "city", label: "City" },
+  { key: "state", label: "State", kind: "state" },
+  { key: "pincode", label: "Pincode", kind: "phone" },
+  { key: "bankName", label: "Bank name" },
+  { key: "bankAccount", label: "Account number", kind: "phone" },
+  { key: "bankIfsc", label: "IFSC code", kind: "upper" },
+  { key: "bankBranch", label: "Branch" },
+  { key: "upiId", label: "UPI ID (QR on invoices)", placeholder: "yourshop@okhdfcbank" },
+  { key: "invoicePrefix", label: "Invoice prefix", kind: "upper", placeholder: "INV" },
+  { key: "termsConditions", label: "Terms & conditions", kind: "multiline" },
 ];

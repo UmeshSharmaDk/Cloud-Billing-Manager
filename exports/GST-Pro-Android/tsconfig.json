@@ -18,6 +18,7 @@
   "exclude": [
     "node_modules",
     "android",
-    "android-bundle-check"
+    "android-bundle-check",
+    "**/*.test.ts"
   ]
 }

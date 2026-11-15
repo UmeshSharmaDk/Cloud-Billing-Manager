@@ -66,7 +66,9 @@ jobs:
           gh release upload android-app $R --clobber $(ls | grep -v '^ota-')
           gh release upload android-app $R --clobber ota-*.json
           # Drop bundles and assets no manifest names any more (the APK and latest.json stay).
-          keep=$(cat ota-*.json | grep -o '/android-app/[^"]*' | sed 's#.*/##' | sort -u)
+          # Other runtime versions keep their own manifest in the release; their files stay too.
+          mkdir -p ../ota-live && gh release download android-app $R --pattern 'ota-*.json' --dir ../ota-live --clobber
+          keep=$(cat ../ota-live/ota-*.json | grep -o '/android-app/[^"]*' | sed 's#.*/##' | sort -u)
           for old in $(gh release view android-app $R --json assets -q '.assets[].name' | grep -E '^(bundle|asset)-'); do
             echo "$keep" | grep -qx "$old" || gh release delete-asset android-app "$old" $R -y
           done
