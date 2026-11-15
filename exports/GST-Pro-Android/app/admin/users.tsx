@@ -10,8 +10,7 @@ export default function AdminUsers() {
       <ListScreen<User> path="/users" listKey="users" search="Search by name or email" empty="No users yet."
         href={(u) => `/admin/user/${u.id}`} newHref="/admin/new-user"
         renderItem={(u) => (
-          <Line title={u.name} sub={u.email} right={<StatusPill status={u.isActive ? "active" : "inactive"} />}
-            below={<StatusPill status={u.subscriptionStatus ?? "trial"} />} />
+          <Line title={u.name} sub={u.email} right={<StatusPill status={u.isActive ? "active" : "inactive"} />} />
         )} />
     </>
   );

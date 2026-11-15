@@ -4,7 +4,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useState } from "react";
 import { Alert, ScrollView, Text, View } from "react-native";
-import { api } from "@/lib/api";
+import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { invoiceHtml } from "@/lib/invoiceHtml";
 import { useSave } from "@/lib/save";
@@ -12,11 +12,13 @@ import type { Business, Customer, Invoice } from "@/lib/types";
 import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill } from "@/lib/ui";
 
 export default function InvoiceDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const q = useQuery({ queryKey: [`/invoices/${id}`], queryFn: () => api<Invoice>(`/invoices/${encodeURIComponent(id)}`) });
-  const biz = useQuery({ queryKey: ["/business"], queryFn: () => api<Business>("/business") });
+  // `asUser`: an admin looking at one of their users' invoices, read-only.
+  const { id, asUser } = useLocalSearchParams<{ id: string; asUser?: string }>();
+  const at = (path: string) => viewAs(path, asUser);
+  const q = useQuery({ queryKey: [at(`/invoices/${id}`)], queryFn: () => api<Invoice>(at(`/invoices/${encodeURIComponent(id)}`)) });
+  const biz = useQuery({ queryKey: [at("/business")], queryFn: () => api<Business>(at("/business")) });
   const custId = q.data?.customerId;
-  const cust = useQuery({ queryKey: [`/customers/${custId}`], queryFn: () => api<Customer>(`/customers/${custId}`), enabled: !!custId });
+  const cust = useQuery({ queryKey: [at(`/customers/${custId}`)], queryFn: () => api<Customer>(at(`/customers/${custId}`)), enabled: !!custId });
   const { busy, run } = useSave();
   const [partial, setPartial] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -57,7 +59,7 @@ export default function InvoiceDetail() {
         <View style={{ flex: 1 }}><Button title="Print" variant="outline" onPress={() => Print.printAsync({ html: invoiceHtml(inv, biz.data, cust.data) }).catch(() => {})} /></View>
       </View>
 
-      {inv.status !== "cancelled" && (
+      {!asUser && inv.status !== "cancelled" && (
         <Card title="Payment">
           <Row label="Paid so far" value={money(inv.paidAmount)} />
           {due > 0 && <Row label="Balance due" value={money(due)} />}
@@ -95,7 +97,7 @@ export default function InvoiceDetail() {
         <Row label="Grand total" value={money(inv.grandTotal)} />
       </Card>
       {!!inv.notes && <Card><Text style={s.muted}>{inv.notes}</Text></Card>}
-      <Button title="Create e-way bill" variant="outline" onPress={() => router.push({ pathname: "/eway-bill/new", params: { invoiceId: String(inv.id) } })} />
+      {!asUser && <Button title="Create e-way bill" variant="outline" onPress={() => router.push({ pathname: "/eway-bill/new", params: { invoiceId: String(inv.id) } })} />}
 
       <Prompt visible={partial} title="Record a part-payment" numeric busy={busy} placeholder="Amount in ₹"
         message={`Total received so far against ${inv.invoiceNumber}. More than zero and less than ${money(inv.grandTotal)}.`}

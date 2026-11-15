@@ -171,6 +171,9 @@ export const VerifyRegistrationBody = z.object({
 
 export const CreateUserBody = z.object({
   name: shortText(200),
+  // Every business user needs a business to work in; defaults to the user's name.
+  businessName: shortText(200).optional(),
+  gstin,
   email: z.string().email().max(320),
   password: newPassword,
   role: roleEnum,
@@ -212,6 +215,12 @@ export const CreateAdminInvitationBody = z.object({
   email: z.string().email().max(320),
   confirmPassword: z.string().min(1).max(1024),
   userLimit: z.coerce.number().int().min(0).max(100_000).default(15),
+});
+
+export const UpdateAdminPlanBody = z.object({
+  /** Last day the admin and their users may sign in; null removes the end date. */
+  planEnd: z.union([dateString, z.null()]),
+  confirmPassword: z.string().min(1).max(1024),
 });
 
 export const UpdateAdminLimitBody = z.object({

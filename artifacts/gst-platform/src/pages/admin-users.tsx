@@ -155,7 +155,7 @@ export default function AdminUsersPage() {
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <h2 className="text-lg font-semibold tracking-tight">People in this workspace</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Search accounts and review access or subscription status.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Search accounts and review access. Plans are set on your admin account.</p>
         </div>
         <div className="relative w-full sm:max-w-xs">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -185,15 +185,13 @@ export default function AdminUsersPage() {
           <div className="overflow-x-auto">
             <table className="w-full min-w-[800px] text-sm">
               <thead><tr className="border-b bg-[#f4f7f3] text-[11px] uppercase tracking-[.11em] text-muted-foreground">
-                <th className="px-5 py-3 text-left font-semibold">User</th><th className="px-4 py-3 text-left font-semibold">Role</th><th className="px-4 py-3 text-center font-semibold">Access</th><th className="px-4 py-3 text-center font-semibold">Subscription</th><th className="px-4 py-3 text-left font-semibold">Subscription end</th><th className="px-4 py-3 text-left font-semibold">Added</th><th className="px-4 py-3 text-right font-semibold">Profile</th>
+                <th className="px-5 py-3 text-left font-semibold">User</th><th className="px-4 py-3 text-left font-semibold">Role</th><th className="px-4 py-3 text-center font-semibold">Access</th><th className="px-4 py-3 text-left font-semibold">Added</th><th className="px-4 py-3 text-right font-semibold">Profile</th>
               </tr></thead>
               <tbody>{filtered.map((u) => (
                 <tr key={u.id} data-testid={`row-user-${u.id}`} className="border-b last:border-0 transition-colors hover:bg-[#f7faf7]">
                   <td className="px-5 py-3.5"><div className="flex items-center gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e6eee4] text-xs font-bold text-[#315644]">{u.name.split(/\s+/).map((n) => n[0]).slice(0, 2).join("").toUpperCase()}</div><div><div className="font-semibold text-foreground">{u.name}</div><div className="mt-0.5 text-xs text-muted-foreground">{u.email}</div></div></div></td>
                   <td className="px-4 py-3.5"><span className="rounded-md bg-[#eef2ed] px-2 py-1 text-xs font-medium capitalize text-[#53675a]">{u.role}</span></td>
                   <td className="px-4 py-3.5 text-center"><span className={`inline-flex items-center gap-1.5 text-xs font-medium ${u.isActive ? "text-emerald-700" : "text-rose-700"}`}><span className={`h-1.5 w-1.5 rounded-full ${u.isActive ? "bg-emerald-600" : "bg-rose-600"}`} />{u.isActive ? "Active" : "Inactive"}</span></td>
-                  <td className="px-4 py-3.5 text-center"><span className={`rounded-full border px-2.5 py-1 text-xs font-medium capitalize ${statusBadge(u.subscriptionStatus ?? "")}`}>{u.subscriptionStatus || "—"}</span></td>
-                  <td className="px-4 py-3.5 text-xs text-muted-foreground">{formatDate(u.subscriptionEnd)}</td>
                   <td className="px-4 py-3.5 text-xs text-muted-foreground">{formatDate(u.createdAt)}</td>
                   <td className="px-4 py-3.5 text-right"><Link href={`/admin/users/${u.id}`} data-testid={`link-user-profile-${u.id}`} className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/5">View <ChevronRight className="h-3.5 w-3.5" /></Link></td>
                 </tr>

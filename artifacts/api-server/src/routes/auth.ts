@@ -159,23 +159,26 @@ export async function pruneRevokedTokens(): Promise<number> {
 const PLAN_EXPIRED_MESSAGE =
   "Plan Expired. Please contact Admin to renew your subscription.";
 
+const dayPassed = (day: string | null) => {
+  if (!day) return false;
+  const end = new Date(`${day}T23:59:59.999Z`);
+  return !Number.isNaN(end.getTime()) && end.getTime() < Date.now();
+};
+
 /**
- * Whether a user's subscription has lapsed. Admins are not subscribers, and a
- * null `subscriptionEnd` means "no end date", so neither expires.
+ * Plans belong to administrators: the superadmin sets an end date on each
+ * admin (`subscriptionEnd` on the admin's row). Once it passes, that admin and
+ * every user they created are refused. The superadmin has no plan.
  */
-export function isSubscriptionExpired(user: {
-  role: string;
-  subscriptionEnd: string | null;
-  subscriptionStatus?: string | null;
-}): boolean {
-  if (user.role === "admin" || user.role === "superadmin") return false;
-  // Marking an account "expired" used to do nothing unless an end date was also
-  // set and had passed: the status was stored and never read.
-  if (user.subscriptionStatus === "expired") return true;
-  if (!user.subscriptionEnd) return false;
-  const end = new Date(`${user.subscriptionEnd}T23:59:59.999Z`);
-  if (Number.isNaN(end.getTime())) return false;
-  return end.getTime() < Date.now();
+export async function isPlanExpired(user: { role: string; subscriptionEnd: string | null; subscriptionStatus: string | null; createdByAdminId: number | null }): Promise<boolean> {
+  if (user.role === "superadmin") return false;
+  if (user.role === "admin") return dayPassed(user.subscriptionEnd);
+  // Older per-user settings still count if someone set them; the UI no longer offers them.
+  if (user.subscriptionStatus === "expired" || dayPassed(user.subscriptionEnd)) return true;
+  if (!user.createdByAdminId) return false;
+  const [admin] = await db.select({ subscriptionEnd: usersTable.subscriptionEnd })
+    .from(usersTable).where(eq(usersTable.id, user.createdByAdminId)).limit(1);
+  return dayPassed(admin?.subscriptionEnd ?? null);
 }
 
 /**
@@ -224,7 +227,7 @@ export async function requireAuth(req: any, res: any, next: any) {
   if (!user.isActive) {
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
   }
-  if (isSubscriptionExpired(user)) {
+  if ((await isPlanExpired(user))) {
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
   }
 
@@ -295,8 +298,33 @@ export function requireSuperadmin(req: any, res: any, next: any) {
  * checking, so a user with no business produced a query against a null tenant
  * rather than a clean error. Chain this after `requireAuth` instead.
  */
-export function requireBusiness(req: any, res: any, next: any) {
-  const businessId = req.user?.businessId ?? null;
+/**
+ * `?asUser=<id>` lets an administrator read one of their users' records
+ * (invoices, purchases, reports) through the ordinary routes. Read-only: any
+ * other method is refused. An admin reaches only users they created; the
+ * superadmin reaches any business user.
+ */
+async function viewedBusinessId(req: any): Promise<number | { status: number; error: string }> {
+  const id = Number(req.query.asUser);
+  if (!Number.isInteger(id) || id <= 0) return { status: 400, error: "Invalid asUser" };
+  if (req.method !== "GET") return { status: 403, error: "Viewing another user's records is read-only." };
+  if (!hasAdminAccess(req.user)) return { status: 403, error: "Forbidden" };
+  const [target] = await db.select().from(usersTable)
+    .where(and(eq(usersTable.id, id), eq(usersTable.role, "user"), isNull(usersTable.deletedAt))).limit(1);
+  if (!target || (req.user.role === "admin" && target.createdByAdminId !== req.user.id)) {
+    return { status: 404, error: "User not found" };
+  }
+  if (!target.businessId) return { status: 400, error: "This user has no business yet." };
+  return target.businessId;
+}
+
+export async function requireBusiness(req: any, res: any, next: any) {
+  let businessId = req.user?.businessId ?? null;
+  if (req.query?.asUser !== undefined) {
+    const viewed = await viewedBusinessId(req);
+    if (typeof viewed !== "number") return res.status(viewed.status).json({ error: viewed.error });
+    businessId = viewed;
+  }
   if (!businessId) return res.status(400).json({ error: "No business" });
   req.businessId = businessId;
   // Before the scope is opened, so a rejected request never takes a pooled
@@ -365,7 +393,7 @@ router.post("/login", authIpLimiter, validateBody(LoginBody), async (req: Req, r
     }
   }
 
-  if (!user.isActive || isSubscriptionExpired(user)) {
+  if (!user.isActive || (await isPlanExpired(user))) {
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
   }
 
@@ -434,7 +462,7 @@ router.post("/mfa/login", authIpLimiter, validateBody(MfaLoginBody), async (req:
   if (!user || user.deletedAt || !user.mfaEnabledAt || (payload.v ?? 0) !== user.tokenVersion) {
     return res.status(401).json(MFA_SIGN_IN_EXPIRED);
   }
-  if (!user.isActive || isSubscriptionExpired(user)) {
+  if (!user.isActive || (await isPlanExpired(user))) {
     return res.status(403).json({ error: PLAN_EXPIRED_MESSAGE });
   }
 

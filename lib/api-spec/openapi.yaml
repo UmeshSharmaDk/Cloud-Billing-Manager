@@ -1505,6 +1505,35 @@ paths:
                 $ref: "#/components/schemas/AdminAccount"
         "404": { description: Admin account not found }
 
+  /superadmin/admins/{id}/plan:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    patch:
+      operationId: updateSuperadminAdminPlan
+      tags: [superadmin]
+      summary: Set or clear an admin's plan end date
+      description: >-
+        After the end date the admin and every user they created are refused at
+        sign-in and on every request. Requires the superadmin's own password.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [planEnd, confirmPassword]
+              properties:
+                planEnd: { type: string, format: date, nullable: true }
+                confirmPassword: { type: string }
+      responses:
+        "200":
+          description: Updated admin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "403": { description: Password confirmation required or incorrect }
+        "404": { description: Admin not found }
+
   /superadmin/admins/{id}/mfa-reset:
     parameters:
       - { in: path, name: id, required: true, schema: { type: integer } }
@@ -1906,6 +1935,10 @@ components:
         availableSlots: { type: integer }
         createdAt: { type: string }
         additionalUserPriceInr: { type: integer }
+        subscriptionEnd:
+          type: string
+          nullable: true
+          description: Last day the admin and their users may sign in.
 
     AdminAccountsResponse:
       type: object
@@ -2014,6 +2047,12 @@ components:
       properties:
         name:
           type: string
+        businessName:
+          type: string
+          description: Name of the business created with the account. Defaults to the user's name.
+        gstin:
+          type: string
+          nullable: true
         email:
           type: string
         password:

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { ScrollView, Text, View } from "react-native";
-import { api } from "@/lib/api";
+import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import type { Purchase } from "@/lib/types";
@@ -10,8 +10,9 @@ import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill } from "@/
 const STATUSES = ["unpaid", "partial", "paid"] as const;
 
 export default function PurchaseDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const q = useQuery({ queryKey: [`/purchases/${id}`], queryFn: () => api<Purchase>(`/purchases/${encodeURIComponent(id)}`) });
+  const { id, asUser } = useLocalSearchParams<{ id: string; asUser?: string }>();
+  const path = viewAs(`/purchases/${encodeURIComponent(id)}`, asUser);
+  const q = useQuery({ queryKey: [path], queryFn: () => api<Purchase>(path) });
   const { busy, run } = useSave();
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
@@ -24,7 +25,7 @@ export default function PurchaseDetail() {
         <Row label="Bill number" value={p.invoiceNumber} />
         <Row label="Bill date" value={date(p.invoiceDate)} />
       </Card>
-      {p.status !== "cancelled" && (
+      {!asUser && p.status !== "cancelled" && (
         <View style={{ flexDirection: "row", gap: 8 }}>
           {STATUSES.filter((x) => x !== p.status).map((x) => (
             <View key={x} style={{ flex: 1 }}>

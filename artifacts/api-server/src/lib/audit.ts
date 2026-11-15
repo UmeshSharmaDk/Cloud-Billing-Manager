@@ -36,6 +36,7 @@ export type AuditAction =
   | "user.mfa_recovery_code_used"
   | "admin.invitation_sent"
   | "admin.user_limit_changed"
+  | "admin.plan_end_changed"
   | "capacity_request.created"
   | "capacity_request.approved"
   | "capacity_request.declined";

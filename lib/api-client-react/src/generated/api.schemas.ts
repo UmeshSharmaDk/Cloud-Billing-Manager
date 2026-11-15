@@ -248,6 +248,8 @@ export interface AdminAccount {
   availableSlots: number;
   createdAt: string;
   additionalUserPriceInr?: number;
+  /** Last day the admin and their users may sign in. */
+  subscriptionEnd?: string | null;
 }
 
 export interface AdminAccountsResponse {

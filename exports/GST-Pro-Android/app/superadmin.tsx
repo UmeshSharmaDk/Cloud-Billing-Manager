@@ -6,12 +6,12 @@ import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import { Button, Card, colors, ErrorView, Field, Loading, PasswordPrompt, Prompt, Row, s, StatusPill } from "@/lib/ui";
-import { AccountCard } from "./(tabs)/more";
+import { AccountCard, MenuLink } from "./(tabs)/more";
 import { Stat, type CapacityRequest } from "./admin";
 
-type Admin = { id: number; name: string; email: string; isActive: boolean; mfaEnabled?: boolean; userLimit: number; userCount: number; availableSlots: number };
+type Admin = { id: number; name: string; email: string; isActive: boolean; mfaEnabled?: boolean; userLimit: number; userCount: number; availableSlots: number; subscriptionEnd?: string | null };
 type Invite = { id: number; name: string; email: string; userLimit: number; expiresAt: string };
-type Ask = { title: string; message: string; then: (v: string) => void };
+type Ask = { title: string; message: string; date?: boolean; then: (v: string) => void };
 const whole = (v: string) => (/^\d+$/.test(v.trim()) ? Number(v) : null);
 
 export default function Superadmin() {
@@ -43,6 +43,15 @@ export default function Superadmin() {
     title: `User limit for ${a.name}`, message: `They have ${a.userCount} users now.`,
     then: (v) => { const n = whole(v); if (n === null) return Alert.alert("Enter a whole number"); privileged((pw) => api(`/superadmin/admins/${a.id}/limit`, { method: "PATCH", body: { userLimit: n, confirmPassword: pw } })); },
   });
+  const editPlan = (a: Admin) => setAsk({
+    title: `Plan end for ${a.name}`, date: true,
+    message: `Last day ${a.name} and their users can sign in, as YYYY-MM-DD, or type "none" for no end date.${a.subscriptionEnd ? ` Now: ${date(a.subscriptionEnd)}.` : ""}`,
+    then: (v) => {
+      const day = v.trim().toLowerCase() === "none" ? "" : v.trim();
+      if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return Alert.alert("Enter the date as YYYY-MM-DD");
+      privileged((pw) => api(`/superadmin/admins/${a.id}/plan`, { method: "PATCH", body: { planEnd: day || null, confirmPassword: pw } }));
+    },
+  });
   const approve = (r: CapacityRequest) => setAsk({
     title: `Approve ${r.adminName}`, message: `They asked for ${r.additionalUsers} more users. Enter their new total user limit.`,
     then: (v) => { const n = whole(v); if (n === null) return Alert.alert("Enter a whole number"); privileged((pw) => api(`/superadmin/capacity-requests/${r.id}/review`, { method: "PATCH", body: { decision: "approve", userLimit: n, confirmPassword: pw } })); },
@@ -58,6 +67,11 @@ export default function Superadmin() {
         <Stat label="Active admins" value={d.admins.filter((a) => a.isActive).length} />
         <Stat label="Users under admins" value={d.admins.reduce((n, a) => n + a.userCount, 0)} />
         <Stat label="Extra user price" value={money(d.additionalUserPriceInr)} />
+      </View>
+
+      <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
+        <MenuLink title="Manage and edit users" icon="people-outline" href="/admin/users" />
+        <MenuLink title="Add a user" icon="person-add-outline" href="/admin/new-user" />
       </View>
 
       <Card title="Capacity requests">
@@ -85,7 +99,9 @@ export default function Superadmin() {
             </View>
             <Text style={s.muted}>{a.email}</Text>
             <Row label="Users / limit" value={`${a.userCount} / ${a.userLimit} (${a.availableSlots} free)`} />
+            <Row label="Plan ends" value={a.subscriptionEnd ? date(a.subscriptionEnd) : "No end date"} />
             <Text style={s.muted}>{a.mfaEnabled ? "Two-factor on" : "Two-factor not set up"}</Text>
+            <Button title="Set plan end date" variant="outline" onPress={() => editPlan(a)} />
             <Button title="Change user limit" variant="outline" onPress={() => editLimit(a)} />
             {a.mfaEnabled && (
               <Button title="Reset two-factor" variant="outline" onPress={() => privileged((pw) => api(`/superadmin/admins/${a.id}/mfa-reset`, { method: "POST", body: { confirmPassword: pw } }),
@@ -106,7 +122,7 @@ export default function Superadmin() {
       </Card>
 
       <AccountCard />
-      <Prompt visible={!!ask} numeric title={ask?.title ?? ""} message={ask?.message ?? ""} placeholder="User limit"
+      <Prompt visible={!!ask} numeric={!ask?.date} title={ask?.title ?? ""} message={ask?.message ?? ""} placeholder={ask?.date ? "YYYY-MM-DD" : "User limit"}
         onCancel={() => setAsk(null)} onSubmit={(v) => { const a = ask; setAsk(null); a?.then(v); }} />
       <PasswordPrompt visible={!!confirm} title="Confirm this change" busy={busy} onCancel={() => setConfirm(null)} onSubmit={(pw) => confirm?.(pw)} />
     </ScrollView>

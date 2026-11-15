@@ -57,7 +57,7 @@ router.get("/", requireAdmin, validateQuery(ListUsersQuery), async (req: Req, re
 });
 
 router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, res) => {
-  const { name, email, password, role, subscriptionStatus, subscriptionEnd } = req.body;
+  const { name, email, password, role, subscriptionStatus, subscriptionEnd, businessName, gstin } = req.body;
   if (!name || !email || !password || !role) return res.status(400).json({ error: "Required fields missing" });
 
   if (req.userRole === "admin" && role !== "user") {
@@ -115,7 +115,14 @@ router.post("/", requireAdmin, validateBody(CreateUserBody), async (req: Req, re
       subscriptionEnd,
       createdByAdminId: req.userRole === "admin" ? req.user.id : null,
     }).returning();
-    return { kind: "created" as const, user };
+    // Same as self-registration: the account gets its own business, or every
+    // business route answers "No business". The user edits it in Settings.
+    const [business] = await tx.insert(businessesTable).values({
+      userId: user.id, name: businessName?.trim() || name, gstin: gstin || null, invoicePrefix: "INV",
+    }).returning();
+    const [linked] = await tx.update(usersTable).set({ businessId: business.id })
+      .where(eq(usersTable.id, user.id)).returning();
+    return { kind: "created" as const, user: linked };
   });
 
   if (result.kind === "manager-missing") {
