@@ -13,6 +13,14 @@ on:
   push:
     branches:
       - "release/android-*"
+      - main
+    # On main, only native changes need a new APK; JavaScript changes reach
+    # phones over the air (android-app-update.yml).
+    paths:
+      - "exports/GST-Pro-Android/package.json"
+      - "exports/GST-Pro-Android/app.json"
+      - "scripts/refresh-android-build.mjs"
+      - ".github/workflows/android-apk.yml"
   pull_request:
     paths:
       - "exports/GST-Pro-Android/**"
@@ -178,3 +186,40 @@ jobs:
       - name: Remove the signing key
         if: always()
         run: rm -f "$RUNNER_TEMP/gstpro-internal.jks"
+
+    outputs:
+      apk: ${{ steps.verify.outputs.apk }}
+
+  # Offers the APK to installed apps: they read latest.json from the public
+  # android-app release through /api/app/android/latest. Only builds of main
+  # are offered. A separate job, so the write token never meets the signing key.
+  publish:
+    needs: apk
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APK: ${{ needs.apk.outputs.apk }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.apk.outputs.apk }}
+      - name: Publish to the android-app release
+        run: |
+          set -e
+          CODE=$(echo "$APK" | sed -E 's/.*-build([0-9]+)-.*/\1/')
+          NAME=$(echo "$APK" | sed -E 's/.*-v([0-9.]+)-build.*/\1/')
+          FILE="gstpro-$CODE.apk"
+          cp "$APK" "$FILE"
+          node -e 'const fs=require("fs"),c=require("crypto"),b=fs.readFileSync(process.argv[1]);fs.writeFileSync("latest.json",JSON.stringify({versionCode:+process.argv[2],versionName:process.argv[3],apkFile:process.argv[1],size:b.length,sha256:c.createHash("sha256").update(b).digest("hex"),mandatory:false,publishedAt:new Date().toISOString()},null,2))' "$FILE" "$CODE" "$NAME"
+          cat latest.json
+          gh release view android-app -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create android-app -R "$GITHUB_REPOSITORY" --target main --prerelease \
+            --title "Android app (latest)" --notes "Published by CI. Installed GST Pro apps update themselves from here."
+          # The APK first, so latest.json never names a file that is not there yet.
+          gh release upload android-app "$FILE" -R "$GITHUB_REPOSITORY" --clobber
+          gh release upload android-app latest.json -R "$GITHUB_REPOSITORY" --clobber
+          for old in $(gh release view android-app -R "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -E '^gstpro-[0-9]+\.apk$' | grep -vx "$FILE"); do
+            gh release delete-asset android-app "$old" -R "$GITHUB_REPOSITORY" -y
+          done

@@ -2990,6 +2990,13 @@ const adminEmail = `admin${uniq}@example.test`;
   check("bank", "a paid invoice is no longer suggested", again?.matches?.[0] === null, JSON.stringify(again));
 }
 
+// === App updates ===========================================================
+{
+  const bad = await call("GET", "/updates/manifest", { headers: { "expo-platform": "web", "expo-runtime-version": "1" } });
+  check("app updates", "the update manifest refuses an unknown platform", bad.status === 400);
+  check("app updates", "the APK check needs a signed-in user", (await call("GET", "/app/android/latest")).status === 401);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

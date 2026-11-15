@@ -30,8 +30,10 @@ if (override !== undefined) {
     throw new Error("ANDROID_VERSION_CODE must be a positive whole number.");
   }
   config.expo.android.versionCode = code;
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2) + "\n");
 }
+// Over-the-air updates come from the same server the app talks to.
+config.expo.updates.url = `https://${backendHost}/api/updates/manifest`;
+await fs.writeFile(configPath, JSON.stringify(config, null, 2) + "\n");
 
 // build.gradle is hand-maintained (release signing); keep it across prebuild.
 const gradlePath = path.join(target, "android/app/build.gradle");

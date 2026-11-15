@@ -25,6 +25,9 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
+      "permissions": [
+        "android.permission.REQUEST_INSTALL_PACKAGES"
       ]
     },
     "plugins": [
@@ -33,6 +36,13 @@
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "runtimeVersion": "1",
+    "updates": {
+      "url": "https://billing.myindiatrips.com/api/updates/manifest",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
     }
   }
 }
