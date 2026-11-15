@@ -244,6 +244,15 @@ export default function InvoiceDetailPage() {
             <div className="flex justify-between"><span className="text-gray-600">Branch Name</span><span>{business.bankBranch || "-"}</span></div>
             <div className="flex justify-between"><span className="text-gray-600">Bank Account Number</span><span>{business.bankAccount || "-"}</span></div>
             <div className="flex justify-between"><span className="text-gray-600">Bank Branch IFSC</span><span>{business.bankIfsc || "-"}</span></div>
+            {inv.upi && (
+              <div className="flex items-center gap-3 pt-2">
+                <img src={inv.upi.qr} alt="UPI payment QR code" className="h-24 w-24" />
+                <div>
+                  <p className="font-semibold">Scan to pay {formatCurrency(inv.upi.amount)}</p>
+                  <p className="text-gray-600">Any UPI app · {business.upiId}</p>
+                </div>
+              </div>
+            )}
             <p className="font-semibold pt-2">Terms and Conditions</p>
             <p className="whitespace-pre-line text-[11px]">{business.termsConditions || "1. Goods once sold will not be taken back.\n2. Subject to jurisdiction."}</p>
           </div>

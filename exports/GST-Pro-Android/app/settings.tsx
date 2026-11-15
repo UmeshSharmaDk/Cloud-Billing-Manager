@@ -17,6 +17,7 @@ const fields: FieldSpec[] = [
   { key: "bankAccount", label: "Account number", kind: "phone" },
   { key: "bankIfsc", label: "IFSC code", kind: "upper" },
   { key: "bankBranch", label: "Branch" },
+  { key: "upiId", label: "UPI ID (QR on invoices)", placeholder: "yourshop@okhdfcbank" },
   { key: "invoicePrefix", label: "Invoice prefix", kind: "upper", placeholder: "INV" },
   { key: "termsConditions", label: "Terms & conditions", kind: "multiline" },
 ];

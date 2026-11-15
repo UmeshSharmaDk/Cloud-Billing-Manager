@@ -42,5 +42,7 @@ export interface Business {
   /** @nullable */
   bankBranch?: string | null;
   /** @nullable */
+  upiId?: string | null;
+  /** @nullable */
   termsConditions?: string | null;
 }

@@ -446,6 +446,8 @@ export interface Business {
   /** @nullable */
   bankBranch?: string | null;
   /** @nullable */
+  upiId?: string | null;
+  /** @nullable */
   termsConditions?: string | null;
 }
 
@@ -481,6 +483,8 @@ export interface BusinessUpdate {
   bankIfsc?: string | null;
   /** @nullable */
   bankBranch?: string | null;
+  /** @nullable */
+  upiId?: string | null;
   /** @nullable */
   termsConditions?: string | null;
 }

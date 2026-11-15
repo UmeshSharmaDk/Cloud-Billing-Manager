@@ -304,6 +304,8 @@ export const UpdateBusinessBody = z.object({
   bankAccount: optionalText(50),
   bankIfsc: optionalText(20),
   bankBranch: optionalText(200),
+  // A UPI VPA: handle@provider, the only shape UPI apps accept.
+  upiId: z.union([z.string().trim().regex(/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/, "UPI ID looks like name@bank"), z.literal(""), z.null()]).optional(),
   termsConditions: optionalText(5000),
 });
 

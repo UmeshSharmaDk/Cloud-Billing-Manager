@@ -42,6 +42,7 @@ export function invoiceHtml(inv: Invoice, biz: Business | undefined, cust: Custo
     </table>
     ${inv.notes ? `<p><b>Notes:</b> ${esc(inv.notes)}</p>` : ""}
     ${b.bankName ? `<p><b>Bank:</b> ${addr(b.bankName, b.bankAccount && `A/c ${b.bankAccount}`, b.bankIfsc && `IFSC ${b.bankIfsc}`, b.bankBranch)}</p>` : ""}
+    ${inv.upi ? `<p style="display:flex;align-items:center;gap:12px"><img src="${esc(inv.upi.qr)}" width="110" height="110" alt="UPI QR"><span><b>Scan to pay ${money(inv.upi.amount)}</b><br><span class="muted">Any UPI app</span></span></p>` : ""}
     ${b.termsConditions ? `<p class="muted"><b>Terms:</b> ${esc(b.termsConditions)}</p>` : ""}
     <p class="r" style="margin-top:40px">For ${esc(b.name)}<br><br>Authorised signatory</p>
   </body></html>`;

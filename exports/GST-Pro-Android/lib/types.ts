@@ -78,6 +78,8 @@ export type Invoice = {
   paidAmount?: number;
   notes?: string | null;
   items?: InvoiceItem[];
+  /** Present on a single invoice with a balance due when the business has a UPI ID. */
+  upi?: { link: string; amount: number; qr: string } | null;
 };
 
 export type Product = {

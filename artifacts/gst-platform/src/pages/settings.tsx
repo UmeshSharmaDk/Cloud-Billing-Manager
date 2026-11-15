@@ -92,6 +92,11 @@ export default function SettingsPage() {
               <div className="sm:col-span-2 space-y-2"><Label>Bank Name</Label><Input value={form.bankName || ""} onChange={(e) => set("bankName", e.target.value)} placeholder="HDFC Bank" /></div>
               <div className="space-y-2"><Label>Account Number</Label><Input value={form.bankAccount || ""} onChange={(e) => set("bankAccount", e.target.value)} className="font-mono" /></div>
               <div className="space-y-2"><Label>IFSC Code</Label><Input value={form.bankIfsc || ""} onChange={(e) => set("bankIfsc", e.target.value.toUpperCase())} maxLength={11} className="font-mono" /></div>
+              <div className="sm:col-span-2 space-y-2">
+                <Label>UPI ID</Label>
+                <Input value={form.upiId || ""} onChange={(e) => set("upiId", e.target.value.trim())} placeholder="yourshop@okhdfcbank" className="font-mono" />
+                <p className="text-xs text-muted-foreground">Every unpaid invoice shows a QR code that customers scan in any UPI app to pay the balance.</p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

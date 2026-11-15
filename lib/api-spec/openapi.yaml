@@ -2226,6 +2226,8 @@ components:
           type: ["string", "null"]
         bankBranch:
           type: ["string", "null"]
+        upiId:
+          type: ["string", "null"]
         termsConditions:
           type: ["string", "null"]
 
@@ -2263,6 +2265,8 @@ components:
         bankIfsc:
           type: ["string", "null"]
         bankBranch:
+          type: ["string", "null"]
+        upiId:
           type: ["string", "null"]
         termsConditions:
           type: ["string", "null"]

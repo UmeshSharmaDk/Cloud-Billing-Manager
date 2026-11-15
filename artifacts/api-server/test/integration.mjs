@@ -2990,6 +2990,20 @@ const adminEmail = `admin${uniq}@example.test`;
   check("bank", "a paid invoice is no longer suggested", again?.matches?.[0] === null, JSON.stringify(again));
 }
 
+// === UPI QR on invoices ======================================================
+{
+  const o = await register("upiowner");
+  check("upi", "a malformed UPI ID is refused", (await call("PATCH", "/business", { token: o.token, body: { upiId: "not a vpa" } })).status === 400);
+  check("upi", "a UPI ID is saved", (await call("PATCH", "/business", { token: o.token, body: { upiId: "shop@okhdfcbank" } })).status === 200);
+  const inv = (await call("POST", "/invoices", { token: o.token, body: { invoiceDate: "2026-06-12", customerName: "Walk in", placeOfSupply: "29",
+    items: [{ description: "Goods", quantity: 1, unitPrice: 1000, gstRate: 18 }] } })).data?.invoice;
+  const got = (await call("GET", `/invoices/${inv.id}`, { token: o.token })).data;
+  check("upi", "an unpaid invoice carries a UPI link for its balance",
+    got?.upi?.link?.startsWith("upi://pay?pa=shop%40okhdfcbank") && got.upi.link.includes("am=1180.00") && got.upi.qr?.startsWith("data:image/png"), JSON.stringify(got?.upi?.link));
+  await call("PATCH", `/invoices/${inv.id}/status`, { token: o.token, body: { status: "paid" } });
+  check("upi", "a paid invoice has none", (await call("GET", `/invoices/${inv.id}`, { token: o.token })).data?.upi === null);
+}
+
 // === App updates ===========================================================
 {
   const bad = await call("GET", "/updates/manifest", { headers: { "expo-platform": "web", "expo-runtime-version": "1" } });

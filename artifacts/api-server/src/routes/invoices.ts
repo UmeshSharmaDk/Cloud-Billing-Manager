@@ -10,6 +10,7 @@ import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
 import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
+import QRCode from "qrcode";
 
 import { books } from "../middleware/books";
 
@@ -237,8 +238,23 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   const businessId = req.businessId;
   const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).limit(1);
   if (!invoice) return res.status(404).json({ error: "Not found" });
-  return res.json(mapInvoice(invoice));
+  return res.json({ ...mapInvoice(invoice), upi: await upiPayment(invoice) });
 });
+
+/**
+ * A UPI pay link and its QR for what is still due, when the business has a UPI
+ * ID: any UPI app scans it with the payee, amount and invoice number filled in.
+ */
+async function upiPayment(invoice: any) {
+  const due = dec(invoice.grandTotal).minus(dec(invoice.paidAmount));
+  if (invoice.status === "cancelled" || due.lessThanOrEqualTo(0)) return null;
+  const [business] = await db.select({ name: businessesTable.name, upiId: businessesTable.upiId })
+    .from(businessesTable).where(eq(businessesTable.id, invoice.businessId)).limit(1);
+  if (!business?.upiId) return null;
+  const q = new URLSearchParams({ pa: business.upiId, pn: business.name, am: paise(due).toFixed(2), cu: "INR", tn: `Invoice ${invoice.invoiceNumber}` });
+  const link = `upi://pay?${q.toString().replace(/\+/g, "%20")}`;
+  return { link, amount: toJson(due), qr: await QRCode.toDataURL(link, { margin: 1, width: 240 }) };
+}
 
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
