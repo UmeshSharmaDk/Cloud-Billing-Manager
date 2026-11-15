@@ -1,4 +1,4 @@
-import { Redirect, router } from "expo-router";
+import { Redirect } from "expo-router";
 import { useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -41,9 +41,7 @@ export default function Login() {
           <Text style={s.buttonText}>{busy ? "Signing in…" : "Sign in"}</Text>
         </Pressable>
         <View style={{ height: 8 }} />
-        <Pressable onPress={() => router.push("/register")} accessibilityRole="button">
-          <Text style={{ color: colors.primary, textAlign: "center", fontWeight: "600" }}>New here? Create an account</Text>
-        </Pressable>
+        <Text style={[s.muted, { textAlign: "center" }]}>Accounts are created by your administrator.</Text>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
