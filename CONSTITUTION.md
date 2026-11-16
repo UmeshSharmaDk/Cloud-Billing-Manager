@@ -29,3 +29,11 @@ Every button, on the website and in the app, follows these six rules.
   while the request runs and `disabledReason` when it cannot be pressed yet.
   Use `variant="outline"` for secondary actions. A hand-made `Pressable` that
   acts as a button needs `minHeight: 44` (or `hitSlop` to reach it).
+- App: nothing may sit under the phone's status bar or navigation buttons.
+  Screens get their bottom padding from the root layout. A `Modal` does not,
+  so put its content inside `ModalFrame` from `lib/ui.tsx`.
+
+## Commits and pull requests
+
+No AI tool is named in commit messages, co-author lines, pull request titles
+or descriptions, or code comments.

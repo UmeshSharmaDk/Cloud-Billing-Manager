@@ -143,14 +143,14 @@ function mailTransport():
   // does. It is chosen only by setting a path explicitly — never by omission —
   // so no deployment gets it by forgetting to configure something.
   if (outbox) {
-    return { kind: "file", path: outbox, from: from ?? "GST Platform <no-reply@localhost>" };
+    return { kind: "file", path: outbox, from: from ?? "Billing Pilot <no-reply@localhost>" };
   }
 
   if (url) {
     if (!from) {
       throw new Error(
         `MAIL_FROM is required when ${urlVariable} is set. ` +
-          'Set it to the address mail is sent from, e.g. "GST Platform <no-reply@example.com>".',
+          'Set it to the address mail is sent from, e.g. "Billing Pilot <no-reply@example.com>".',
       );
     }
     return { kind: "smtp", url, from };
@@ -166,7 +166,7 @@ function mailTransport():
     );
   }
 
-  return { kind: "log", from: from ?? "GST Platform <no-reply@localhost>" };
+  return { kind: "log", from: from ?? "Billing Pilot <no-reply@localhost>" };
 }
 
 /**

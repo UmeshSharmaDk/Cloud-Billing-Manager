@@ -1,6 +1,6 @@
-# GST Pro — Android app
+# Billing Pilot — Android app
 
-Native React Native (Expo) client for GST Pro, covering what the website does:
+Native React Native (Expo) client for Billing Pilot, covering what the website does:
 business accounts get invoices (create, payment status, PDF share and print),
 purchases, inventory, customers, vendors, payments, e-way bills, GST reports
 (GSTR-1, GSTR-3B, HSN) and business settings; admins manage their users and

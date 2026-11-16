@@ -35,7 +35,7 @@ export default function Security() {
         <Card title="Save these recovery codes">
           <Text style={s.muted}>Each code signs you in once if you lose your phone. They are shown only now.</Text>
           <Text selectable style={{ fontFamily: "monospace", fontSize: 16, lineHeight: 26 }}>{codes.join("\n")}</Text>
-          <Button title="Share or save" variant="outline" onPress={() => Share.share({ message: `GST Pro recovery codes:\n${codes.join("\n")}` })} />
+          <Button title="Share or save" variant="outline" onPress={() => Share.share({ message: `Billing Pilot recovery codes:\n${codes.join("\n")}` })} />
           <Button title="I saved them, continue" onPress={() => { Alert.alert("Continue?", "You will not see these codes again.", [{ text: "Back", style: "cancel" }, { text: "Continue", onPress: done }]); }} />
         </Card>
       </Form>
@@ -66,7 +66,7 @@ export default function Security() {
           <Button title="Sign out" variant="outline" onPress={signOut} />
         </Card>
       ) : (
-        <Card title="Add GST Pro to your authenticator">
+        <Card title="Add Billing Pilot to your authenticator">
           <Button title="Open authenticator app" onPress={() => Linking.openURL(setup.otpauthUri).catch(() => Alert.alert("No authenticator app found", "Install one, or type the key below into it."))} />
           <Text style={s.muted}>Or scan this code from another device, or type the key by hand:</Text>
           <Image source={{ uri: setup.qrCodeDataUrl }} style={{ width: 200, height: 200, alignSelf: "center" }} />

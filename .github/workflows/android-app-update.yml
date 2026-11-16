@@ -61,7 +61,7 @@ jobs:
           set -e
           R="-R $GITHUB_REPOSITORY"
           gh release view android-app $R >/dev/null 2>&1 || gh release create android-app $R --target main --prerelease \
-            --title "Android app (latest)" --notes "Published by CI. Installed GST Pro apps update themselves from here."
+            --title "Android app (latest)" --notes "Published by CI. Installed Billing Pilot apps update themselves from here."
           # Assets before the manifest, so a phone never reads a manifest whose files are missing.
           gh release upload android-app $R --clobber $(ls | grep -v '^ota-')
           gh release upload android-app $R --clobber ota-*.json

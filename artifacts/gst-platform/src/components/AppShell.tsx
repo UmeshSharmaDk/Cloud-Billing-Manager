@@ -92,7 +92,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </SheetTrigger>
             <SheetContent side="left" className="w-64 p-0 bg-sidebar border-sidebar-border">
               <div className="p-4 border-b border-sidebar-border">
-                <h1 className="text-xl font-bold text-sidebar-foreground tracking-tight">GST Pro</h1>
+                <h1 className="text-xl font-bold text-sidebar-foreground tracking-tight">Billing Pilot</h1>
               </div>
               <div className="p-4">
                 <NavLinks />
@@ -105,7 +105,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             </SheetContent>
           </Sheet>
-          <span className="font-bold text-lg tracking-tight text-foreground">GST Pro</span>
+          <span className="font-bold text-lg tracking-tight text-foreground">Billing Pilot</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="text-sm font-medium text-muted-foreground truncate max-w-[120px]">
@@ -120,7 +120,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="h-16 flex items-center px-6 border-b border-sidebar-border">
           <h1 className="text-2xl font-bold text-sidebar-foreground tracking-tight flex items-center gap-2">
             <Shield className="w-6 h-6 text-primary" />
-            GST Pro
+            Billing Pilot
           </h1>
         </div>
         <div className="flex-1 p-4 overflow-y-auto">

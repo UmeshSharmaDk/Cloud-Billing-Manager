@@ -113,7 +113,7 @@ export function schedulePlanReminders(userId: number, endDate: string | null, co
     const ids: string[] = [];
     const book = async (daysRemaining: number, trigger: Notifications.NotificationTriggerInput) => {
       ids.push(await Notifications.scheduleNotificationAsync({
-        content: { title: "GST Pro plan reminder", body: `${blockedMessage(daysRemaining)} ${contact}`, data: { type: REMINDER_TYPE, userId, endDate } },
+        content: { title: "Billing Pilot plan reminder", body: `${blockedMessage(daysRemaining)} ${contact}`, data: { type: REMINDER_TYPE, userId, endDate } },
         trigger,
       }));
     };

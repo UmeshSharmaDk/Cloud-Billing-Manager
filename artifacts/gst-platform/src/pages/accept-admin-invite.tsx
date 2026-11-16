@@ -70,7 +70,7 @@ export default function AcceptAdminInvitePage() {
           <div className="relative">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-white/10"><ShieldCheck className="h-5 w-5 text-brand-cyan" /></div>
-              <div><p className="text-sm font-semibold tracking-wide">GST Pro</p><p className="text-[10px] uppercase tracking-[.17em] text-white/60">Cloud billing</p></div>
+              <div><p className="text-sm font-semibold tracking-wide">Billing Pilot</p><p className="text-[10px] uppercase tracking-[.17em] text-white/60">Cloud billing</p></div>
             </div>
             <div className="mt-10 max-w-sm md:mt-24">
               <p className="text-[11px] font-semibold uppercase tracking-[.17em] text-brand-cyan">Administrator access</p>

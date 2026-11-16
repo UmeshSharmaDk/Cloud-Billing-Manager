@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { colors } from "@/lib/ui";
+import { colors, ModalFrame } from "@/lib/ui";
 
 /** How often a running app looks again after coming back to the foreground. */
 const APK_CHECK_INTERVAL_MS = 60 * 60 * 1000;
@@ -123,15 +123,16 @@ export function AppUpdates() {
   const r = release!;
   return (
     <Modal visible transparent animationType="fade" onRequestClose={() => { if (!r.mandatory) setDismissedCode(r.versionCode); }}>
+      <ModalFrame backgroundColor="rgba(15,23,42,0.5)">
       <View style={s.overlay}>
         <View style={s.card}>
           <Ionicons name="cloud-download-outline" size={32} color={colors.primary} />
           <Text style={s.title}>{r.mandatory ? "Update required" : "Update available"}</Text>
           <Text style={s.body}>
-            GST Pro {r.versionName} (build {r.versionCode}) is ready to install.
+            Billing Pilot {r.versionName} (build {r.versionCode}) is ready to install.
             {r.mandatory ? " This version is needed to keep using the app." : ""}
           </Text>
-          <Text style={[s.muted, s.center]}>If Android asks, allow GST Pro to install apps, then tap Update.</Text>
+          <Text style={[s.muted, s.center]}>If Android asks, allow Billing Pilot to install apps, then tap Update.</Text>
           {error && <Text style={s.error}>{error}</Text>}
           {progress !== null ? (
             <View style={s.row}>
@@ -152,6 +153,7 @@ export function AppUpdates() {
           )}
         </View>
       </View>
+      </ModalFrame>
     </Modal>
   );
 }
@@ -169,7 +171,7 @@ async function clearOldDownloads() {
 }
 
 const s = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "center", padding: 24 },
+  overlay: { flex: 1, justifyContent: "center", padding: 24 },
   card: { backgroundColor: colors.card, borderRadius: 16, padding: 22, alignItems: "center", gap: 8 },
   title: { fontSize: 19, fontWeight: "700", color: colors.text },
   body: { fontSize: 14, color: colors.text, textAlign: "center" },

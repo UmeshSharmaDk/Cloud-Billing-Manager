@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "GST Pro",
+    "name": "Billing Pilot",
     "slug": "gstpro",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -37,7 +37,7 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "GST Pro uses the camera to photograph bills and bank statements for import.",
+          "cameraPermission": "Billing Pilot uses the camera to photograph bills and bank statements for import.",
           "photosPermission": false,
           "microphonePermission": false
         }
@@ -46,7 +46,7 @@
     "experiments": {
       "typedRoutes": false
     },
-    "runtimeVersion": "2",
+    "runtimeVersion": "3",
     "updates": {
       "url": "https://billing.myindiatrips.com/api/updates/manifest",
       "enabled": true,
