@@ -1,10 +1,8 @@
 import * as Application from "expo-application";
-import { currentUpdateLabel } from "@/lib/AppUpdates";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Constants from "expo-constants";
 import { router, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { API_BASE } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { date } from "@/lib/format";
 import { Button, colors, Row, s } from "@/lib/ui";
@@ -38,9 +36,7 @@ export function AccountCard() {
         <Row label="Email" value={user?.email ?? ""} />
         <Row label="Role" value={user?.role ?? ""} />
         {!!user?.subscriptionEnd && <Row label="Plan ends" value={date(user.subscriptionEnd)} />}
-        <Row label="Server" value={API_BASE.replace("https://", "")} />
         <Row label="App version" value={`${Constants.expoConfig?.version ?? ""} (build ${Application.nativeBuildVersion ?? "?"})`} />
-        {currentUpdateLabel() && <Row label="Updates" value={currentUpdateLabel()!} />}
       </View>
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
         <MenuLink title="Password and sessions" icon="key-outline" href="/password" />
