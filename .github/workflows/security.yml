@@ -234,6 +234,9 @@ jobs:
       # 40-request burst from one address, so it needs the same headroom. The
       # per-recipient mail budget is fixed and is what the suite asserts on.
       REGISTER_RATE_LIMIT_MAX: "500"
+      # Public sign-up is closed in production; the suite creates its test
+      # businesses through it, so it is opened for this job only.
+      ALLOW_PUBLIC_REGISTRATION: "true"
       # Registration is two steps now: the response cannot say whether an
       # address is taken, so the outcome is emailed. The server writes mail to
       # this file instead of sending it and the suite reads the verification
@@ -392,7 +395,7 @@ jobs:
             APP_DATABASE_URL="$APP_DATABASE_URL" SESSION_SECRET="$(openssl rand -base64 48)" \
             ALLOWED_ORIGINS="$ALLOWED_ORIGINS" MAIL_OUTBOX_PATH="$MAIL_OUTBOX_PATH" MAIL_FROM="$MAIL_FROM" \
             DISABLE_BREACH_CHECK="$DISABLE_BREACH_CHECK" AUTH_RATE_LIMIT_MAX="$AUTH_RATE_LIMIT_MAX" \
-            REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" \
+            REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" ALLOW_PUBLIC_REGISTRATION="$ALLOW_PUBLIC_REGISTRATION" \
             node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
           echo $! > /tmp/api.pid
           timeout 60 bash -c 'until curl -sf http://127.0.0.1:8099/api/healthz >/dev/null; do sleep 1; done'

@@ -1,6 +1,6 @@
 import { Redirect } from "expo-router";
 import { useState } from "react";
-import { KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
+import { Image, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/lib/auth";
 import { colors, s } from "@/lib/ui";
@@ -33,7 +33,11 @@ export default function Login() {
   return (
     <SafeAreaView style={s.screen}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1, justifyContent: "center", padding: 24, gap: 14 }}>
-        <Text style={{ fontSize: 32, fontWeight: "800", color: colors.primary }}>Billing Pilot</Text>
+        {/* The logo's dark lettering needs a white plate to stay readable in dark mode. */}
+        <View style={{ backgroundColor: "#ffffff", borderRadius: 16, padding: 12 }}>
+          <Image source={require("../assets/images/logo.png")} accessibilityLabel="Billing Pilot" resizeMode="contain"
+            style={{ width: "100%", height: undefined, aspectRatio: 900 / 303 }} />
+        </View>
         <Text style={s.muted}>Sign in to your business account</Text>
         {mfaToken ? (
           <>
