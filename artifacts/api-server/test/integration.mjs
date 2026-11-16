@@ -3029,6 +3029,30 @@ const adminEmail = `admin${uniq}@example.test`;
   check("app updates", "the APK check needs a signed-in user", (await call("GET", "/app/android/latest")).status === 401);
 }
 
+// === PDF bills from the app: the server reads the text, saving moves stock ===
+{
+  const u = await register("pdfimport");
+  const pdf = fs.readFileSync(new URL("./fixtures/bill.pdf", import.meta.url));
+  const send = (body, token = u.token, type = "application/pdf") =>
+    fetch(`${B}/import/pdf-text`, { method: "POST", headers: { "content-type": type, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body })
+      .then(async (r) => ({ status: r.status, data: await r.json().catch(() => null) }));
+  check("pdf import", "reading a PDF needs a signed-in user", (await send(pdf, null)).status === 401);
+  const read = await send(pdf);
+  check("pdf import", "a bill's rows come back one per line",
+    read.status === 200 && read.data?.text?.split("\n").includes("1 Steel Rod 7214 10 Nos 250.00 18 2500.00"), `status ${read.status}`);
+  check("pdf import", "a file that is not a PDF is refused", (await send(Buffer.from("not a pdf"))).status === 422);
+  check("pdf import", "and so is an empty body", (await send(Buffer.alloc(0))).status === 400);
+  check("pdf import", "and one over 10 MB", (await send(Buffer.alloc(11 * 1024 * 1024))).status === 413);
+
+  // What the app then posts: imported lines carry no productId, as on the website.
+  sqlExec(`UPDATE businesses SET state_code = '27' WHERE user_id = ${u.userId}`);
+  const vendor = await call("POST", "/vendors", { token: u.token, body: { name: "Shree Steel Traders", gstin: "27ABCDE1234F1Z5" } });
+  const bill = await call("POST", "/purchases", { token: u.token, body: { vendorId: vendor.data?.id, billNumber: "ST/2026/118", billDate: "2026-11-05",
+    items: [{ productId: null, description: "Steel Rod", hsnCode: "7214", quantity: 10, unit: "Nos", unitPrice: 250, gstRate: 18 }] } });
+  const stock = (await call("GET", "/products?limit=100", { token: u.token })).data?.products?.find((p) => p.name === "Steel Rod");
+  check("pdf import", "saving the imported bill adds the product with its stock", bill.status === 201 && Number(stock?.stockQuantity) === 10, `status ${bill.status}, stock ${stock?.stockQuantity}`);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

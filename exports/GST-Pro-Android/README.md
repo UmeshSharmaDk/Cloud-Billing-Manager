@@ -7,7 +7,7 @@ purchases, inventory, customers, vendors, payments, e-way bills, GST reports
 capacity; the superadmin manages admins, invitations and capacity requests.
 
 Bills and bank statements are imported from a photo (on-device OCR), an image,
-Excel or CSV; PDFs are imported on the website. The link in admin-invite emails
+Excel, CSV or PDF (the server reads the PDF's text: POST /import/pdf-text). The link in admin-invite emails
 opens the website to set a password before signing in here. There is no sign-up: admins create user accounts.
 
 It talks to the API with a bearer token kept in the device keystore
