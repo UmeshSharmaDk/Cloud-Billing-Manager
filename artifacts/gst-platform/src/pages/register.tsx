@@ -69,14 +69,14 @@ export default function RegisterPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary text-primary-foreground mb-4 shadow-lg">
             <Shield className="w-8 h-8" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground">GST Pro</h1>
+          <h1 className="text-3xl font-bold text-foreground">Billing Pilot</h1>
           <p className="text-muted-foreground mt-1">Start your free trial today</p>
         </div>
 
         <Card className="shadow-xl border-border/50">
           <CardHeader className="pb-4">
             <CardTitle className="text-xl">Create an account</CardTitle>
-            <CardDescription>Set up your business on GST Pro</CardDescription>
+            <CardDescription>Set up your business on Billing Pilot</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">

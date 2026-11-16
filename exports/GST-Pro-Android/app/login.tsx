@@ -33,7 +33,7 @@ export default function Login() {
   return (
     <SafeAreaView style={s.screen}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1, justifyContent: "center", padding: 24, gap: 14 }}>
-        <Text style={{ fontSize: 32, fontWeight: "800", color: colors.primary }}>GST Pro</Text>
+        <Text style={{ fontSize: 32, fontWeight: "800", color: colors.primary }}>Billing Pilot</Text>
         <Text style={s.muted}>Sign in to your business account</Text>
         {mfaToken ? (
           <>

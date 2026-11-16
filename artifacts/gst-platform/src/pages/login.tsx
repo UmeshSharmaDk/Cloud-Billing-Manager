@@ -64,7 +64,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary text-primary-foreground mb-4 shadow-lg">
             <Shield className="w-8 h-8" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground">GST Pro</h1>
+          <h1 className="text-3xl font-bold text-foreground">Billing Pilot</h1>
           <p className="text-muted-foreground mt-1">India's GST Billing & Inventory Platform</p>
         </div>
 

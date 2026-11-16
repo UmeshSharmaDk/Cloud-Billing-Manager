@@ -168,11 +168,11 @@ export async function checkMailTransport(): Promise<void> {
 export function verificationMessage(to: string, link: string): Message {
   return {
     to,
-    subject: "Confirm your GST Platform account",
+    subject: "Confirm your Billing Pilot account",
     text: [
       "Hello,",
       "",
-      "Someone — we hope you — asked to create a GST Platform account with this",
+      "Someone — we hope you — asked to create a Billing Pilot account with this",
       "address. Open the link below to finish setting it up and choose a password:",
       "",
       link,
@@ -196,11 +196,11 @@ export function verificationMessage(to: string, link: string): Message {
 export function alreadyRegisteredMessage(to: string): Message {
   return {
     to,
-    subject: "Someone tried to register your GST Platform address",
+    subject: "Someone tried to register your Billing Pilot address",
     text: [
       "Hello,",
       "",
-      "Someone asked to create a GST Platform account using this address, but it",
+      "Someone asked to create a Billing Pilot account using this address, but it",
       "already has one. No second account was created and nothing has changed.",
       "",
       "If this was you, sign in as usual — or use the password reset if you have",
@@ -217,11 +217,11 @@ export function alreadyRegisteredMessage(to: string): Message {
 export function adminInvitationMessage(to: string, link: string): Message {
   return {
     to,
-    subject: "Set up your GST Pro administrator account",
+    subject: "Set up your Billing Pilot administrator account",
     text: [
       "Hello,",
       "",
-      "You have been invited to manage users in GST Pro.",
+      "You have been invited to manage users in Billing Pilot.",
       "Open the one-time link below to choose a password and activate your account:",
       "",
       link,

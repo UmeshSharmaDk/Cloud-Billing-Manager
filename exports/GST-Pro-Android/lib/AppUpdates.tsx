@@ -129,10 +129,10 @@ export function AppUpdates() {
           <Ionicons name="cloud-download-outline" size={32} color={colors.primary} />
           <Text style={s.title}>{r.mandatory ? "Update required" : "Update available"}</Text>
           <Text style={s.body}>
-            GST Pro {r.versionName} (build {r.versionCode}) is ready to install.
+            Billing Pilot {r.versionName} (build {r.versionCode}) is ready to install.
             {r.mandatory ? " This version is needed to keep using the app." : ""}
           </Text>
-          <Text style={[s.muted, s.center]}>If Android asks, allow GST Pro to install apps, then tap Update.</Text>
+          <Text style={[s.muted, s.center]}>If Android asks, allow Billing Pilot to install apps, then tap Update.</Text>
           {error && <Text style={s.error}>{error}</Text>}
           {progress !== null ? (
             <View style={s.row}>

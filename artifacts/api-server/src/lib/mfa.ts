@@ -93,7 +93,7 @@ export function matchTotp(secret: string, code: string, nowMs = Date.now()): num
 }
 
 export function otpauthUri(secret: string, accountEmail: string): string {
-  const issuer = "GST Pro";
+  const issuer = "Billing Pilot";
   const label = encodeURIComponent(`${issuer}:${accountEmail}`);
   return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`;
 }
