@@ -30,7 +30,7 @@ export default function BankImport() {
   const [reading, setReading] = useState(false);
   const { busy, run } = useSave();
 
-  const load = async (pick: typeof takePhoto) => {
+  const load = async (pick: () => ReturnType<typeof takePhoto>) => {
     try {
       const file = await pick();
       if (!file) return;
@@ -67,10 +67,10 @@ export default function BankImport() {
       <Stack.Screen options={{ title: "Import bank statement" }} />
       <Card title="Statement">
         <Text style={{ color: colors.muted, fontSize: 13 }}>
-          Pick the Excel or CSV statement from your bank, or photograph a printed one. Each line is matched to an unpaid invoice or bill by its number in the narration, or by an amount only one of them is due. Nothing is saved until you press Record.
+          Pick the PDF, Excel or CSV statement from your bank, or photograph a printed one. Each line is matched to an unpaid invoice or bill by its number in the narration, or by an amount only one of them is due. Nothing is saved until you press Record.
         </Text>
         <View style={{ flexDirection: "row", gap: 8 }}>
-          <View style={{ flex: 1 }}><Button title="Choose file" busy={reading} onPress={() => load(chooseFile)} /></View>
+          <View style={{ flex: 1 }}><Button title="Choose file" variant={rows.length ? "outline" : "primary"} busy={reading} onPress={() => load(chooseFile)} /></View>
           <View style={{ flex: 1 }}><Button title="Take photo" variant="outline" busy={reading} onPress={() => load(takePhoto)} /></View>
         </View>
       </Card>
@@ -92,7 +92,7 @@ export default function BankImport() {
               </Pressable>
             );
           })}
-          <Button title={`Record ${picked.size} payment${picked.size === 1 ? "" : "s"}`} busy={busy} disabled={!picked.size} onPress={record} />
+          <Button title={`Record ${picked.size} payment${picked.size === 1 ? "" : "s"}`} busy={busy} disabledReason={picked.size ? undefined : "Tick at least one matched line first."} onPress={record} />
         </Card>
       )}
     </ScrollView>

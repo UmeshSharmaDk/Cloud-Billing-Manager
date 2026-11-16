@@ -35,6 +35,8 @@ async function buildAll() {
       "canvas",
       "bcrypt",
       "argon2",
+      // Loads its worker file from its own folder at run time.
+      "pdfjs-dist",
       "fsevents",
       "re2",
       "farmhash",
