@@ -179,7 +179,7 @@ const s = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10, alignSelf: "stretch", justifyContent: "center" },
   button: { flex: 1, backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, alignItems: "center" },
   secondary: { backgroundColor: colors.border },
-  buttonText: { fontSize: 15, fontWeight: "700", color: "#fff" },
+  buttonText: { fontSize: 15, fontWeight: "700", color: colors.onPrimary },
   banner: { position: "absolute", left: 16, right: 16, bottom: 96 },
   bannerCard: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.card, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: colors.border, elevation: 4 },
   bannerText: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.text },

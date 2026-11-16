@@ -11,10 +11,10 @@ function StatCard({ title, value, sub, icon: Icon, color = "blue" }: {
 }) {
   const colors: Record<string, string> = {
     blue: "bg-blue-100 text-blue-600",
-    green: "bg-emerald-100 text-emerald-600",
-    amber: "bg-amber-100 text-amber-600",
+    green: "bg-success-bg text-success",
+    amber: "bg-warning-bg text-warning",
     violet: "bg-violet-100 text-violet-600",
-    red: "bg-red-100 text-red-600",
+    red: "bg-danger-bg text-danger",
   };
   return (
     <Card>
@@ -199,7 +199,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500" /> Low Stock Alerts
+              <AlertTriangle className="w-4 h-4 text-warning" /> Low Stock Alerts
             </CardTitle>
             <Link href="/inventory">
               <Button variant="ghost" size="sm" className="text-primary gap-1">View all <ArrowRight className="w-3.5 h-3.5" /></Button>
@@ -221,7 +221,7 @@ export default function DashboardPage() {
                         <p className="text-xs text-muted-foreground">{p.sku} · Min: {p.lowStockThreshold}</p>
                       </div>
                       <div className="text-right">
-                        <p className={`text-sm font-bold ${p.stockQuantity <= 0 ? "text-red-600" : "text-amber-600"}`}>
+                        <p className={`text-sm font-bold ${p.stockQuantity <= 0 ? "text-danger" : "text-warning"}`}>
                           {p.stockQuantity} {p.unit}
                         </p>
                         <span className="text-xs text-muted-foreground">{p.stockQuantity <= 0 ? "Out of stock" : "Low stock"}</span>

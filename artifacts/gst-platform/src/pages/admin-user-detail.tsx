@@ -132,7 +132,7 @@ export default function AdminUserDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={`text-xs px-2 py-1 rounded-full font-medium ${user.isActive ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>{user.isActive ? "Active" : "Inactive"}</span>
+          <span className={`text-xs px-2 py-1 rounded-full font-medium ${user.isActive ? "bg-success-bg text-success-text" : "bg-danger-bg text-danger-text"}`}>{user.isActive ? "Active" : "Inactive"}</span>
           <Button variant="outline" size="sm" className="gap-1" onClick={handleToggleActive} disabled={toggleMutation.isPending}>
             {user.isActive ? <><UserX className="w-3.5 h-3.5" /> Deactivate</> : <><UserCheck className="w-3.5 h-3.5" /> Activate</>}
           </Button>
@@ -198,7 +198,7 @@ export default function AdminUserDetailPage() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div><p className="text-xs text-muted-foreground">Role</p><p className="font-medium capitalize">{user.role}</p></div>
                 <div><p className="text-xs text-muted-foreground">Access</p><p className="font-medium">{({ full: "Full", entry: "Data entry", view: "View only" } as Record<string, string>)[user.accessLevel] ?? "Owner"}</p></div>
-                <div><p className="text-xs text-muted-foreground">Account Status</p><p className={`font-medium ${user.isActive ? "text-emerald-600" : "text-red-600"}`}>{user.isActive ? "Active" : "Inactive"}</p></div>
+                <div><p className="text-xs text-muted-foreground">Account Status</p><p className={`font-medium ${user.isActive ? "text-success" : "text-danger"}`}>{user.isActive ? "Active" : "Inactive"}</p></div>
                 <div><p className="text-xs text-muted-foreground">Registered</p><p className="font-medium">{formatDate(user.createdAt)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Business ID</p><p className="font-medium">{user.businessId || "None"}</p></div>
               </div>

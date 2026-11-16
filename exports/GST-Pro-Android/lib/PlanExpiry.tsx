@@ -130,8 +130,8 @@ export function PlanExpiryBanner() {
 }
 
 const b = StyleSheet.create({
-  card: { flexDirection: "row", alignItems: "flex-start", gap: 12, padding: 14, borderWidth: 1, borderColor: "#f59e0b73", borderRadius: 14, backgroundColor: "#fffbeb" },
-  icon: { color: "#b45309" },
+  card: { flexDirection: "row", alignItems: "flex-start", gap: 12, padding: 14, borderWidth: 1, borderColor: colors.warning, borderRadius: 14, backgroundColor: colors.warnBg },
+  icon: { color: colors.warning },
   content: { flex: 1, gap: 8 },
   message: { fontSize: 13, lineHeight: 19, fontWeight: "500", color: colors.text },
   phone: { fontWeight: "700", color: colors.primary, textDecorationLine: "underline" },

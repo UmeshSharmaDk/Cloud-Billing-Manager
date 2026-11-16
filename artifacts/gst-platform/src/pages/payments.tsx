@@ -30,22 +30,22 @@ export default function PaymentsPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Card className="border-emerald-200 bg-emerald-50/50">
+        <Card className="border-success/30 bg-success-bg/50">
           <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-emerald-700">Total Received</p>
-              <p className="text-2xl font-bold text-emerald-900 mt-1">{formatCurrency(totalReceived)}</p>
+              <p className="text-sm font-medium text-success-text">Total Received</p>
+              <p className="text-2xl font-bold text-success-text mt-1">{formatCurrency(totalReceived)}</p>
             </div>
-            <div className="p-3 bg-emerald-100 rounded-xl"><TrendingUp className="w-6 h-6 text-emerald-600" /></div>
+            <div className="p-3 bg-success-bg rounded-xl"><TrendingUp className="w-6 h-6 text-success" /></div>
           </CardContent>
         </Card>
-        <Card className="border-red-200 bg-red-50/50">
+        <Card className="border-danger/30 bg-danger-bg/50">
           <CardContent className="p-5 flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-red-700">Total Paid Out</p>
-              <p className="text-2xl font-bold text-red-900 mt-1">{formatCurrency(totalPaid)}</p>
+              <p className="text-sm font-medium text-danger-text">Total Paid Out</p>
+              <p className="text-2xl font-bold text-danger-text mt-1">{formatCurrency(totalPaid)}</p>
             </div>
-            <div className="p-3 bg-red-100 rounded-xl"><TrendingDown className="w-6 h-6 text-red-600" /></div>
+            <div className="p-3 bg-danger-bg rounded-xl"><TrendingDown className="w-6 h-6 text-danger" /></div>
           </CardContent>
         </Card>
       </div>
@@ -98,12 +98,12 @@ export default function PaymentsPage() {
                     <td className="py-3 px-4 font-mono text-xs">{p.referenceNumber || "-"}</td>
                     <td className="py-3 px-4 capitalize">{p.mode?.replace(/_/g, " ") || "-"}</td>
                     <td className="py-3 px-4">
-                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${p.type === "received" ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-red-100 text-red-800 border-red-200"}`}>
+                      <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${p.type === "received" ? "bg-success-bg text-success-text border-success/30" : "bg-danger-bg text-danger-text border-danger/30"}`}>
                         {p.type === "received" ? "Received" : "Paid"}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-muted-foreground text-xs">{p.notes || "-"}</td>
-                    <td className={`py-3 px-4 text-right font-semibold ${p.type === "received" ? "text-emerald-600" : "text-red-600"}`}>
+                    <td className={`py-3 px-4 text-right font-semibold ${p.type === "received" ? "text-success" : "text-danger"}`}>
                       {p.type === "received" ? "+" : "-"}{formatCurrency(p.amount)}
                     </td>
                   </tr>

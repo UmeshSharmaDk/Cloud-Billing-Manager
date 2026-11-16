@@ -46,7 +46,7 @@ export default function AdminDashboardPage() {
             <div>
               <p className="text-xs text-muted-foreground">Total Users</p>
               <p className="text-2xl font-bold">{stats.totalUsers || 0}</p>
-              <p className="text-xs text-emerald-600 font-medium">+{stats.newUsersThisMonth || 0} this month</p>
+              <p className="text-xs text-success font-medium">+{stats.newUsersThisMonth || 0} this month</p>
             </div>
           </CardContent>
         </Card>
@@ -61,7 +61,7 @@ export default function AdminDashboardPage() {
         </Card>
         <Card>
           <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-emerald-100 rounded-xl"><FileText className="w-5 h-5 text-emerald-600" /></div>
+            <div className="p-3 bg-success-bg rounded-xl"><FileText className="w-5 h-5 text-success" /></div>
             <div>
               <p className="text-xs text-muted-foreground">Total Invoices</p>
               <p className="text-2xl font-bold">{stats.totalInvoices || 0}</p>
@@ -70,7 +70,7 @@ export default function AdminDashboardPage() {
         </Card>
         <Card>
           <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-amber-100 rounded-xl"><TrendingUp className="w-5 h-5 text-amber-600" /></div>
+            <div className="p-3 bg-warning-bg rounded-xl"><TrendingUp className="w-5 h-5 text-warning" /></div>
             <div>
               <p className="text-xs text-muted-foreground">Active Users</p>
               <p className="text-2xl font-bold">{stats.activeSubscriptions || stats.activeUsers || 0}</p>

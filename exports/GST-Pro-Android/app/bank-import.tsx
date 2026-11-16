@@ -88,7 +88,7 @@ export default function BankImport() {
                     {date(r.date)} · {m ? `${m.kind === "invoice" ? "Invoice" : "Bill"} ${m.number} · ${m.party} (${money(m.due)} due)` : "No match"}
                   </Text>
                 </View>
-                <Text style={{ fontWeight: "700", color: r.amount > 0 ? "#16a34a" : colors.danger }}>{money(r.amount)}</Text>
+                <Text style={{ fontWeight: "700", color: r.amount > 0 ? colors.success : colors.danger }}>{money(r.amount)}</Text>
               </Pressable>
             );
           })}

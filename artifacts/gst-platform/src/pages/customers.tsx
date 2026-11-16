@@ -61,7 +61,7 @@ export default function CustomersPage() {
                       {c.gstin && <p className="text-xs text-muted-foreground font-mono">{c.gstin}</p>}
                     </div>
                     {c.outstandingBalance > 0 && (
-                      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium whitespace-nowrap">Due</span>
+                      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-danger-bg text-danger-text font-medium whitespace-nowrap">Due</span>
                     )}
                   </div>
                   <div className="space-y-1.5">
@@ -72,7 +72,7 @@ export default function CustomersPage() {
                   {c.outstandingBalance > 0 && (
                     <div className="mt-3 pt-3 border-t border-border flex justify-between text-sm">
                       <span className="text-muted-foreground">Outstanding</span>
-                      <span className="font-semibold text-red-600">{formatCurrency(c.outstandingBalance)}</span>
+                      <span className="font-semibold text-danger">{formatCurrency(c.outstandingBalance)}</span>
                     </div>
                   )}
                 </CardContent>

@@ -129,7 +129,7 @@ function CustomerCombobox({ customers, onChange }: {
         </div>
       )}
       {selected && (
-        <div className={`mt-1.5 text-xs px-2.5 py-1.5 rounded-md ${selected.id ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-amber-50 text-amber-700 border border-amber-200"}`}>
+        <div className={`mt-1.5 text-xs px-2.5 py-1.5 rounded-md ${selected.id ? "bg-success-bg text-success-text border border-success/30" : "bg-warning-bg text-warning-text border border-warning/30"}`}>
           {selected.id ? `✓ Registered customer — GSTIN tracked` : `⚠ Walk-in / Unregistered customer — no GSTIN`}
           {selected.stateCode && ` · State code: ${selected.stateCode}`}
         </div>
@@ -282,7 +282,7 @@ export default function InvoiceNewPage() {
                       <span>Taxable: {formatCurrency(c.taxable)} · GST: {formatCurrency(c.gstAmt)}</span>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground text-sm">{formatCurrency(c.total)}</span>
-                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-red-500 hover:text-red-700"><Trash2 className="w-3.5 h-3.5" /></button>}
+                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></button>}
                       </div>
                     </div>
                   </div>
@@ -299,7 +299,7 @@ export default function InvoiceNewPage() {
               {customer.name && (
                 <div className="bg-accent/40 rounded-lg p-2.5 text-xs">
                   <span className="font-semibold">{customer.name}</span>
-                  {customer.id ? <span className="text-emerald-600 ml-1">(Registered)</span> : <span className="text-amber-600 ml-1">(Walk-in)</span>}
+                  {customer.id ? <span className="text-success ml-1">(Registered)</span> : <span className="text-warning ml-1">(Walk-in)</span>}
                 </div>
               )}
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Subtotal (Taxable)</span><span className="font-medium">{formatCurrency(totals.taxable)}</span></div>

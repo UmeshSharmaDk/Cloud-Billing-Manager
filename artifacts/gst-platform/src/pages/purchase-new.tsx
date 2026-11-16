@@ -166,10 +166,10 @@ export default function PurchaseNewPage() {
       </Card>
 
       {importWarnings.length > 0 && (
-        <Card className="bg-amber-50 border-amber-200">
+        <Card className="bg-warning-bg border-warning/30">
           <CardContent className="p-3">
-            <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold mb-1"><AlertCircle className="w-4 h-4" /> Import Warnings</div>
-            <ul className="text-xs text-amber-600 space-y-0.5 list-disc list-inside">
+            <div className="flex items-center gap-2 text-warning-text text-xs font-semibold mb-1"><AlertCircle className="w-4 h-4" /> Import Warnings</div>
+            <ul className="text-xs text-warning space-y-0.5 list-disc list-inside">
               {importWarnings.map((w, i) => <li key={i}>{w}</li>)}
             </ul>
           </CardContent>
@@ -231,12 +231,12 @@ export default function PurchaseNewPage() {
                       <span>Taxable: {formatCurrency(c.taxable)} · ITC: {formatCurrency(c.gstAmt)}</span>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground text-sm">{formatCurrency(c.total)}</span>
-                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-red-500 hover:text-red-700"><Trash2 className="w-3.5 h-3.5" /></button>}
+                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></button>}
                       </div>
                     </div>
                     {item.description && (
                       match
-                        ? <p className="text-xs text-emerald-600">✓ Matches existing product "{match.name}" — its stock, price &amp; GST will be updated on save</p>
+                        ? <p className="text-xs text-success">✓ Matches existing product "{match.name}" — its stock, price &amp; GST will be updated on save</p>
                         : <p className="text-xs text-blue-600">＋ New product — will be added to your catalog on save</p>
                     )}
                   </div>

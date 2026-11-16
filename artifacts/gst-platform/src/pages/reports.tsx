@@ -174,7 +174,7 @@ export default function ReportsPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-base text-emerald-700">3.1 — Outward Supplies (Sales)</CardTitle></CardHeader>
+                <CardHeader className="pb-2"><CardTitle className="text-base text-success-text">3.1 — Outward Supplies (Sales)</CardTitle></CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total Taxable Value</span><span className="font-semibold">{formatCurrency(gstr3b.outwardTaxable)}</span></div>
                   <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">IGST</span><span className="font-semibold">{formatCurrency(gstr3b.outwardIgst)}</span></div>

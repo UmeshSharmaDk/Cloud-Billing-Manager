@@ -19,7 +19,7 @@ export default function Payments() {
         renderItem={(p) => (
           <Line title={`${incoming(p.type) ? "Received" : "Paid out"} · ${p.mode.replace(/_/g, " ")}`}
             sub={[date(p.date), p.referenceNumber, p.notes].filter(Boolean).join(" · ")}
-            right={<Text style={{ fontWeight: "700", color: incoming(p.type) ? "#16a34a" : colors.danger }}>{money(p.amount)}</Text>} />
+            right={<Text style={{ fontWeight: "700", color: incoming(p.type) ? colors.success : colors.danger }}>{money(p.amount)}</Text>} />
         )} />
     </>
   );

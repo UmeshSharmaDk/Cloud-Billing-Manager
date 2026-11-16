@@ -8,9 +8,9 @@ import { formatCurrency } from "@/lib/utils";
 import { authFetch } from "@/lib/api-fetch";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: any; className: string }> = {
-  draft:     { label: "Draft",     icon: Clock,        className: "text-gray-600 bg-gray-100" },
-  generated: { label: "Generated", icon: CheckCircle2, className: "text-green-700 bg-green-100" },
-  cancelled: { label: "Cancelled", icon: XCircle,      className: "text-red-600 bg-red-100" },
+  draft:     { label: "Draft",     icon: Clock,        className: "text-muted-foreground bg-muted" },
+  generated: { label: "Generated", icon: CheckCircle2, className: "text-success-text bg-success-bg" },
+  cancelled: { label: "Cancelled", icon: XCircle,      className: "text-danger bg-danger-bg" },
 };
 
 const TRANS_MODE_LABEL: Record<string, string> = {
@@ -134,7 +134,7 @@ export default function EwayBillDetailPage() {
             </Button>
           )}
           {bill.status === "generated" && (
-            <Button variant="outline" className="gap-2 text-red-600 border-red-200 hover:bg-red-50" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
+            <Button variant="outline" className="gap-2 text-danger border-danger/30 hover:bg-danger-bg" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
               <XCircle className="w-4 h-4" />{cancelMutation.isPending ? "Cancelling…" : "Cancel EWB"}
             </Button>
           )}
@@ -146,11 +146,11 @@ export default function EwayBillDetailPage() {
 
       {/* EWB Info Banner (when generated) */}
       {bill.status === "generated" && bill.ewbNo && (
-        <Card className="border-green-200 bg-green-50">
+        <Card className="border-success/30 bg-success-bg">
           <CardContent className="p-4 flex flex-wrap gap-6 items-center">
-            <div><p className="text-xs text-green-700 font-medium">EWB Number</p><p className="text-xl font-bold text-green-800 font-mono">{bill.ewbNo}</p></div>
-            <div><p className="text-xs text-green-700 font-medium">Generated On</p><p className="font-semibold text-green-800">{bill.ewbDate}</p></div>
-            <div><p className="text-xs text-green-700 font-medium">Valid Up To</p><p className="font-semibold text-green-800">{bill.validUpto ?? "—"}</p></div>
+            <div><p className="text-xs text-success-text font-medium">EWB Number</p><p className="text-xl font-bold text-success-text font-mono">{bill.ewbNo}</p></div>
+            <div><p className="text-xs text-success-text font-medium">Generated On</p><p className="font-semibold text-success-text">{bill.ewbDate}</p></div>
+            <div><p className="text-xs text-success-text font-medium">Valid Up To</p><p className="font-semibold text-success-text">{bill.validUpto ?? "—"}</p></div>
           </CardContent>
         </Card>
       )}

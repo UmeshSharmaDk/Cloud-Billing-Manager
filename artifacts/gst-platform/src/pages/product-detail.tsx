@@ -59,7 +59,7 @@ export default function ProductDetailPage() {
       </div>
 
       {(isOut || isLow) && !editing && (
-        <div className={`flex items-center gap-2 p-3 rounded-lg border ${isOut ? "bg-red-50 border-red-200 text-red-700" : "bg-amber-50 border-amber-200 text-amber-700"}`}>
+        <div className={`flex items-center gap-2 p-3 rounded-lg border ${isOut ? "bg-danger-bg border-danger/30 text-danger-text" : "bg-warning-bg border-warning/30 text-warning-text"}`}>
           <AlertTriangle className="w-4 h-4" />
           <span className="text-sm font-medium">{isOut ? "Out of stock! Reorder immediately." : `Low stock — only ${p.stockQuantity} ${p.unit} remaining (min: ${p.lowStockThreshold})`}</span>
         </div>
@@ -103,8 +103,8 @@ export default function ProductDetailPage() {
               <>
                 <div><p className="text-xs text-muted-foreground">Purchase Price</p><p className="font-semibold">{formatCurrency(p.purchasePrice)}</p></div>
                 <div><p className="text-xs text-muted-foreground">Selling Price</p><p className="font-semibold text-primary">{formatCurrency(p.sellingPrice)}</p></div>
-                <div><p className="text-xs text-muted-foreground">Margin</p><p className="font-medium text-emerald-600">{p.purchasePrice > 0 ? `${(((p.sellingPrice - p.purchasePrice) / p.purchasePrice) * 100).toFixed(1)}%` : "-"}</p></div>
-                <div><p className="text-xs text-muted-foreground">Current Stock</p><p className={`font-bold text-lg ${isOut ? "text-red-600" : isLow ? "text-amber-600" : "text-emerald-600"}`}>{p.stockQuantity} {p.unit}</p></div>
+                <div><p className="text-xs text-muted-foreground">Margin</p><p className="font-medium text-success">{p.purchasePrice > 0 ? `${(((p.sellingPrice - p.purchasePrice) / p.purchasePrice) * 100).toFixed(1)}%` : "-"}</p></div>
+                <div><p className="text-xs text-muted-foreground">Current Stock</p><p className={`font-bold text-lg ${isOut ? "text-danger" : isLow ? "text-warning" : "text-success"}`}>{p.stockQuantity} {p.unit}</p></div>
                 <div><p className="text-xs text-muted-foreground">Min. Stock</p><p className="font-medium">{p.lowStockThreshold} {p.unit}</p></div>
               </>
             )}

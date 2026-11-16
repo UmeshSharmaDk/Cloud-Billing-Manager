@@ -75,7 +75,7 @@ export function BooksControl({ userId, lockDate }: { userId: number; lockDate: s
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Audit trail</CardTitle></CardHeader>
         <CardContent className="max-h-80 overflow-y-auto text-sm">
-          {trail.isLoading ? <p className="text-muted-foreground">Loading…</p> : trail.error ? <p className="text-red-600">{(trail.error as Error).message}</p>
+          {trail.isLoading ? <p className="text-muted-foreground">Loading…</p> : trail.error ? <p className="text-danger">{(trail.error as Error).message}</p>
             : !trail.data?.entries.length ? <p className="text-muted-foreground">No changes recorded yet.</p> : (
               <ul className="divide-y">
                 {trail.data.entries.map((e) => (

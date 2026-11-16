@@ -98,7 +98,7 @@ export function BankImport() {
                       <td className="py-2 pr-2">{m && <input type="checkbox" aria-label={`Record ${m.number}`} checked={picked.has(i)} onChange={() => toggle(i)} />}</td>
                       <td className="py-2 pr-3 whitespace-nowrap">{formatDate(r.date)}</td>
                       <td className="py-2 pr-3 max-w-xs truncate" title={r.description}>{r.description}</td>
-                      <td className={`py-2 pr-3 text-right whitespace-nowrap ${r.amount > 0 ? "text-emerald-700" : "text-red-700"}`}>{formatCurrency(r.amount)}</td>
+                      <td className={`py-2 pr-3 text-right whitespace-nowrap ${r.amount > 0 ? "text-success-text" : "text-danger-text"}`}>{formatCurrency(r.amount)}</td>
                       <td className="py-2">{m ? <>{m.kind === "invoice" ? "Invoice" : "Bill"} {m.number} · {m.party} <span className="text-xs text-muted-foreground">({formatCurrency(m.due)} due, by {m.by})</span></> : <span className="text-muted-foreground">No match</span>}</td>
                     </tr>
                   );
