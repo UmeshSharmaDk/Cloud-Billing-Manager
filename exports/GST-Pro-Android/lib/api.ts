@@ -33,7 +33,7 @@ export function setSession(next: string | null, handler?: () => void) {
  * CSRF check for it. Cookies are omitted so the token is the only credential.
  */
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
-  if (!API_BASE) throw new ApiError(0, "This build has no server address. Rebuild with EXPO_PUBLIC_DOMAIN set.");
+  if (!API_BASE) throw new ApiError(0, "This app was not set up correctly. Please install it again.");
   let res: Response;
   try {
     res = await fetch(API_BASE + path, {
@@ -59,7 +59,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
 
 /** POST a file from the phone as the request body (the server reads PDFs for the importers). */
 export async function apiUpload<T>(path: string, uri: string, contentType: string): Promise<T> {
-  if (!API_BASE) throw new ApiError(0, "This build has no server address. Rebuild with EXPO_PUBLIC_DOMAIN set.");
+  if (!API_BASE) throw new ApiError(0, "This app was not set up correctly. Please install it again.");
   let res: FileSystem.FileSystemUploadResult;
   try {
     res = await FileSystem.uploadAsync(API_BASE + path, uri, {

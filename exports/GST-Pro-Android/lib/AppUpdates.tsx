@@ -168,14 +168,6 @@ async function clearOldDownloads() {
   }
 }
 
-/** For the settings screen: which over-the-air update this install is running. */
-export function currentUpdateLabel(): string | null {
-  if (__DEV__ || !Updates.isEnabled) return null;
-  if (Updates.isEmbeddedLaunch) return "App code: as installed";
-  const when = Updates.createdAt?.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-  return when ? `App code updated ${when}` : null;
-}
-
 const s = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(15,23,42,0.5)", justifyContent: "center", padding: 24 },
   card: { backgroundColor: colors.card, borderRadius: 16, padding: 22, alignItems: "center", gap: 8 },
