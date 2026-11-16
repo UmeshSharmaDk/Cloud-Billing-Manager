@@ -6,8 +6,6 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { AppShell } from "@/components/AppShell";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
-import RegisterPage from "@/pages/register";
-import VerifyPage from "@/pages/verify";
 import DashboardPage from "@/pages/dashboard";
 import InvoicesPage from "@/pages/invoices";
 import InvoiceNewPage from "@/pages/invoice-new";
@@ -83,8 +81,6 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={LoginPage} />
-      <Route path="/register" component={RegisterPage} />
-      <Route path="/verify" component={VerifyPage} />
       <Route path="/accept-admin-invite" component={AcceptAdminInvitePage} />
       <Route path="/">{() => <Redirect to="/login" />}</Route>
       <Route path="/dashboard">{() => <ProtectedRoute component={DashboardPage} />}</Route>

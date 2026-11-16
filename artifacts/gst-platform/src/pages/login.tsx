@@ -1,6 +1,4 @@
 import { useState } from "react";
-import { useLocation } from "wouter";
-import { Shield } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +15,6 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const { login } = useAuth();
   const { toast } = useToast();
-  const [, setLocation] = useLocation();
 
   const mutation = useLogin({
     mutation: {
@@ -61,10 +58,10 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gradient-to-br from-primary/10 via-background to-primary/5 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary text-primary-foreground mb-4 shadow-lg">
-            <Shield className="w-8 h-8" />
-          </div>
-          <h1 className="text-3xl font-bold text-foreground">Billing Pilot</h1>
+          {/* The logo's dark lettering needs a white plate to stay readable in dark mode. */}
+          <h1 className="inline-block rounded-2xl bg-white px-5 py-3 mb-3">
+            <img src="/logo.png" alt="Billing Pilot" width={900} height={303} className="h-20 w-auto max-w-full object-contain" />
+          </h1>
           <p className="text-muted-foreground mt-1">India's GST Billing & Inventory Platform</p>
         </div>
 
@@ -101,11 +98,6 @@ export default function LoginPage() {
               </Button>
             </form>
             )}
-
-            <p className="text-center text-sm text-muted-foreground mt-6">
-              New business?{" "}
-              <button onClick={() => setLocation("/register")} className="text-primary hover:underline font-medium">Register here</button>
-            </p>
           </CardContent>
         </Card>
       </div>

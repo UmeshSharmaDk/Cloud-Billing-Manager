@@ -234,6 +234,9 @@ jobs:
       # 40-request burst from one address, so it needs the same headroom. The
       # per-recipient mail budget is fixed and is what the suite asserts on.
       REGISTER_RATE_LIMIT_MAX: "500"
+      # Public sign-up is closed in production; the suite creates its test
+      # businesses through it, so it is opened for this job only.
+      ALLOW_PUBLIC_REGISTRATION: "true"
       # Registration is two steps now: the response cannot say whether an
       # address is taken, so the outcome is emailed. The server writes mail to
       # this file instead of sending it and the suite reads the verification

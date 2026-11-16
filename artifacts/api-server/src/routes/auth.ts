@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import crypto from "node:crypto";
 import { db, rootDb, runInSystemScope, usersTable, businessesTable, revokedTokensTable, pendingRegistrationsTable, adminInvitationsTable } from "@workspace/db";
 import { eq, and, lt, gt, isNull, or, sql } from "drizzle-orm";
@@ -636,6 +636,17 @@ const REGISTRATION_ACCEPTED = {
 } as const;
 
 /**
+ * Public sign-up is closed: admins are invited by a superadmin and users are
+ * added by their admin. The two routes below answer 404 unless
+ * ALLOW_PUBLIC_REGISTRATION is "true", which only the integration suite sets
+ * (it creates its test businesses this way).
+ */
+const publicRegistration: RequestHandler = (_req, res, next) => {
+  if (process.env["ALLOW_PUBLIC_REGISTRATION"] === "true") return next();
+  res.status(404).json({ error: "Not found" });
+};
+
+/**
  * Registration.
  *
  * This used to answer `400 "Email already registered"` for a taken address and
@@ -671,7 +682,7 @@ const REGISTRATION_ACCEPTED = {
  * starve every authenticated request. `users` and `pending_registrations`
  * carry no tenant policy, so nothing here needs a scope.
  */
-router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (req: Req, res) => {
+router.post("/register", publicRegistration, registerIpLimiter, validateBody(RegisterBody), async (req: Req, res) => {
   const { name, email, businessName, gstin } = req.body;
   const normalisedEmail = email.toLowerCase();
 
@@ -746,7 +757,7 @@ router.post("/register", registerIpLimiter, validateBody(RegisterBody), async (r
  * is just an intention. Several may exist for one address; the first to arrive
  * wins and the rest are deleted with it.
  */
-router.post("/verify-registration", authIpLimiter, validateBody(VerifyRegistrationBody), async (req: Req, res) => {
+router.post("/verify-registration", publicRegistration, authIpLimiter, validateBody(VerifyRegistrationBody), async (req: Req, res) => {
   const { token, password } = req.body;
 
   // `rootDb` throughout: `pending_registrations` carries no tenant policy, and
