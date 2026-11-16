@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
 import * as Updates from "expo-updates";
 import { ActivityIndicator, DevSettings, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { statusColor } from "./format";
 
 /**
@@ -100,6 +101,17 @@ export function Field({ label, ...props }: TextInputProps & { label: string }) {
   );
 }
 
+/**
+ * The inside of every <Modal>. A Modal is its own window, drawn edge to edge
+ * under the status bar and the phone's navigation buttons, and it gets none of
+ * the padding the screens get from the root layout. Without this its top row
+ * and its bottom button sit under those bars.
+ */
+export function ModalFrame({ backgroundColor, children }: { backgroundColor: string; children: ReactNode }) {
+  const { top, bottom } = useSafeAreaInsets();
+  return <View style={{ flex: 1, backgroundColor, paddingTop: top, paddingBottom: bottom }}>{children}</View>;
+}
+
 export type Option = { value: string; label: string };
 
 /** A tap-to-open list picker, the native stand-in for the website's <select>. */
@@ -117,7 +129,8 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
         <Text style={{ color: current ? colors.text : colors.muted, fontSize: 16 }}>{current?.label ?? placeholder}</Text>
       </Pressable>
       <Modal visible={open} animationType="slide" onRequestClose={() => setOpen(false)}>
-        <View style={[s.screen, { padding: 16, gap: 12 }]}>
+        <ModalFrame backgroundColor={colors.bg}>
+        <View style={{ flex: 1, padding: 16, gap: 12 }}>
           <Text style={s.title}>{label}</Text>
           {options.length > 8 && <TextInput style={s.input} placeholder="Search" value={q} onChangeText={setQ} placeholderTextColor={colors.muted} />}
           <FlatList data={shown} keyExtractor={(o) => o.value} renderItem={({ item }) => (
@@ -127,6 +140,7 @@ export function Select({ label, value, options, onChange, placeholder = "Selectâ
           )} />
           <Button title="Close" variant="outline" onPress={() => setOpen(false)} />
         </View>
+        </ModalFrame>
       </Modal>
     </View>
   );
@@ -175,16 +189,18 @@ export function Prompt({ visible, title, message, secure, numeric, placeholder, 
   const [v, setV] = useState("");
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={{ flex: 1, backgroundColor: "#0008", justifyContent: "center", padding: 24 }}>
+      <ModalFrame backgroundColor="#0008">
+      <View style={{ flex: 1, justifyContent: "center", padding: 24 }}>
         <View style={[s.card, { gap: 12 }]}>
           <Text style={s.title}>{title}</Text>
           <Text style={s.muted}>{message}</Text>
           <TextInput style={s.input} secureTextEntry={secure} autoFocus autoCapitalize="none" value={v} onChangeText={setV}
             keyboardType={numeric ? "decimal-pad" : "default"} placeholder={placeholder} placeholderTextColor={colors.muted} />
-          <Button title="Confirm" busy={busy} disabled={!v} onPress={() => { onSubmit(v); setV(""); }} />
+          <Button title="Confirm" busy={busy} disabledReason={v ? undefined : "Fill in the box above first."} onPress={() => { onSubmit(v); setV(""); }} />
           <Button title="Cancel" variant="outline" onPress={() => { setV(""); onCancel(); }} />
         </View>
       </View>
+      </ModalFrame>
     </Modal>
   );
 }
