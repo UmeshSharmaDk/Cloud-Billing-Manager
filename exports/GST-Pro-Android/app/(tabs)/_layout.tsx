@@ -12,7 +12,7 @@ export default function TabsLayout() {
   if (user.role !== "user") return <Redirect href="/" />;
 
   return (
-    <Tabs screenOptions={{ tabBarActiveTintColor: colors.primary, headerTintColor: colors.text }}>
+    <Tabs screenOptions={{ tabBarActiveTintColor: colors.primary, tabBarInactiveTintColor: colors.muted, tabBarStyle: { backgroundColor: colors.card, borderTopColor: colors.border }, headerStyle: { backgroundColor: colors.card }, headerTintColor: colors.text, sceneStyle: { backgroundColor: colors.bg } }}>
       <Tabs.Screen name="index" options={{ title: "Dashboard", tabBarIcon: icon("grid-outline") }} />
       <Tabs.Screen name="invoices" options={{ title: "Invoices", tabBarIcon: icon("document-text-outline") }} />
       <Tabs.Screen name="purchases" options={{ title: "Purchases", tabBarIcon: icon("cart-outline") }} />

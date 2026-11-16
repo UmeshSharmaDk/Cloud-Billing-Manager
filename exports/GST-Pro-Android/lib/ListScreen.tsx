@@ -49,7 +49,7 @@ export function Fab({ onPress }: { onPress: () => void }) {
   return (
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel="Add new"
       style={{ position: "absolute", right: 20, bottom: 24, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", elevation: 4 }}>
-      <Ionicons name="add" size={30} color="#fff" />
+      <Ionicons name="add" size={30} color={colors.onPrimary} />
     </Pressable>
   );
 }

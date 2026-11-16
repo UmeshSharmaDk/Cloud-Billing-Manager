@@ -75,7 +75,7 @@ export default function SecurityPage() {
     setLocation(home);
   };
 
-  const errorLine = error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>;
+  const errorLine = error && <p role="alert" className="rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger-text">{error}</p>;
 
   return (
     <div className="mx-auto max-w-xl space-y-6">
@@ -110,7 +110,7 @@ export default function SecurityPage() {
       ) : user.mfaEnabled ? (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-emerald-600" /> Two-factor authentication is on</CardTitle>
+            <CardTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-success" /> Two-factor authentication is on</CardTitle>
             <CardDescription>
               Lost your recovery codes, or used most of them? Enter a code from your authenticator to get a new set. The old ones stop working.
               If you have lost your phone as well, ask a superadmin to reset two-factor authentication for you.

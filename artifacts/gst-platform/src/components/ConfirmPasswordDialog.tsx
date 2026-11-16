@@ -41,7 +41,7 @@ export function ConfirmPasswordDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 text-amber-600" />
+            <ShieldAlert className="w-4 h-4 text-warning" />
             {title}
           </DialogTitle>
           <DialogDescription>{description}</DialogDescription>

@@ -86,15 +86,15 @@ export default function InventoryPage() {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          {isLow && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />}
-                          <span className={isOut ? "text-red-600 font-bold" : isLow ? "text-amber-600 font-semibold" : "text-foreground"}>
+                          {isLow && <AlertTriangle className="w-3.5 h-3.5 text-warning" />}
+                          <span className={isOut ? "text-danger font-bold" : isLow ? "text-warning font-semibold" : "text-foreground"}>
                             {p.stockQuantity}
                           </span>
                           <span className="text-muted-foreground text-xs">{p.unit}</span>
                         </div>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${isOut ? "bg-red-100 text-red-800 border-red-200" : isLow ? "bg-amber-100 text-amber-800 border-amber-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"}`}>
+                        <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${isOut ? "bg-danger-bg text-danger-text border-danger/30" : isLow ? "bg-warning-bg text-warning-text border-warning/30" : "bg-success-bg text-success-text border-success/30"}`}>
                           {isOut ? "Out of Stock" : isLow ? "Low Stock" : "In Stock"}
                         </span>
                       </td>

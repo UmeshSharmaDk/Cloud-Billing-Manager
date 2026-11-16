@@ -74,7 +74,7 @@ export default function CustomerDetailPage() {
                   <div><p className="text-xs text-muted-foreground">Email</p><p className="font-medium">{c.email || "-"}</p></div>
                   <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">Address</p><p className="font-medium">{[c.address, c.city, c.state, c.pincode].filter(Boolean).join(", ") || "-"}</p></div>
                   <div><p className="text-xs text-muted-foreground">Credit Limit</p><p className="font-medium">{formatCurrency(c.creditLimit)}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Outstanding</p><p className={`font-semibold ${c.outstandingBalance > 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(c.outstandingBalance)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Outstanding</p><p className={`font-semibold ${c.outstandingBalance > 0 ? "text-danger" : "text-success"}`}>{formatCurrency(c.outstandingBalance)}</p></div>
                 </>
               )}
             </CardContent>
@@ -105,8 +105,8 @@ export default function CustomerDetailPage() {
             <CardHeader className="pb-3"><CardTitle className="text-base">Account Summary</CardTitle></CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total Billed</span><span className="font-semibold">{formatCurrency(c.totalBilled)}</span></div>
-              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total Paid</span><span className="font-semibold text-emerald-600">{formatCurrency(c.totalPaid)}</span></div>
-              <div className="flex justify-between py-1"><span className="text-muted-foreground">Outstanding</span><span className={`font-bold ${parseFloat(c.outstandingBalance) > 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(c.outstandingBalance)}</span></div>
+              <div className="flex justify-between py-1 border-b"><span className="text-muted-foreground">Total Paid</span><span className="font-semibold text-success">{formatCurrency(c.totalPaid)}</span></div>
+              <div className="flex justify-between py-1"><span className="text-muted-foreground">Outstanding</span><span className={`font-bold ${parseFloat(c.outstandingBalance) > 0 ? "text-danger" : "text-success"}`}>{formatCurrency(c.outstandingBalance)}</span></div>
             </CardContent>
           </Card>
         </div>

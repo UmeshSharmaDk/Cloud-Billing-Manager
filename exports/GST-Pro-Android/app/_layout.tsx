@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppUpdates } from "@/lib/AppUpdates";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { PlanExpiryNotifications } from "@/lib/PlanExpiry";
-import { colors } from "@/lib/ui";
+import { colors, isDark } from "@/lib/ui";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -37,8 +37,8 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <StatusBar style="dark" />
-        <Stack screenOptions={{ headerTintColor: colors.primary, contentStyle: { backgroundColor: colors.bg, paddingBottom: bottom } }}>
+        <StatusBar style={isDark ? "light" : "dark"} />
+        <Stack screenOptions={{ headerTintColor: colors.primary, headerStyle: { backgroundColor: colors.card }, headerTitleStyle: { color: colors.text }, contentStyle: { backgroundColor: colors.bg, paddingBottom: bottom } }}>
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="login" options={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />

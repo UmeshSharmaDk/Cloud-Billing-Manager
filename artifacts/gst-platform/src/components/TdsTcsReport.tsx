@@ -16,7 +16,7 @@ export function TdsTcsReport({ kind, month, year }: { kind: "tds" | "tcs"; month
     },
   });
   if (q.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (q.error) return <p className="text-sm text-red-600">{(q.error as Error).message}</p>;
+  if (q.error) return <p className="text-sm text-danger">{(q.error as Error).message}</p>;
   const d = q.data!;
   const tds = kind === "tds";
   const total = tds ? d.totalTds : d.totalTcs;

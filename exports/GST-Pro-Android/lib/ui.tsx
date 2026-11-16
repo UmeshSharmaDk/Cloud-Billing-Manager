@@ -1,8 +1,30 @@
 import { useState, type ReactNode } from "react";
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import * as SecureStore from "expo-secure-store";
+import * as Updates from "expo-updates";
+import { ActivityIndicator, DevSettings, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
 import { statusColor } from "./format";
 
-export const colors = { primary: "#0b62f4", bg: "#f5f7fb", card: "#ffffff", text: "#0f172a", muted: "#64748b", border: "#e2e8f0", danger: "#dc2626" };
+/**
+ * Light and dark palettes. Every screen builds its StyleSheet from `colors` when it loads, so the
+ * theme is read synchronously before any screen imports this file, and switching restarts the app.
+ * ponytail: restart on switch; move colors into a context if a live switch is ever wanted.
+ */
+const THEME_KEY = "theme";
+export const isDark = SecureStore.getItem(THEME_KEY) === "dark";
+// ANVEXI TECH Brand Colour System v1.0 (Electric Blue).
+const light = { primary: "#386BFF", onPrimary: "#FFFFFF", bg: "#F5F7FB", card: "#FFFFFF", text: "#101828", muted: "#667085", border: "#EAECF0", danger: "#DC2626", success: "#16A34A", warning: "#D97706", warnBg: "#FEF3C7" };
+const dark = { primary: "#386BFF", onPrimary: "#FFFFFF", bg: "#101828", card: "#1D2939", text: "#F9FAFB", muted: "#D0D5DD", border: "#344054", danger: "#F87171", success: "#4ADE80", warning: "#FBBF24", warnBg: "#422D0B" };
+export const colors = isDark ? dark : light;
+
+export function setDarkMode(on: boolean) {
+  SecureStore.setItem(THEME_KEY, on ? "dark" : "light");
+  Updates.reloadAsync().catch(() => DevSettings.reload());
+}
+
+/** The light/dark switch on every role's account card. */
+export function ThemeToggle() {
+  return <Button title={isDark ? "Switch to light mode" : "Switch to dark mode"} variant="outline" onPress={() => setDarkMode(!isDark)} />;
+}
 
 export function Loading() {
   return (
@@ -24,7 +46,7 @@ export function ErrorView({ error, onRetry }: { error: unknown; onRetry: () => v
 }
 
 export function StatusPill({ status }: { status: string }) {
-  const c = statusColor[status] ?? colors.muted;
+  const c = colors[statusColor[status] ?? "muted"];
   return (
     <View style={[s.pill, { borderColor: c }]}>
       <Text style={[s.pillText, { color: c }]}>{status}</Text>
@@ -51,7 +73,7 @@ export function Button({ title, onPress, busy, variant = "primary", disabled, di
 }) {
   const bg = variant === "primary" ? colors.primary : variant === "danger" ? colors.danger : "transparent";
   const off = disabled || !!disabledReason;
-  const ink = variant === "outline" ? colors.primary : "#fff";
+  const ink = variant === "outline" ? colors.primary : colors.onPrimary;
   const button = (
     <Pressable onPress={onPress} disabled={busy || off} accessibilityRole="button" accessibilityState={{ busy: !!busy, disabled: off }}
       accessibilityLabel={title} accessibilityHint={disabledReason}
@@ -116,7 +138,7 @@ export function Chips<T extends string>({ options, value, onChange }: { options:
       {options.map((f) => (
         <Pressable key={f} onPress={() => onChange(f)}
           style={[s.pill, { borderColor: value === f ? colors.primary : colors.border, backgroundColor: value === f ? colors.primary : "transparent", paddingHorizontal: 12, paddingVertical: 6 }]}>
-          <Text style={[s.pillText, { color: value === f ? "#fff" : colors.muted }]}>{f}</Text>
+          <Text style={[s.pillText, { color: value === f ? colors.onPrimary : colors.muted }]}>{f}</Text>
         </Pressable>
       ))}
     </ScrollView>
@@ -180,8 +202,8 @@ export const s = StyleSheet.create({
   muted: { fontSize: 13, color: colors.muted },
   errorText: { color: colors.danger, textAlign: "center", marginBottom: 16 },
   button: { backgroundColor: colors.primary, borderRadius: 10, minHeight: 44, paddingVertical: 12, paddingHorizontal: 20, alignItems: "center", justifyContent: "center" },
-  buttonText: { color: "#fff", fontWeight: "600", fontSize: 16 },
-  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 16, backgroundColor: "#fff", color: colors.text },
+  buttonText: { color: colors.onPrimary, fontWeight: "600", fontSize: 16 },
+  input: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 12, fontSize: 16, backgroundColor: colors.card, color: colors.text },
   pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   pillText: { fontSize: 12, fontWeight: "600", textTransform: "capitalize" },
   row: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 6, gap: 12 },

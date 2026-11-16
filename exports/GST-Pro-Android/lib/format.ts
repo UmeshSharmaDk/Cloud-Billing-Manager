@@ -5,16 +5,17 @@ export const money = (n: number | null | undefined) => inr.format(Number(n ?? 0)
 export const date = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 
-export const statusColor: Record<string, string> = {
-  paid: "#16a34a",
-  partial: "#d97706",
-  unpaid: "#dc2626",
-  cancelled: "#6b7280",
-  declined: "#6b7280",
-  draft: "#d97706",
-  pending: "#d97706",
-  generated: "#16a34a",
-  approved: "#16a34a",
-  active: "#16a34a",
-  inactive: "#dc2626",
+/** Status to palette tone; ui.tsx turns it into the light or dark colour. */
+export const statusColor: Record<string, "success" | "warning" | "danger" | "muted"> = {
+  paid: "success",
+  partial: "warning",
+  unpaid: "danger",
+  cancelled: "muted",
+  declined: "muted",
+  draft: "warning",
+  pending: "warning",
+  generated: "success",
+  approved: "success",
+  active: "success",
+  inactive: "danger",
 };

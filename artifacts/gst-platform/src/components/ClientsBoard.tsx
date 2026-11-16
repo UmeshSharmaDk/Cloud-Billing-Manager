@@ -34,7 +34,7 @@ export function ClientsBoard() {
         <Input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} className="max-w-[11rem]" />
       </CardHeader>
       <CardContent>
-        {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : q.error ? <p className="text-sm text-red-600">{(q.error as Error).message}</p>
+        {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : q.error ? <p className="text-sm text-danger">{(q.error as Error).message}</p>
           : !clients.length ? <p className="text-sm text-muted-foreground">No clients yet.</p> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-sm">

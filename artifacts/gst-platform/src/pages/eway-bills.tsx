@@ -10,9 +10,9 @@ import { formatCurrency } from "@/lib/utils";
 import { authFetch } from "@/lib/api-fetch";
 
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
-  draft: { label: "Draft", className: "bg-gray-100 text-gray-700" },
-  generated: { label: "Generated", className: "bg-green-100 text-green-700" },
-  cancelled: { label: "Cancelled", className: "bg-red-100 text-red-600" },
+  draft: { label: "Draft", className: "bg-muted text-muted-foreground" },
+  generated: { label: "Generated", className: "bg-success-bg text-success-text" },
+  cancelled: { label: "Cancelled", className: "bg-danger-bg text-danger" },
 };
 
 const TRANS_MODE: Record<string, string> = {

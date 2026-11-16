@@ -50,7 +50,7 @@ export function UserRecords({ userId }: { userId: number }) {
         </div>
       </CardHeader>
       <CardContent>
-        {error ? <p className="text-sm text-red-600">{error.message}</p> : tab === "reports" ? (
+        {error ? <p className="text-sm text-danger">{error.message}</p> : tab === "reports" ? (
           <div className="space-y-4">
             <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="max-w-[12rem]" />
             {report.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : r && (
