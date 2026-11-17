@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RowsSkeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { authFetch } from "@/lib/api-fetch";
@@ -34,7 +35,7 @@ export function ClientsBoard() {
         <Input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} className="max-w-[11rem]" />
       </CardHeader>
       <CardContent>
-        {q.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : q.error ? <p className="text-sm text-danger">{(q.error as Error).message}</p>
+        {q.isLoading ? <RowsSkeleton rows={5} /> : q.error ? <p className="text-sm text-danger">{(q.error as Error).message}</p>
           : !clients.length ? <p className="text-sm text-muted-foreground">No clients yet.</p> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-sm">

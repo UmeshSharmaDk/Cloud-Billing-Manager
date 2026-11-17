@@ -74,7 +74,7 @@ export function EntityForm({ fields, load, pick, target, method, defaults, submi
   const { busy, run } = useSave();
   const set = (k: string, x: string) => setV((p) => ({ ...p, [k]: x }));
 
-  if (load && q.isLoading) return <Loading />;
+  if (load && q.isLoading) return <Loading layout="form" />;
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
 
   const submit = () => {

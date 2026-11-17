@@ -23,7 +23,7 @@ export default function Superadmin() {
   const [confirm, setConfirm] = useState<null | ((pw: string) => void)>(null);
   const { busy, run } = useSave();
 
-  if (admins.isLoading) return <Loading />;
+  if (admins.isLoading) return <Loading layout="dashboard" />;
   if (admins.error) return <ErrorView error={admins.error} onRetry={admins.refetch} />;
   const d = admins.data!;
   const refresh = () => [admins, invites, reqs].forEach((q) => q.refetch());

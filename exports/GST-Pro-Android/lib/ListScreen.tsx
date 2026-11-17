@@ -20,7 +20,7 @@ export function ListScreen<T extends { id: number }>({ path, listKey, params = {
           {filters}
         </View>
       )}
-      {q.isLoading ? <Loading /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : (
+      {q.isLoading ? <Loading layout="list" /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : (
         <FlatList
           data={q.items}
           keyExtractor={(i) => String(i.id)}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { RowsSkeleton, Skeleton } from "@/components/ui/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { authFetch } from "@/lib/api-fetch";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
@@ -53,7 +54,7 @@ export function UserRecords({ userId }: { userId: number }) {
         {error ? <p className="text-sm text-danger">{error.message}</p> : tab === "reports" ? (
           <div className="space-y-4">
             <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="max-w-[12rem]" />
-            {report.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : r && (
+            {report.isLoading ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" role="status" aria-label="Loading">{[0, 1, 2, 3].map((i) => <div key={i} className="rounded-lg border p-3 space-y-2"><Skeleton className="h-3 w-20" /><Skeleton className="h-4 w-24" /></div>)}</div> : r && (
               <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                 {[
                   ["Taxable sales", r.outwardTaxable],
@@ -69,7 +70,7 @@ export function UserRecords({ userId }: { userId: number }) {
               </div>
             )}
           </div>
-        ) : list.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : rows.length === 0 ? (
+        ) : list.isLoading ? <RowsSkeleton rows={5} /> : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">No {tab} yet.</p>
         ) : (
           <div className="overflow-x-auto">
