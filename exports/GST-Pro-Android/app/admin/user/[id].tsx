@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { date } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import type { Business, User } from "@/lib/types";
-import { Button, Card, ErrorView, Field, Loading, PasswordPrompt, Prompt, Row, s, Select, StatusPill } from "@/lib/ui";
+import { Button, Card, ErrorView, Field, Loading, PasswordPrompt, Prompt, Row, s, Select, StatusPill, pullToRefresh } from "@/lib/ui";
 
 type Detail = User & { business: Business | null; stats: Record<string, number> };
 import { ACCESS } from "@/lib/types";
@@ -51,7 +51,7 @@ export default function AdminUser() {
   const toggle = () => run(() => api(`/users/${user.id}/toggle-status`, { method: "PATCH", body: { isActive: !user.isActive } }));
 
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q)}>
       <Stack.Screen options={{ title: user.name }} />
       <Card title={user.name} right={<StatusPill status={user.isActive ? "active" : "inactive"} />}>
         <Row label="Email" value={user.email} />

@@ -4,7 +4,7 @@ import { ScrollView, Text } from "react-native";
 import { api } from "@/lib/api";
 import { money } from "@/lib/format";
 import type { Product } from "@/lib/types";
-import { Button, Card, colors, ErrorView, Loading, Row, s } from "@/lib/ui";
+import { Button, Card, colors, ErrorView, Loading, Row, s, pullToRefresh } from "@/lib/ui";
 import { isLow } from "../(tabs)/products";
 
 export default function ProductDetail() {
@@ -14,7 +14,7 @@ export default function ProductDetail() {
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
   const p = q.data!;
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q)}>
       <Stack.Screen options={{ title: p.name }} />
       <Card title={p.name}>
         {isLow(p) && <Text style={{ color: colors.danger, fontWeight: "600" }}>Low stock</Text>}

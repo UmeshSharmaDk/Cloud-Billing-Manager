@@ -4,7 +4,7 @@ import { Linking, Pressable, ScrollView, Text, View } from "react-native";
 import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import type { Customer } from "@/lib/types";
-import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill } from "@/lib/ui";
+import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill, pullToRefresh } from "@/lib/ui";
 
 type Doc = { id: number; invoiceNumber: string; invoiceDate: string; grandTotal: number; status: string };
 
@@ -25,7 +25,7 @@ export function PartyDetail({ kind }: { kind: "customer" | "vendor" }) {
   const list = related.data?.[docs] ?? [];
 
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q, related)}>
       <Stack.Screen options={{ title: c.name }} />
       <Card title={c.name}>
         <Row label="GSTIN" value={c.gstin || "—"} />

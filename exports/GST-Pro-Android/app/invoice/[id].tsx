@@ -10,7 +10,7 @@ import { invoiceHtml } from "@/lib/invoiceHtml";
 import { reminderLink } from "@/lib/whatsapp";
 import { useSave } from "@/lib/save";
 import type { Business, Customer, Invoice } from "@/lib/types";
-import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill } from "@/lib/ui";
+import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill, pullToRefresh } from "@/lib/ui";
 
 export default function InvoiceDetail() {
   // `asUser`: an admin looking at one of their users' invoices, read-only.
@@ -44,7 +44,7 @@ export default function InvoiceDetail() {
   };
 
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q, biz, cust)}>
       <Stack.Screen options={{ title: inv.invoiceNumber }} />
       <Card title={inv.customerName} right={<StatusPill status={inv.status} />}>
         {!!inv.customerGstin && <Row label="GSTIN" value={inv.customerGstin} />}

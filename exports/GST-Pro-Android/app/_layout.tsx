@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppUpdates } from "@/lib/AppUpdates";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { PlanExpiryNotifications } from "@/lib/PlanExpiry";
+import { SwipeNav } from "@/lib/SwipeNav";
 import { colors, isDark } from "@/lib/ui";
 
 const queryClient = new QueryClient({
@@ -38,13 +39,15 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <StatusBar style={isDark ? "light" : "dark"} />
-        <Stack screenOptions={{ headerTintColor: colors.primary, headerStyle: { backgroundColor: colors.card }, headerTitleStyle: { color: colors.text }, contentStyle: { backgroundColor: colors.bg, paddingBottom: bottom } }}>
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="login" options={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
-          <Stack.Screen name="invoice/[id]" options={{ title: "Invoice" }} />
-          <Stack.Screen name="customer/[id]" options={{ title: "Customer" }} />
-        </Stack>
+        <SwipeNav>
+          <Stack screenOptions={{ headerTintColor: colors.primary, headerStyle: { backgroundColor: colors.card }, headerTitleStyle: { color: colors.text }, contentStyle: { backgroundColor: colors.bg, paddingBottom: bottom } }}>
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="login" options={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }} />
+            <Stack.Screen name="invoice/[id]" options={{ title: "Invoice" }} />
+            <Stack.Screen name="customer/[id]" options={{ title: "Customer" }} />
+          </Stack>
+        </SwipeNav>
         <SessionGuard />
         <AppUpdates />
         <PlanExpiryNotifications />

@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import type { EwayBill } from "@/lib/types";
-import { Button, Card, ErrorView, Loading, Row, s, StatusPill } from "@/lib/ui";
+import { Button, Card, ErrorView, Loading, Row, s, StatusPill, pullToRefresh } from "@/lib/ui";
 
 const MODES: Record<string, string> = { "1": "Road", "2": "Rail", "3": "Air", "4": "Ship / Water" };
 const str = (v: unknown) => (v == null || v === "" ? "—" : String(v));
@@ -35,7 +35,7 @@ export default function EwayBillDetail() {
   ]);
 
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q)}>
       <Stack.Screen options={{ title: b.ewbNo || b.docNo }} />
       <Card title={b.ewbNo || "Draft"} right={<StatusPill status={b.status} />}>
         <Row label="Document" value={`${str(b.docType)} ${b.docNo}`} />

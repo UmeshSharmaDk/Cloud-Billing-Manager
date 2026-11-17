@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
 import * as Updates from "expo-updates";
-import { ActivityIndicator, Animated, DevSettings, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { ActivityIndicator, Animated, DevSettings, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { statusColor } from "./format";
 
@@ -50,6 +50,12 @@ function BoneRows({ n = 5 }: { n?: number }) {
  * Skeleton screen shown while a screen's data loads, shaped like the screen it stands in for.
  * `rows` sits inline inside a card; the others fill the screen.
  */
+/** Pull down to refresh a ScrollView: refetches every query given. */
+export function pullToRefresh(...qs: { refetch: () => unknown; isRefetching: boolean }[]) {
+  return <RefreshControl refreshing={qs.some((q) => q.isRefetching)} onRefresh={() => qs.forEach((q) => q.refetch())}
+    colors={[colors.primary]} progressBackgroundColor={colors.card} tintColor={colors.primary} />;
+}
+
 export function Loading({ layout = "detail" }: { layout?: "detail" | "list" | "dashboard" | "form" | "rows" }) {
   const pulse = useRef(new Animated.Value(1)).current;
   useEffect(() => {
