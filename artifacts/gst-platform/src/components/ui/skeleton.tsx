@@ -26,16 +26,23 @@ function RowsSkeleton({ rows = 3, className }: { rows?: number; className?: stri
   )
 }
 
-/** Stat tiles, then two chart-sized panels: the shape of the dashboards. */
+/** The shape of the dashboards: period heading, one primary figure beside a column of smaller ones, then two panels. */
 function DashboardSkeleton({ tiles = 4 }: { tiles?: number }) {
   return (
     <div role="status" aria-label="Loading" className="space-y-6">
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-        {Array.from({ length: tiles }, (_, i) => (
-          <div key={i} className="rounded-xl border bg-card p-5 space-y-3">
-            <Skeleton className="h-3 w-24" /><Skeleton className="h-7 w-32 max-w-full" /><Skeleton className="h-3 w-20" />
+      <Skeleton className="h-6 w-72 max-w-full" />
+      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
+        <div className="rounded-xl border bg-card p-6 space-y-4">
+          <Skeleton className="h-3 w-28" /><Skeleton className="h-12 w-64 max-w-full" /><Skeleton className="h-3 w-24" />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 border-t pt-5">
+            {[0, 1, 2, 3].map((i) => <div key={i} className="space-y-2"><Skeleton className="h-3 w-20" /><Skeleton className="h-5 w-24 max-w-full" /></div>)}
           </div>
-        ))}
+        </div>
+        <div className="rounded-xl border bg-card divide-y divide-border">
+          {Array.from({ length: tiles }, (_, i) => (
+            <div key={i} className="px-5 py-4 space-y-2"><Skeleton className="h-3 w-24" /><Skeleton className="h-5 w-32 max-w-full" /></div>
+          ))}
+        </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {[0, 1].map((i) => (

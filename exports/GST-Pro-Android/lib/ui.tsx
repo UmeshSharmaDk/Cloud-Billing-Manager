@@ -65,9 +65,16 @@ export function Loading({ layout = "detail" }: { layout?: "detail" | "list" | "d
     : layout === "list" ? Array.from({ length: 8 }, (_, i) => <View key={i} style={s.listItem}><BoneLine /></View>)
     : layout === "dashboard" ? (
       <View style={{ padding: 16, gap: 16 }}>
+        <Bone w="70%" h={18} />
         <Bone h={44} r={10} />
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-          {Array.from({ length: 6 }, (_, i) => <View key={i} style={[s.card, { flexBasis: "47%", flexGrow: 1, gap: 8 }]}><Bone w="60%" /><Bone w="80%" h={18} /></View>)}
+        <View style={[s.card, { gap: 10 }]}>
+          <Bone w="35%" /><Bone w="65%" h={32} /><Bone w="45%" />
+          <View style={{ flexDirection: "row", gap: 12, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }}>
+            {[0, 1].map((i) => <View key={i} style={{ flex: 1, gap: 6 }}><Bone w="70%" /><Bone w="55%" h={16} /></View>)}
+          </View>
+        </View>
+        <View style={[s.card, { flexDirection: "row", flexWrap: "wrap", gap: 12 }]}>
+          {Array.from({ length: 4 }, (_, i) => <View key={i} style={{ flexBasis: "47%", flexGrow: 1, gap: 6 }}><Bone w="60%" /><Bone w="70%" h={16} /></View>)}
         </View>
         <View style={[s.card, { gap: 4 }]}><Bone w="45%" h={18} />{[0, 1, 2, 3].map((i) => <BoneLine key={i} top />)}</View>
       </View>
@@ -131,11 +138,11 @@ export function Button({ title, onPress, busy, variant = "primary", disabled, di
 }) {
   const bg = variant === "primary" ? colors.primary : variant === "danger" ? colors.danger : "transparent";
   const off = disabled || !!disabledReason;
-  const ink = variant === "outline" ? colors.primary : colors.onPrimary;
+  const ink = variant === "outline" ? colors.text : colors.onPrimary;
   const button = (
     <Pressable onPress={onPress} disabled={busy || off} accessibilityRole="button" accessibilityState={{ busy: !!busy, disabled: off }}
       accessibilityLabel={title} accessibilityHint={disabledReason}
-      style={[s.button, { backgroundColor: bg }, variant === "outline" && { borderWidth: 1, borderColor: colors.primary }, off && { opacity: 0.6 }]}>
+      style={[s.button, { backgroundColor: bg }, variant === "outline" && { borderWidth: 1, borderColor: colors.border }, off && { opacity: 0.6 }]}>
       <Text style={[s.buttonText, { color: ink }, busy && { opacity: 0 }]}>{title}</Text>
       {busy && <ActivityIndicator color={ink} style={StyleSheet.absoluteFill} />}
     </Pressable>

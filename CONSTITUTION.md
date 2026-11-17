@@ -33,6 +33,20 @@ Every button, on the website and in the app, follows these six rules.
   Screens get their bottom padding from the root layout. A `Modal` does not,
   so put its content inside `ModalFrame` from `lib/ui.tsx`.
 
+## Dashboards
+
+1. **No decorative gradients.** One flat accent colour, used only for the
+   single primary action on the screen.
+2. **No icon tiles on stat cards.** The number is the largest thing on the
+   card, with a small muted label above it.
+3. **Real hierarchy.** The metric that matters most gets a large card with its
+   own breakdown; the rest sit smaller in a secondary column.
+4. **Shadows only on what floats.** Cards are a 1px border with no shadow.
+   Dropdowns, modals and popovers keep their elevation.
+5. **Copy carries data.** The heading names the period the figures cover
+   ("Revenue · 1 Aug to 31 Aug 2026"). Every change says what it compares
+   with and its unit ("+12.5% vs Jul"). No emoji.
+
 ## Commits and pull requests
 
 No AI tool is named in commit messages, co-author lines, pull request titles
