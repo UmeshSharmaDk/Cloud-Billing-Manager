@@ -9,10 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
+import { Figure } from "@/components/Figure";
 import { ConfirmPasswordDialog } from "@/components/ConfirmPasswordDialog";
 import { authFetch } from "@/lib/api-fetch";
 import {
-  ShieldCheck, UserRoundPlus, UsersRound, UserCog, Clock3, CircleAlert, CircleCheck,
+  ShieldCheck, UserRoundPlus, UsersRound, UserCog, CircleAlert, CircleCheck,
   Search, Pencil, ArrowUpRight, X, Check, RefreshCw, Mail, CalendarDays,
   ChevronRight, CircleDollarSign, Info,
 } from "lucide-react";
@@ -59,6 +60,11 @@ export default function SuperadminDashboardPage() {
   ), [admins, query]);
   const activeCount = admins.filter((admin) => admin.isActive).length;
   const totalUsers = admins.reduce((sum, admin) => sum + admin.userCount, 0);
+  const totalSeats = admins.reduce((sum, admin) => sum + admin.userLimit, 0);
+  const seatShare = totalSeats ? Math.round((totalUsers / totalSeats) * 100) : 0;
+  const fullCount = admins.filter((admin) => admin.availableSlots <= 0).length;
+  const pendingSeats = pendingRequests.reduce((sum, request) => sum + request.additionalUsers, 0);
+  const invitedSeats = invitations.reduce((sum, item) => sum + item.userLimit, 0);
   const invalidateAdminData = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: getListSuperadminAdminsQueryKey() }),
@@ -165,23 +171,41 @@ export default function SuperadminDashboardPage() {
 
   return (
     <div className="space-y-7 pb-12">
-      <section className="relative overflow-hidden rounded-2xl bg-brand-navy px-6 py-7 text-white shadow-md md:px-8">
-        <div className="absolute -right-12 -top-28 h-72 w-72 rounded-full border border-white/10" />
-        <div className="absolute right-16 -top-20 h-52 w-52 rounded-full border border-white/10" />
-        <div className="relative flex flex-col justify-between gap-5 md:flex-row md:items-end">
-          <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[.16em] text-white"><ShieldCheck className="h-3.5 w-3.5" /> Platform control</div>
-            <h1 className="text-3xl font-semibold tracking-tight md:text-[2.15rem]">Tenant administration</h1>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-white/75">Provision administrators, keep user allowances explicit, and review every capacity request.</p>
-          </div>
-          <Button onClick={() => { setInviteOpen(true); setPageError(""); setFormError(""); }} className="h-10 gap-2 bg-brand-cyan px-4 font-semibold text-brand-navy hover:bg-brand-cyan-hover" data-testid="button-invite-admin"><UserRoundPlus className="h-4 w-4" /> Invite administrator</Button>
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Seats in use · as of {date(new Date().toISOString())}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Users each administrator has added, against the allowance you granted.</p>
         </div>
-        <div className="relative mt-7 grid max-w-3xl grid-cols-2 gap-3 md:grid-cols-3">
-          <SummaryCell label="Administrator accounts" value={adminsQuery.isLoading ? "—" : String(admins.length)} detail={`${activeCount} active`} />
-          <SummaryCell label="Managed users" value={adminsQuery.isLoading ? "—" : totalUsers.toLocaleString("en-IN")} detail="Across all tenants" />
-          <SummaryCell label="Requests awaiting review" value={requestsQuery.isLoading ? "—" : String(pendingRequests.length)} detail="Capacity decisions" />
-        </div>
-      </section>
+        <Button onClick={() => { setInviteOpen(true); setPageError(""); setFormError(""); }} className="gap-2" data-testid="button-invite-admin"><UserRoundPlus className="h-4 w-4" /> Invite administrator</Button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
+        <Card>
+          <CardContent className="space-y-6 p-6">
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Seats in use</p>
+              {adminsQuery.isLoading ? <div className="mt-2 h-12 w-48 animate-pulse rounded-md bg-muted" /> : (
+                <p className="mt-2 tabular-nums text-foreground"><span className="text-5xl font-semibold tracking-tight">{totalUsers.toLocaleString("en-IN")}</span><span className="text-xl text-muted-foreground"> of {totalSeats.toLocaleString("en-IN")}</span></p>
+              )}
+              <p className="mt-2 text-sm text-muted-foreground">{seatShare}% of granted seats · {(totalSeats - totalUsers).toLocaleString("en-IN")} seats free</p>
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label={`${seatShare}% of seats in use`}>
+                <div className="h-full rounded-full bg-foreground" style={{ width: `${Math.min(100, seatShare)}%` }} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 border-t pt-5 md:grid-cols-3">
+              <Figure label="Administrators at their limit" value={adminsQuery.isLoading ? "\u2014" : String(fullCount)} />
+              <Figure label="Seats asked for, pending" value={requestsQuery.isLoading ? "\u2014" : String(pendingSeats)} note={`${pendingRequests.length} ${pendingRequests.length === 1 ? "request" : "requests"}`} />
+              <Figure label="Seats on open invitations" value={invitesQuery.isLoading ? "\u2014" : String(invitedSeats)} note={`${invitations.length} ${invitations.length === 1 ? "invitation" : "invitations"}`} />
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="divide-y divide-border p-0">
+            <div className="px-5 py-4"><Figure label="Administrator accounts" value={adminsQuery.isLoading ? "\u2014" : String(admins.length)} note={`${activeCount} active`} /></div>
+            <div className="px-5 py-4"><Figure label="Requests awaiting review" value={requestsQuery.isLoading ? "\u2014" : String(pendingRequests.length)} note="Capacity decisions" /></div>
+          </CardContent>
+        </Card>
+      </div>
 
       {(pageError || notice) && <div className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${pageError ? "border-danger/30 bg-danger-bg text-danger-text" : "border-success/30 bg-success-bg text-success-text"}`} role={pageError ? "alert" : "status"}><div className="flex items-start gap-2">{pageError ? <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" /> : <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />}{pageError || notice}</div><button aria-label="Dismiss notification" onClick={() => { setPageError(""); setNotice(""); }} className="rounded p-0.5 opacity-70 hover:opacity-100"><X className="h-4 w-4" /></button></div>}
 
@@ -190,7 +214,7 @@ export default function SuperadminDashboardPage() {
           <div><p className="mb-1 text-[11px] font-semibold uppercase tracking-[.15em] text-muted-foreground">Tenant directory</p><h2 className="text-xl font-semibold tracking-tight">Administrator accounts</h2><p className="mt-1 text-sm text-muted-foreground">Each administrator can manage users within their own account only.</p></div>
           <div className="relative w-full sm:max-w-xs"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input data-testid="input-search-admins" className="h-10 bg-card pl-9" placeholder="Find an administrator…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
         </div>
-        <Card className="overflow-hidden rounded-xl border-border shadow-sm">
+        <Card className="overflow-hidden rounded-xl">
           {adminsQuery.isLoading ? <SkeletonList /> : adminsQuery.isError ? <QueryError title="Administrator directory unavailable" retry={() => void adminsQuery.refetch()} /> : filteredAdmins.length === 0 ? (
             <EmptyState icon={<UserCog className="h-6 w-6" />} title={query ? "No matching administrators" : "No administrator accounts yet"} detail={query ? "Try searching with another name or email." : "Invite an administrator to provision a new tenant."} />
           ) : (
@@ -203,7 +227,7 @@ export default function SuperadminDashboardPage() {
                   return <tr key={admin.id} data-testid={`row-admin-${admin.id}`} className="border-b last:border-0 transition-colors hover:bg-muted">
                     <td className="px-5 py-4"><div className="flex items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-sm font-bold text-foreground">{admin.name.split(/\s+/).map((n) => n[0]).slice(0, 2).join("").toUpperCase()}</div><div><p className="font-semibold">{admin.name}</p><p className="mt-0.5 text-xs text-muted-foreground">{admin.email}</p><p className={`mt-1 text-[10px] font-semibold uppercase tracking-wide ${admin.mfaEnabled ? "text-success-text" : "text-warning-text"}`}>{admin.mfaEnabled ? "2FA on" : "2FA not set up"}</p></div></div></td>
                     <td className="px-4 py-4 text-center"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${admin.isActive ? "bg-success-bg text-success-text" : "bg-slate-100 text-slate-600"}`}><span className={`h-1.5 w-1.5 rounded-full ${admin.isActive ? "bg-success" : "bg-slate-400"}`} />{admin.isActive ? "Active" : "Inactive"}</span></td>
-                    <td className="px-4 py-4"><div className="font-semibold tabular-nums">{admin.userCount.toLocaleString("en-IN")} <span className="font-normal text-muted-foreground">users</span></div><div className="mt-2 h-1.5 w-28 overflow-hidden rounded-full bg-accent"><div className={`h-full rounded-full transition-[width] duration-300 ${full ? "bg-warning" : "bg-primary"}`} style={{ width: `${percent}%` }} /></div></td>
+                    <td className="px-4 py-4"><div className="font-semibold tabular-nums">{admin.userCount.toLocaleString("en-IN")} <span className="font-normal text-muted-foreground">users</span></div><div className="mt-2 h-1.5 w-28 overflow-hidden rounded-full bg-accent"><div className={`h-full rounded-full transition-[width] duration-300 ${full ? "bg-warning" : "bg-foreground"}`} style={{ width: `${percent}%` }} /></div></td>
                     <td className="px-4 py-4"><div className="flex items-center gap-2"><span className="font-semibold tabular-nums">{admin.userLimit.toLocaleString("en-IN")}</span><span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${full ? "bg-warning-bg text-warning-text" : "bg-accent text-muted-foreground"}`}>{admin.availableSlots.toLocaleString("en-IN")} available</span></div></td>
                     <td className="px-4 py-4 text-xs">{admin.subscriptionEnd ? <span className={new Date(`${admin.subscriptionEnd}T23:59:59`) < new Date() ? "font-semibold text-danger-text" : ""}>{date(admin.subscriptionEnd)}</span> : <span className="text-muted-foreground">No end date</span>}</td>
                     <td className="px-4 py-4 text-xs text-muted-foreground">{date(admin.createdAt)}</td>
@@ -219,14 +243,14 @@ export default function SuperadminDashboardPage() {
       <div className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
         <section className="space-y-4">
           <div className="flex items-end justify-between gap-3"><div><p className="mb-1 text-[11px] font-semibold uppercase tracking-[.15em] text-muted-foreground">Capacity governance</p><h2 className="text-xl font-semibold tracking-tight">Requests for more users</h2></div><span className="rounded-full bg-warning-bg px-2.5 py-1 text-xs font-semibold text-warning-text">{pendingRequests.length} pending</span></div>
-          <Card className="rounded-xl border-border shadow-sm">
+          <Card className="rounded-xl">
             {requestsQuery.isLoading ? <div className="space-y-3 p-5">{[0, 1].map((i) => <div key={i} className="h-24 animate-pulse rounded-lg bg-muted" />)}</div> : requestsQuery.isError ? <QueryError title="Capacity requests unavailable" retry={() => void requestsQuery.refetch()} /> : pendingRequests.length === 0 ? <EmptyState icon={<CircleCheck className="h-6 w-6" />} title="Review queue is clear" detail="New tenant capacity requests will appear here." compact /> : (
               <div className="divide-y divide-border">{pendingRequests.map((request) => <div key={request.id} data-testid={`card-capacity-request-${request.id}`} className="p-5 transition-colors hover:bg-muted">
                 <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
                   <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="font-semibold">{request.adminName}</span><span className="rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-text">Pending</span></div><p className="mt-1 truncate text-xs text-muted-foreground">{request.adminEmail}</p>
                     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs"><span className="inline-flex items-center gap-1.5 font-semibold text-foreground"><UsersRound className="h-3.5 w-3.5" /> +{request.additionalUsers} users</span><span className="inline-flex items-center gap-1.5 text-muted-foreground"><CircleDollarSign className="h-3.5 w-3.5" /> Quote {money(request.amountInr)}</span><span className="inline-flex items-center gap-1.5 text-muted-foreground"><CalendarDays className="h-3.5 w-3.5" /> {date(request.createdAt)}</span></div>
                   </div>
-                  <div className="flex shrink-0 gap-2"><Button variant="outline" size="sm" className="gap-1.5 border-danger/30 text-danger-text hover:bg-danger-bg" data-testid={`button-decline-request-${request.id}`} onClick={() => startConfirm({ type: "review", id: request.id, name: request.adminName, decision: "decline" })}><X className="h-3.5 w-3.5" /> Decline</Button><Button size="sm" className="gap-1.5 bg-primary hover:bg-primary-hover" data-testid={`button-approve-request-${request.id}`} onClick={() => { setFormError(""); setReviewEditor({ id: request.id, name: request.adminName, value: "" }); }}><Check className="h-3.5 w-3.5" /> Approve</Button></div>
+                  <div className="flex shrink-0 gap-2"><Button variant="outline" size="sm" className="gap-1.5 border-danger/30 text-danger-text hover:bg-danger-bg" data-testid={`button-decline-request-${request.id}`} onClick={() => startConfirm({ type: "review", id: request.id, name: request.adminName, decision: "decline" })}><X className="h-3.5 w-3.5" /> Decline</Button><Button variant="outline" size="sm" className="gap-1.5" data-testid={`button-approve-request-${request.id}`} onClick={() => { setFormError(""); setReviewEditor({ id: request.id, name: request.adminName, value: "" }); }}><Check className="h-3.5 w-3.5" /> Approve</Button></div>
                 </div>
                 <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-5 text-muted-foreground"><Info className="mt-0.5 h-3 w-3 shrink-0" /> Approval requires an explicit replacement user limit. The quote is for reference; capacity changes only after an approved limit is saved.</p>
               </div>)}</div>
@@ -236,12 +260,12 @@ export default function SuperadminDashboardPage() {
 
         <section className="space-y-4">
           <div><p className="mb-1 text-[11px] font-semibold uppercase tracking-[.15em] text-muted-foreground">Invite lifecycle</p><h2 className="text-xl font-semibold tracking-tight">Open invitations</h2><p className="mt-1 text-sm text-muted-foreground">One-time links waiting for setup.</p></div>
-          <Card className="rounded-xl border-border shadow-sm">
+          <Card className="rounded-xl">
             {invitesQuery.isLoading ? <div className="space-y-3 p-5">{[0, 1].map((i) => <div key={i} className="h-16 animate-pulse rounded-lg bg-muted" />)}</div> : invitesQuery.isError ? <QueryError title="Invitations unavailable" retry={() => void invitesQuery.refetch()} /> : invitations.length === 0 ? <EmptyState icon={<Mail className="h-6 w-6" />} title="No open invitations" detail="Invited administrators appear here until they finish setup." compact /> : (
               <div className="divide-y divide-border">{invitations.map((item) => <div key={item.id} data-testid={`row-invitation-${item.id}`} className="flex items-start justify-between gap-3 p-4"><div className="flex min-w-0 items-start gap-3"><div className="rounded-lg bg-accent p-2 text-foreground"><Mail className="h-4 w-4" /></div><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.name}</p><p className="truncate text-xs text-muted-foreground">{item.email}</p><p className="mt-1 text-[11px] text-muted-foreground">Limit {item.userLimit} · expires {date(item.expiresAt)}</p></div></div><ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" /></div>)}</div>
             )}
           </Card>
-          <Card className="rounded-xl border-border bg-muted shadow-none dark:border-border dark:bg-card"><CardContent className="flex gap-3 p-4"><div className="rounded-lg bg-white p-2 text-muted-foreground"><Clock3 className="h-4 w-4" /></div><div><p className="text-sm font-semibold text-foreground">A clear audit trail</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Capacity decisions are reviewed individually. Declining a request never changes an administrator’s allowance.</p></div></CardContent></Card>
+          <Card className="rounded-xl"><CardContent className="flex gap-3 p-4"><div><p className="text-sm font-semibold text-foreground">A clear audit trail</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Capacity decisions are reviewed individually. Declining a request never changes an administrator’s allowance.</p></div></CardContent></Card>
         </section>
       </div>
 
@@ -283,9 +307,6 @@ export default function SuperadminDashboardPage() {
   );
 }
 
-function SummaryCell({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <div className="rounded-xl border border-white/10 bg-white/[.07] px-4 py-3"><div className="text-xs text-white/65">{label}</div><div className="mt-1 flex items-baseline gap-2"><span className="text-2xl font-semibold tabular-nums">{value}</span><span className="text-[11px] text-white/65">{detail}</span></div></div>;
-}
 function SkeletonList() {
   return <div className="space-y-3 p-5" aria-label="Loading administrator accounts">{[0, 1, 2, 3].map((i) => <div key={i} className="flex animate-pulse items-center gap-4 rounded-lg border border-border/60 p-4"><div className="h-10 w-10 rounded-xl bg-muted" /><div className="flex-1 space-y-2"><div className="h-3 w-44 rounded bg-muted" /><div className="h-2.5 w-56 rounded bg-muted" /></div><div className="h-7 w-24 rounded bg-muted" /></div>)}</div>;
 }

@@ -8,18 +8,10 @@ import { useSave } from "@/lib/save";
 import type { User } from "@/lib/types";
 import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill } from "@/lib/ui";
 import { AccountCard, MenuLink } from "../(tabs)/more";
+import { Figure } from "../(tabs)/index";
 
 type Stats = Record<string, number> & { recentUsers: User[] };
 export type CapacityRequest = { id: number; adminName: string; adminEmail: string; additionalUsers: number; amountInr: number; status: string; createdAt: string; grantedUserLimit?: number | null };
-
-export function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <View style={[s.card, { flexBasis: "47%", flexGrow: 1 }]}>
-      <Text style={s.muted}>{label}</Text>
-      <Text style={{ fontSize: 20, fontWeight: "700", color: colors.text, marginTop: 4 }}>{value}</Text>
-    </View>
-  );
-}
 
 type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number };
 
@@ -63,13 +55,23 @@ export default function AdminHome() {
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}
       refreshControl={<RefreshControl refreshing={stats.isRefetching} onRefresh={() => { stats.refetch(); reqs.refetch(); }} />}>
       <Stack.Screen options={{ title: "Admin", headerBackVisible: false }} />
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-        <Stat label="Users" value={d.totalUsers} />
-        <Stat label="Active" value={d.activeUsers} />
-        <Stat label="Inactive" value={d.inactiveUsers} />
-        <Stat label="Expired plans" value={d.expiredSubscriptions} />
-        <Stat label="Trial / monthly / yearly" value={`${d.trialCount ?? 0} / ${d.monthlyCount ?? 0} / ${d.yearlyCount ?? 0}`} />
-        <Stat label="Invoices" value={d.totalInvoices ?? 0} />
+      <Text style={s.title}>Users · as of {new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</Text>
+      <View style={[s.card, { gap: 12 }]}>
+        <View>
+          <Text style={s.muted}>Active users</Text>
+          <Text style={{ color: colors.text, marginTop: 2 }}><Text style={{ fontSize: 32, fontWeight: "700" }}>{d.activeUsers}</Text><Text style={{ fontSize: 16, color: colors.muted }}> of {d.totalUsers}</Text></Text>
+          <Text style={s.muted}>+{d.newUsersThisMonth ?? 0} users added in {new Date().toLocaleDateString("en-GB", { month: "short" })}</Text>
+        </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }}>
+          <Figure label="Monthly plan" value={String(d.monthlyCount ?? 0)} />
+          <Figure label="Yearly plan" value={String(d.yearlyCount ?? 0)} />
+          <Figure label="On trial" value={String(d.trialCount ?? 0)} />
+          <Figure label="Plan expired" value={String(d.expiredSubscriptions ?? 0)} />
+          <Figure label="Inactive" value={String(d.inactiveUsers ?? 0)} />
+        </View>
+      </View>
+      <View style={[s.card, { flexDirection: "row", gap: 12 }]}>
+        <Figure label="Invoices, all time" value={String(d.totalInvoices ?? 0)} note="Across all your users" />
       </View>
       <Clients />
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>

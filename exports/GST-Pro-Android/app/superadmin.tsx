@@ -7,7 +7,8 @@ import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import { Button, Card, colors, ErrorView, Field, Loading, PasswordPrompt, Prompt, Row, s, StatusPill } from "@/lib/ui";
 import { AccountCard, MenuLink } from "./(tabs)/more";
-import { Clients, Stat, type CapacityRequest } from "./admin";
+import { Clients, type CapacityRequest } from "./admin";
+import { Figure } from "./(tabs)/index";
 
 type Admin = { id: number; name: string; email: string; isActive: boolean; mfaEnabled?: boolean; userLimit: number; userCount: number; availableSlots: number; subscriptionEnd?: string | null };
 type Invite = { id: number; name: string; email: string; userLimit: number; expiresAt: string };
@@ -58,15 +59,24 @@ export default function Superadmin() {
   });
   const decline = (r: CapacityRequest) => privileged((pw) => api(`/superadmin/capacity-requests/${r.id}/review`, { method: "PATCH", body: { decision: "decline", confirmPassword: pw } }));
 
+  const used = d.admins.reduce((n, a) => n + a.userCount, 0);
+  const seats = d.admins.reduce((n, a) => n + a.userLimit, 0);
+
   return (
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} keyboardShouldPersistTaps="handled"
       refreshControl={<RefreshControl refreshing={admins.isRefetching} onRefresh={refresh} />}>
       <Stack.Screen options={{ title: "Superadmin", headerBackVisible: false }} />
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-        <Stat label="Admins" value={d.admins.length} />
-        <Stat label="Active admins" value={d.admins.filter((a) => a.isActive).length} />
-        <Stat label="Users under admins" value={d.admins.reduce((n, a) => n + a.userCount, 0)} />
-        <Stat label="Extra user price" value={money(d.additionalUserPriceInr)} />
+      <Text style={s.title}>Seats in use · as of {new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</Text>
+      <View style={[s.card, { gap: 12 }]}>
+        <View>
+          <Text style={s.muted}>Seats in use</Text>
+          <Text style={{ color: colors.text, marginTop: 2 }}><Text style={{ fontSize: 32, fontWeight: "700" }}>{used}</Text><Text style={{ fontSize: 16, color: colors.muted }}> of {seats}</Text></Text>
+          <Text style={s.muted}>{seats ? Math.round((used / seats) * 100) : 0}% of granted seats · {seats - used} seats free</Text>
+        </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }}>
+          <Figure label="Admins" value={String(d.admins.length)} note={`${d.admins.filter((a) => a.isActive).length} active`} />
+          <Figure label="Extra user price" value={money(d.additionalUserPriceInr)} note="per user" />
+        </View>
       </View>
 
       <Clients />

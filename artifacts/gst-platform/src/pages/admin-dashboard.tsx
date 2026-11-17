@@ -2,13 +2,10 @@ import { useGetAdminStats } from "@workspace/api-client-react";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, Building2, FileText, TrendingUp, Shield } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ClientsBoard } from "@/components/ClientsBoard";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-
-const COLORS = ["hsl(217,91%,50%)", "hsl(160,60%,45%)", "hsl(30,80%,55%)", "hsl(340,75%,55%)"];
+import { Figure } from "@/components/Figure";
 
 export default function AdminDashboardPage() {
   const { data, isLoading } = useGetAdminStats();
@@ -17,88 +14,57 @@ export default function AdminDashboardPage() {
   //              monthlyCount, yearlyCount, trialCount, expiredCount, recentUsers
   const stats: any = data || {};
 
-  if (isLoading) return <DashboardSkeleton />;
+  if (isLoading) return <DashboardSkeleton tiles={2} />;
 
-  const subPieData = [
-    { name: "Monthly", value: stats.monthlyCount || 0 },
-    { name: "Yearly", value: stats.yearlyCount || 0 },
-    { name: "Trial", value: stats.trialCount || 0 },
-    { name: "Expired", value: stats.expiredCount || 0 },
-  ].filter(d => d.value > 0);
+  const today = new Date();
+  const asOf = today.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const thisMonth = today.toLocaleDateString("en-GB", { month: "short" });
+  const total = stats.totalUsers || 0;
+  const active = stats.activeSubscriptions || stats.activeUsers || 0;
+  const share = total ? Math.round((active / total) * 100) : 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="p-3 bg-primary/10 rounded-xl"><Shield className="w-6 h-6 text-primary" /></div>
-        <div>
-          <h1 className="text-2xl font-bold">Admin Dashboard</h1>
-          <p className="text-muted-foreground text-sm">Platform overview and user management</p>
-        </div>
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Users · as of {asOf}</h1>
+        <p className="text-sm text-muted-foreground mt-1">Everyone you have added, and the plan each one is on.</p>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
         <Card>
-          <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-blue-100 rounded-xl"><Users className="w-5 h-5 text-blue-600" /></div>
+          <CardContent className="p-6 space-y-6">
             <div>
-              <p className="text-xs text-muted-foreground">Total Users</p>
-              <p className="text-2xl font-bold">{stats.totalUsers || 0}</p>
-              <p className="text-xs text-success font-medium">+{stats.newUsersThisMonth || 0} this month</p>
+              <p className="text-sm font-medium text-muted-foreground">Active users</p>
+              <p className="mt-2 tabular-nums text-foreground"><span className="text-5xl font-semibold tracking-tight">{active}</span><span className="text-xl text-muted-foreground"> of {total}</span></p>
+              <p className="text-sm text-muted-foreground mt-2">{share}% active · +{stats.newUsersThisMonth || 0} users added in {thisMonth}</p>
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label={`${share}% of users active`}>
+                <div className="h-full rounded-full bg-foreground" style={{ width: `${share}%` }} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 border-t pt-5">
+              <Figure label="Monthly plan" value={String(stats.monthlyCount || 0)} />
+              <Figure label="Yearly plan" value={String(stats.yearlyCount || 0)} />
+              <Figure label="On trial" value={String(stats.trialCount || 0)} />
+              <Figure label="Plan expired" value={String(stats.expiredCount || 0)} />
+              <Figure label="Inactive" value={String(stats.inactiveUsers || 0)} />
             </div>
           </CardContent>
         </Card>
+
         <Card>
-          <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-indigo-100 rounded-xl"><Building2 className="w-5 h-5 text-indigo-600" /></div>
-            <div>
-              <p className="text-xs text-muted-foreground">Businesses</p>
-              <p className="text-2xl font-bold">{stats.totalBusinesses || 0}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-success-bg rounded-xl"><FileText className="w-5 h-5 text-success" /></div>
-            <div>
-              <p className="text-xs text-muted-foreground">Total Invoices</p>
-              <p className="text-2xl font-bold">{stats.totalInvoices || 0}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5 flex items-center gap-4">
-            <div className="p-3 bg-warning-bg rounded-xl"><TrendingUp className="w-5 h-5 text-warning" /></div>
-            <div>
-              <p className="text-xs text-muted-foreground">Active Users</p>
-              <p className="text-2xl font-bold">{stats.activeSubscriptions || stats.activeUsers || 0}</p>
-            </div>
+          <CardContent className="p-0 divide-y divide-border">
+            <div className="px-5 py-4"><Figure label="Businesses" value={String(stats.totalBusinesses || 0)} /></div>
+            <div className="px-5 py-4"><Figure label="Invoices, all time" value={String(stats.totalInvoices || 0)} note="Across all your users" /></div>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {subPieData.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-base">Subscription Distribution</CardTitle></CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie data={subPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {subPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        )}
-
+      <div className="grid grid-cols-1 gap-4">
         <Card>
           <CardHeader className="pb-3 flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Recent Registrations</CardTitle>
+            <CardTitle className="text-base">Recently added users</CardTitle>
             <Link href="/admin/users">
-              <Button variant="ghost" size="sm" className="text-primary text-xs">View all</Button>
+              <Button variant="ghost" size="sm" className="text-xs">View all</Button>
             </Link>
           </CardHeader>
           <CardContent className="p-0">
