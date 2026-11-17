@@ -1,4 +1,5 @@
 import { useGetAdminStats } from "@workspace/api-client-react";
+import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, Building2, FileText, TrendingUp, Shield } from "lucide-react";
@@ -16,11 +17,7 @@ export default function AdminDashboardPage() {
   //              monthlyCount, yearlyCount, trialCount, expiredCount, recentUsers
   const stats: any = data || {};
 
-  if (isLoading) return (
-    <div className="space-y-4 animate-pulse">
-      {[...Array(4)].map((_, i) => <div key={i} className="h-28 bg-muted rounded-xl" />)}
-    </div>
-  );
+  if (isLoading) return <DashboardSkeleton />;
 
   const subPieData = [
     { name: "Monthly", value: stats.monthlyCount || 0 },

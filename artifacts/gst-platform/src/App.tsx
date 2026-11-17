@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { AppShell } from "@/components/AppShell";
+import { ShellSkeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -41,7 +42,7 @@ const queryClient = new QueryClient({
 
 function ProtectedRoute({ component: Component, adminOnly = false }: { component: React.ComponentType; adminOnly?: boolean }) {
   const { user, isLoading } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (isLoading) return <ShellSkeleton />;
   if (!user) return <Redirect to="/login" />;
   if (adminOnly && user.role !== "admin") return <Redirect to="/dashboard" />;
   if (!adminOnly && user.role !== "user") {
@@ -52,7 +53,7 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
 
 function AdminRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (isLoading) return <ShellSkeleton />;
   if (!user) return <Redirect to="/login" />;
   if (user.role !== "admin") return <Redirect to="/dashboard" />;
   if (!user.mfaEnabled) return <Redirect to="/security" />;
@@ -61,7 +62,7 @@ function AdminRoute({ component: Component }: { component: React.ComponentType }
 
 function SuperadminRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (isLoading) return <ShellSkeleton />;
   if (!user) return <Redirect to="/login" />;
   if (user.role !== "superadmin") return <Redirect to={user.role === "admin" ? "/admin" : "/dashboard"} />;
   if (!user.mfaEnabled) return <Redirect to="/security" />;
@@ -71,7 +72,7 @@ function SuperadminRoute({ component: Component }: { component: React.ComponentT
 /** Two-factor setup. Reachable by administrators before they have it. */
 function SecurityRoute() {
   const { user, isLoading } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" /></div>;
+  if (isLoading) return <ShellSkeleton />;
   if (!user) return <Redirect to="/login" />;
   if (user.role !== "admin" && user.role !== "superadmin") return <Redirect to="/dashboard" />;
   return <AppShell><SecurityPage /></AppShell>;

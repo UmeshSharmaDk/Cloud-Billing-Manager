@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { RowsSkeleton } from "@/components/ui/skeleton";
 import { authFetch } from "@/lib/api-fetch";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +16,7 @@ export function TdsTcsReport({ kind, month, year }: { kind: "tds" | "tcs"; month
       return (await res.json()) as { totalTds?: number; totalTcs?: number; sections?: Entry[]; entries: Entry[] };
     },
   });
-  if (q.isLoading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (q.isLoading) return <Card><CardContent className="p-5"><RowsSkeleton rows={4} /></CardContent></Card>;
   if (q.error) return <p className="text-sm text-danger">{(q.error as Error).message}</p>;
   const d = q.data!;
   const tds = kind === "tds";

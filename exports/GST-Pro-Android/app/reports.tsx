@@ -29,7 +29,7 @@ export default function Reports() {
         <Text style={[s.title, { flex: 2, textAlign: "center" }]}>{label}</Text>
         <View style={{ flex: 1 }}><Button title="Next ›" variant="outline" onPress={() => step(1)} /></View>
       </View>
-      {q.isLoading ? <Loading /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : d && (
+      {q.isLoading ? <Card><Loading layout="rows" /></Card> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : d && (
         <>
           {kind === "GSTR-1" && (
             <Card title="Outward supplies">

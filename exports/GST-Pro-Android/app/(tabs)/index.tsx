@@ -29,7 +29,7 @@ export default function Dashboard() {
   const gst = useQuery(get<GstSummary>("/dashboard/gst-summary"));
   const low = useQuery(get<Product[]>("/dashboard/low-stock"));
 
-  if (stats.isLoading) return <Loading />;
+  if (stats.isLoading) return <Loading layout="dashboard" />;
   if (stats.error) return <ErrorView error={stats.error} onRetry={stats.refetch} />;
   const d = stats.data!;
   const refresh = () => [stats, recent, months, top, gst, low].forEach((q) => q.refetch());

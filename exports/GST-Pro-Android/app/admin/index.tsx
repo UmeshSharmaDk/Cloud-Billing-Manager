@@ -35,7 +35,7 @@ export function Clients() {
         <View style={{ flex: 1 }}><Button title="‹ Prev" variant="outline" onPress={() => step(-1)} /></View>
         <View style={{ flex: 1 }}><Button title="Next ›" variant="outline" onPress={() => step(1)} /></View>
       </View>
-      {q.isLoading ? <Loading /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : !q.data?.clients.length ? <Text style={s.muted}>No clients yet.</Text> :
+      {q.isLoading ? <Loading layout="rows" /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : !q.data?.clients.length ? <Text style={s.muted}>No clients yet.</Text> :
         q.data.clients.map((c) => (
           <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
             <Row label={c.business?.name ?? c.name} value={money(c.sales ?? 0)} />
@@ -54,7 +54,7 @@ export default function AdminHome() {
   useEffect(() => { if (request) setAsking(true); }, [request]);
   const { busy, run } = useSave();
 
-  if (stats.isLoading) return <Loading />;
+  if (stats.isLoading) return <Loading layout="dashboard" />;
   if (stats.error) return <ErrorView error={stats.error} onRetry={stats.refetch} />;
   const d = stats.data!;
   const price = reqs.data?.additionalUserPriceInr ?? 1000;

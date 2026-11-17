@@ -1,4 +1,5 @@
 import { useGetDashboardStats, useGetRecentInvoices, useGetMonthlyRevenue, useGetLowStockAlerts, useGetGstSummary } from "@workspace/api-client-react";
+import { DashboardSkeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
@@ -50,11 +51,7 @@ export default function DashboardPage() {
   // GST summary returns: { outputCgst, outputSgst, outputIgst, inputCgst, inputSgst, inputIgst, netPayable }
   const gstSummary: any = gstData || {};
 
-  if (isLoading) return (
-    <div className="space-y-4 animate-pulse">
-      {[...Array(4)].map((_, i) => <div key={i} className="h-32 bg-muted rounded-xl" />)}
-    </div>
-  );
+  if (isLoading) return <DashboardSkeleton />;
 
   return (
     <div className="space-y-6">

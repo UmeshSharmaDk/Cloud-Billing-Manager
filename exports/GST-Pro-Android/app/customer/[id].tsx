@@ -37,7 +37,7 @@ export function PartyDetail({ kind }: { kind: "customer" | "vendor" }) {
       </Card>
       <Button title="Edit" variant="outline" onPress={() => router.push({ pathname: `/${kind}/form`, params: { id } })} />
       <Card title={kind === "customer" ? "Invoices" : "Purchase bills"}>
-        {related.isLoading && <Text style={s.muted}>Loading…</Text>}
+        {related.isLoading && <Loading layout="rows" />}
         {related.data && list.length === 0 && <Text style={s.muted}>Nothing yet.</Text>}
         {list.map((d) => (
           <Pressable key={d.id} onPress={() => router.push(`/${kind === "customer" ? "invoice" : "purchase"}/${d.id}`)}

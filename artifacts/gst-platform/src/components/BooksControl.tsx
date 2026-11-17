@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RowsSkeleton } from "@/components/ui/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { authFetch } from "@/lib/api-fetch";
 import { formatDate } from "@/lib/utils";
@@ -75,7 +76,7 @@ export function BooksControl({ userId, lockDate }: { userId: number; lockDate: s
       <Card>
         <CardHeader className="pb-3"><CardTitle className="text-base">Audit trail</CardTitle></CardHeader>
         <CardContent className="max-h-80 overflow-y-auto text-sm">
-          {trail.isLoading ? <p className="text-muted-foreground">Loading…</p> : trail.error ? <p className="text-danger">{(trail.error as Error).message}</p>
+          {trail.isLoading ? <RowsSkeleton /> : trail.error ? <p className="text-danger">{(trail.error as Error).message}</p>
             : !trail.data?.entries.length ? <p className="text-muted-foreground">No changes recorded yet.</p> : (
               <ul className="divide-y">
                 {trail.data.entries.map((e) => (

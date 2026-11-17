@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -240,7 +241,7 @@ export default function EwayBillNewPage() {
               </SelectContent>
             </Select>
           </Field>
-          {form.invoiceId && invoiceLoading && <p className="text-xs text-muted-foreground mt-2">Loading invoice details…</p>}
+          {form.invoiceId && invoiceLoading && <div role="status" aria-label="Loading invoice details" className="mt-3 p-3 rounded-lg border grid grid-cols-2 sm:grid-cols-4 gap-3">{[0, 1, 2, 3].map((i) => <div key={i} className="space-y-1.5"><Skeleton className="h-3 w-16" /><Skeleton className="h-4 w-24" /></div>)}</div>}
           {selectedInvoice && (
             <div className="mt-3 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div><p className="text-xs text-muted-foreground">Invoice #</p><p className="font-mono font-semibold">{selectedInvoice.invoiceNumber}</p></div>

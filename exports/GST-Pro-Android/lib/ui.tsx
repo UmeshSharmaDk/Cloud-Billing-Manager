@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
 import * as Updates from "expo-updates";
-import { ActivityIndicator, DevSettings, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { ActivityIndicator, Animated, DevSettings, FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { statusColor } from "./format";
 
@@ -27,11 +27,68 @@ export function ThemeToggle() {
   return <Button title={isDark ? "Switch to light mode" : "Switch to dark mode"} variant="outline" onPress={() => setDarkMode(!isDark)} />;
 }
 
-export function Loading() {
+/** A grey placeholder for text or a box that is still loading. */
+function Bone({ w = "100%", h = 12, r = 6 }: { w?: number | `${number}%`; h?: number; r?: number }) {
+  return <View style={{ width: w, height: h, borderRadius: r, backgroundColor: colors.border }} />;
+}
+
+/** One list line: title and subtitle on the left, a value on the right. */
+function BoneLine({ top }: { top?: boolean }) {
   return (
-    <View style={s.center}>
-      <ActivityIndicator color={colors.primary} size="large" />
+    <View style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 10, gap: 12, borderTopWidth: top ? 1 : 0, borderTopColor: colors.border }}>
+      <View style={{ flex: 1, gap: 6 }}><Bone w="55%" h={14} /><Bone w="80%" /></View>
+      <View style={{ alignItems: "flex-end", gap: 6 }}><Bone w={64} h={14} /><Bone w={48} h={16} r={999} /></View>
     </View>
+  );
+}
+
+function BoneRows({ n = 5 }: { n?: number }) {
+  return <>{Array.from({ length: n }, (_, i) => <View key={i} style={s.row}><Bone w="35%" /><Bone w="30%" /></View>)}</>;
+}
+
+/**
+ * Skeleton screen shown while a screen's data loads, shaped like the screen it stands in for.
+ * `rows` sits inline inside a card; the others fill the screen.
+ */
+export function Loading({ layout = "detail" }: { layout?: "detail" | "list" | "dashboard" | "form" | "rows" }) {
+  const pulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 0.45, duration: 700, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 1, duration: 700, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  const body = layout === "rows" ? <>{[0, 1, 2].map((i) => <BoneLine key={i} top />)}</>
+    : layout === "list" ? Array.from({ length: 8 }, (_, i) => <View key={i} style={s.listItem}><BoneLine /></View>)
+    : layout === "dashboard" ? (
+      <View style={{ padding: 16, gap: 16 }}>
+        <Bone h={44} r={10} />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+          {Array.from({ length: 6 }, (_, i) => <View key={i} style={[s.card, { flexBasis: "47%", flexGrow: 1, gap: 8 }]}><Bone w="60%" /><Bone w="80%" h={18} /></View>)}
+        </View>
+        <View style={[s.card, { gap: 4 }]}><Bone w="45%" h={18} />{[0, 1, 2, 3].map((i) => <BoneLine key={i} top />)}</View>
+      </View>
+    )
+    : layout === "form" ? (
+      <View style={{ padding: 16, gap: 16 }}>
+        {Array.from({ length: 6 }, (_, i) => <View key={i} style={{ gap: 6 }}><Bone w="30%" /><Bone h={46} r={10} /></View>)}
+        <Bone h={44} r={10} />
+      </View>
+    ) : (
+      <View style={{ padding: 16, gap: 16 }}>
+        <View style={[s.card, { gap: 8 }]}><Bone w="50%" h={18} /><BoneRows /></View>
+        <Bone h={44} r={10} />
+        <View style={[s.card, { gap: 4 }]}><Bone w="40%" h={18} />{[0, 1, 2].map((i) => <BoneLine key={i} top />)}</View>
+      </View>
+    );
+
+  return (
+    <Animated.View style={[layout !== "rows" && s.screen, { opacity: pulse }]} accessible accessibilityLabel="Loading" accessibilityRole="progressbar">
+      {body}
+    </Animated.View>
   );
 }
 
