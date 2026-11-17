@@ -64,8 +64,8 @@ export default function Dashboard() {
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}
       refreshControl={<RefreshControl refreshing={stats.isRefetching} onRefresh={refresh} />}>
       <PlanExpiryBanner />
-      <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
       <Text style={s.title}>Revenue · 1 {monthName(0)} to {now.getUTCDate()} {monthName(0)} {now.getUTCFullYear()}</Text>
+      <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
       <View style={[s.card, { gap: 12 }]}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", gap: 12 }}>
           <View style={{ flexShrink: 1 }}>
@@ -104,7 +104,7 @@ export default function Dashboard() {
         ))}
       </View>
       {!!months.data?.length && (
-        <Card title="Monthly sales">
+        <Card title={`Sales by month · ${series[0]?.month ?? ""} to ${cur?.month ?? ""}`}>
           {months.data.map((m) => (
             <View key={m.month} style={{ gap: 2 }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -112,7 +112,7 @@ export default function Dashboard() {
                 <Text style={{ color: colors.text, fontWeight: "600" }}>{money(m.sales)}</Text>
               </View>
               <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.border }}>
-                <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.primary, width: `${(m.sales / peak) * 100}%` }} />
+                <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.text, width: `${(m.sales / peak) * 100}%` }} />
               </View>
             </View>
           ))}
