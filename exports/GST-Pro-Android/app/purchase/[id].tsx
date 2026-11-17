@@ -5,7 +5,7 @@ import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import type { Purchase } from "@/lib/types";
-import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill } from "@/lib/ui";
+import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill, pullToRefresh } from "@/lib/ui";
 
 const STATUSES = ["unpaid", "partial", "paid"] as const;
 
@@ -18,7 +18,7 @@ export default function PurchaseDetail() {
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
   const p = q.data!;
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q)}>
       <Stack.Screen options={{ title: p.invoiceNumber }} />
       <Card title={p.vendorName} right={<StatusPill status={p.status} />}>
         {!!p.vendorGstin && <Row label="GSTIN" value={p.vendorGstin} />}

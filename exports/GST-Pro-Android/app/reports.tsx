@@ -5,7 +5,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import type { Invoice } from "@/lib/types";
-import { Button, Card, Chips, colors, ErrorView, Loading, Row, s } from "@/lib/ui";
+import { Button, Card, Chips, colors, ErrorView, Loading, Row, s, pullToRefresh } from "@/lib/ui";
 
 const KINDS = ["GSTR-1", "GSTR-3B", "HSN", "TDS", "TCS"] as const;
 type R = Record<string, number> & { invoices?: Invoice[]; items?: Record<string, string | number>[]; entries?: Record<string, any>[]; sections?: Record<string, any>[] };
@@ -21,7 +21,7 @@ export default function Reports() {
   const d = q.data;
 
   return (
-    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }} refreshControl={pullToRefresh(q)}>
       <Stack.Screen options={{ title: name ? `${name} · reports` : "GST reports" }} />
       <Chips options={KINDS} value={kind} onChange={setKind} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
