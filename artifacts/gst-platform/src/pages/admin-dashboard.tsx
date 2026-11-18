@@ -6,6 +6,43 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ClientsBoard } from "@/components/ClientsBoard";
 import { Figure } from "@/components/Figure";
+import { ToggleRow } from "@/components/ToggleRow";
+import { useAuth } from "@/context/AuthContext";
+import { authFetch } from "@/lib/api-fetch";
+import { useQueryClient } from "@tanstack/react-query";
+import { getGetMeQueryKey } from "@workspace/api-client-react";
+import { useToast } from "@/hooks/use-toast";
+import { useState } from "react";
+
+/** The admin's choice to require two-factor sign-in for everyone they manage. */
+function TeamMfa() {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  const set = async (required: boolean) => {
+    setBusy(true);
+    try {
+      const res = await authFetch("/api/users/team-mfa", { method: "PUT", body: JSON.stringify({ required }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not save");
+      qc.setQueryData(getGetMeQueryKey(), await res.json());
+      toast({ title: required ? "Your users must now set up two-factor sign-in" : "Two-factor sign-in is now optional for your users" });
+    } catch (err: any) {
+      toast({ title: "Not saved", description: err.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card>
+      <CardContent className="px-5 py-2">
+        <ToggleRow id="team-mfa" label="Require two-factor sign-in for my users"
+          note="Each user sets it up on their next visit before they can open their books."
+          checked={Boolean((user as any)?.requireTeamMfa)} onChange={set} busy={busy} />
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function AdminDashboardPage() {
   const { data, isLoading } = useGetAdminStats();
@@ -58,6 +95,8 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <TeamMfa />
 
       <div className="grid grid-cols-1 gap-4">
         <Card>

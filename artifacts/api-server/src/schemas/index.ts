@@ -318,6 +318,8 @@ export const MfaLoginBody = z.object({
   code: mfaCode,
 });
 
+export const TeamMfaBody = z.object({ required: z.boolean() });
+
 export const MfaResetBody = z.object({
   confirmPassword: z.string().min(1).max(1024),
 });
@@ -345,6 +347,7 @@ export const UpdateBusinessBody = z.object({
   bankBranch: optionalText(200),
   // A UPI VPA: handle@provider, the only shape UPI apps accept.
   upiId: z.union([z.string().trim().regex(/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/, "UPI ID looks like name@bank"), z.literal(""), z.null()]).optional(),
+  autoReminders: z.boolean().optional(),
   termsConditions: optionalText(5000),
 });
 
@@ -498,6 +501,8 @@ export const CreateInvoiceBody = z
     notes: optionalText(2000),
     items: lineItems,
     tcsRate: z.coerce.number().finite().min(0).max(10).optional(),
+    /** This invoice is this month's repeat of a monthly invoice. */
+    repeatOf: entityId.optional(),
   })
   .refine((b) => b.customerId !== undefined || Boolean(b.customerName), {
     message: "customerId or customerName is required",
@@ -508,6 +513,8 @@ const tdsShape = {
   tdsSection: optionalText(10),
   tdsRate: z.coerce.number().finite().min(0).max(30).optional(),
 };
+
+export const RepeatInvoiceBody = z.object({ repeatMonthly: z.boolean() });
 
 export const UpdateInvoiceBody = z.object({
   tcsRate,

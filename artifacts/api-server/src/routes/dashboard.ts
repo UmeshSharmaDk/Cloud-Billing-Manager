@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, and, gte, lte, ne, sql, desc, count, sum as sqlSum } from "drizzle-orm";
+import { eq, and, gte, lte, lt, ne, sql, desc, count, sum as sqlSum } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { dec, sum, sumBy, toJson } from "../lib/money";
 import type { TenantRequest, IdParams } from "../lib/http";
@@ -246,6 +246,25 @@ async function lowStock(req: Req) {
   })));
 }
 
+/** What needs doing: monthly invoices to repeat, and overdue invoices to chase. */
+async function toDo(req: Req) {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + "01";
+  const pick = { id: invoicesTable.id, invoiceNumber: invoicesTable.invoiceNumber, customerName: invoicesTable.customerName,
+    invoiceDate: invoicesTable.invoiceDate, dueDate: invoicesTable.dueDate, grandTotal: invoicesTable.grandTotal,
+    paidAmount: invoicesTable.paidAmount, status: invoicesTable.status, phone: customersTable.phone };
+  const q = () => db.select(pick).from(invoicesTable)
+    .leftJoin(customersTable, and(eq(customersTable.id, invoicesTable.customerId), eq(customersTable.businessId, invoicesTable.businessId)));
+  const [repeat, overdue] = [
+    await q().where(and(eq(invoicesTable.businessId, req.businessId), eq(invoicesTable.repeatMonthly, true),
+      lt(invoicesTable.invoiceDate, monthStart), ne(invoicesTable.status, "cancelled"))).orderBy(invoicesTable.customerName).limit(20),
+    await q().where(and(eq(invoicesTable.businessId, req.businessId), receivableInvoice(invoicesTable), sql`${invoicesTable.status} IN ('unpaid', 'partial')`,
+        sql`${invoicesTable.dueDate} IS NOT NULL`, lt(invoicesTable.dueDate, today))).orderBy(invoicesTable.dueDate).limit(10),
+  ];
+  const money = (r: typeof repeat[number]) => ({ ...r, grandTotal: toJson(r.grandTotal), paidAmount: toJson(r.paidAmount) });
+  return { repeatDue: repeat.map(money), overdue: overdue.map(money) };
+}
+
 router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => res.json(await stats(req)));
 router.get("/recent-invoices", requireAuth, requireBusiness, async (req: Req, res) => res.json(await recentInvoices(req)));
 router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, res) => res.json(await monthlyRevenue(req)));
@@ -259,6 +278,7 @@ router.get("/summary", requireAuth, requireBusiness, async (req: Req, res) => {
   return res.json({
     stats: await stats(req), recentInvoices: await recentInvoices(req), monthlyRevenue: await monthlyRevenue(req),
     lowStock: await lowStock(req), gstSummary: await gstSummary(req),
+    ...(await toDo(req)),
   });
 });
 

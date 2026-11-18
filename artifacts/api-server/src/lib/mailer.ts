@@ -279,6 +279,26 @@ export function invoiceMessage(to: string, inv: {
   };
 }
 
+/** A gentle reminder for an overdue invoice, sent weekly when the business turns it on. */
+export function paymentReminderMessage(to: string, r: {
+  business: string; customer: string; number: string; date: string; dueDate: string; balance: string; upiLink?: string | null; replyTo?: string | null;
+}): Message {
+  return {
+    to,
+    subject: `Payment reminder: invoice ${r.number} from ${r.business}`,
+    text: [
+      `Dear ${r.customer},`,
+      "",
+      `This is a reminder that invoice ${r.number} dated ${r.date} from ${r.business} has Rs ${r.balance} due since ${r.dueDate}.`,
+      ...(r.upiLink ? ["", "Pay by UPI from your phone:", r.upiLink] : []),
+      "",
+      r.replyTo ? `If you have already paid, please let us know at ${r.replyTo}.` : "If you have already paid, please ignore this message.",
+      "",
+      r.business,
+    ].join("\n"),
+  };
+}
+
 /**
  * Send without letting a mail failure change what the caller returns.
  *

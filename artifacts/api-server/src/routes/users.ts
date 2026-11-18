@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, usersTable, businessesTable } from "@workspace/db";
-import { eq, ilike, or, and, count, isNull } from "drizzle-orm";
+import { eq, ilike, or, and, count, isNull, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin, hasAdminAccess } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
@@ -13,8 +13,9 @@ import { validateBody, validateQuery, validateParams } from "../middleware/valid
 import type { AuthedRequest, IdParams } from "../lib/http";
 import {
   ListUsersQuery, CreateUserBody, UpdateUserBody,
-  ToggleStatusBody, ResetPasswordBody, IdParam,
+  ToggleStatusBody, ResetPasswordBody, IdParam, TeamMfaBody, MfaResetBody,
 } from "../schemas";
+import { clearFailures, mfaKey } from "../middleware/rate-limit";
 
 const router = Router();
 
@@ -349,5 +350,33 @@ router.post("/:id/reset-password", requireAdmin, validateParams(IdParam),
     });
     return res.json({ success: true });
   });
+
+/** PUT /users/team-mfa — an admin requires two-factor sign-in for every user they manage. */
+router.put("/team-mfa", requireAdmin, validateBody(TeamMfaBody), async (req: Req, res) => {
+  if (req.userRole !== "admin") return res.status(403).json({ error: "Only an admin sets this for their team." });
+  const [admin] = await db.update(usersTable).set({ requireTeamMfa: req.body.required }).where(eq(usersTable.id, req.user.id)).returning();
+  await recordAudit({ ...actorFrom(req), action: "business.team_mfa_changed", targetType: "user", targetId: req.user.id, details: { required: req.body.required } });
+  return res.json(mapUser(admin));
+});
+
+/**
+ * POST /users/:id/mfa-reset — a user lost their phone. Their admin (with their
+ * own password) turns two-factor off and signs them out everywhere.
+ */
+router.post("/:id/mfa-reset", requireAdmin, validateParams(IdParam), validateBody(MfaResetBody), requireStepUp, async (req: Req, res) => {
+  const targetId = req.validatedParams.id;
+  const [target] = await db.select().from(usersTable)
+    .where(and(eq(usersTable.id, targetId), eq(usersTable.role, "user"), isNull(usersTable.deletedAt))).limit(1);
+  if (!target || (req.userRole === "admin" && target.createdByAdminId !== req.user.id)) {
+    return res.status(404).json({ error: "User not found" });
+  }
+  await db.update(usersTable).set({
+    mfaSecret: null, mfaEnabledAt: null, mfaLastStep: null, mfaRecoveryCodes: null,
+    tokenVersion: sql`${usersTable.tokenVersion} + 1`,
+  }).where(eq(usersTable.id, targetId));
+  await clearFailures([mfaKey(targetId)]);
+  await recordAudit({ ...actorFrom(req), action: "user.mfa_reset", targetType: "user", targetId, details: { wasEnabled: target.mfaEnabledAt !== null } });
+  return res.json({ success: true });
+});
 
 export default router;

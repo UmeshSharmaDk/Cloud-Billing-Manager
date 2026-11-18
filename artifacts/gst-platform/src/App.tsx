@@ -52,6 +52,8 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
   if (!adminOnly && user.role !== "user") {
     return <Redirect to={user.role === "superadmin" ? "/superadmin" : "/admin"} />;
   }
+  // Their admin requires two-factor sign-in for the team.
+  if ((user as any).mfaRequired && !user.mfaEnabled) return <Redirect to="/security" />;
   return <AppShell><Component /></AppShell>;
 }
 
@@ -73,12 +75,11 @@ function SuperadminRoute({ component: Component }: { component: React.ComponentT
   return <AppShell><Component /></AppShell>;
 }
 
-/** Two-factor setup. Reachable by administrators before they have it. */
+/** Two-factor setup, for everyone. Reachable by administrators before they have it. */
 function SecurityRoute() {
   const { user, isLoading } = useAuth();
   if (isLoading) return <ShellSkeleton />;
   if (!user) return <Redirect to="/login" />;
-  if (user.role !== "admin" && user.role !== "superadmin") return <Redirect to="/dashboard" />;
   return <AppShell><SecurityPage /></AppShell>;
 }
 

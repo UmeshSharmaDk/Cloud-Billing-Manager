@@ -41,6 +41,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { name: "Reports", href: "/reports", icon: BarChart3 },
     { name: "E-Way Bills", href: "/eway-bills", icon: Truck },
     { name: "Settings", href: "/settings", icon: Settings },
+    { name: "Security", href: "/security", icon: KeyRound },
   ];
 
   const adminNavigation = [

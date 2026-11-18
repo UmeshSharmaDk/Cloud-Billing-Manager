@@ -7,7 +7,7 @@ import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } f
 import { resolveSupplyType } from "../lib/gst";
 import { applyStockChanges, applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
 import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
-import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, IdParam } from "../schemas";
+import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, RepeatInvoiceBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
 import QRCode from "qrcode";
@@ -168,7 +168,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), 
 router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
 
-  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate } = req.body;
+  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate, repeatOf } = req.body;
 
   if (!invoiceDate) return res.status(400).json({ error: "invoiceDate required" });
   if (!customerId && !customCustomerName) return res.status(400).json({ error: "customerId or customerName required" });
@@ -231,10 +231,30 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
     // cancellation can reverse exactly this movement.
     await applyStockMovement(tx, productsTable, eq, businessId, lines, stockDirectionFor(created.type));
 
+    // Repeating a monthly invoice moves the "repeat" mark onto the new one, so
+    // the dashboard asks again next month and not twice this month.
+    if (repeatOf) {
+      const moved = await tx.update(invoicesTable).set({ repeatMonthly: false })
+        .where(and(eq(invoicesTable.id, repeatOf), eq(invoicesTable.businessId, businessId), eq(invoicesTable.repeatMonthly, true)))
+        .returning({ id: invoicesTable.id });
+      if (moved.length) {
+        const [marked] = await tx.update(invoicesTable).set({ repeatMonthly: true }).where(eq(invoicesTable.id, created.id)).returning();
+        return marked;
+      }
+    }
+
     return created;
   });
 
   return res.status(201).json({ invoice: mapInvoice(invoice) });
+});
+
+// PUT /invoices/:id/repeat — mark or unmark an invoice to repeat every month.
+router.put("/:id/repeat", requireAuth, requireBusiness, validateParams(IdParam), validateBody(RepeatInvoiceBody), async (req: Req, res) => {
+  const [row] = await db.update(invoicesTable).set({ repeatMonthly: req.body.repeatMonthly })
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).returning();
+  if (!row) return res.status(404).json({ error: "Not found" });
+  return res.json(mapInvoice(row));
 });
 
 router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
@@ -248,7 +268,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
  * A UPI pay link and its QR for what is still due, when the business has a UPI
  * ID: any UPI app scans it with the payee, amount and invoice number filled in.
  */
-async function upiPayment(invoice: any) {
+export async function upiPayment(invoice: any) {
   const due = dec(invoice.grandTotal).minus(dec(invoice.paidAmount));
   if (invoice.status === "cancelled" || due.lessThanOrEqualTo(0)) return null;
   const [business] = await db.select({ name: businessesTable.name, upiId: businessesTable.upiId })

@@ -2667,7 +2667,7 @@ const adminEmail = `admin${uniq}@example.test`;
   const q = sqlValue;
   const plainUser = await register("mfaplain");
   const plainSetup = await call("POST", "/auth/mfa/setup", { token: plainUser.token, body: { confirmPassword: PASSWORD } });
-  check("mfa", "an ordinary user cannot enrol", plainSetup.status === 403, `status ${plainSetup.status}`);
+  check("mfa", "an ordinary user can enrol too", plainSetup.status === 200 && Boolean(plainSetup.data?.secret ?? plainSetup.data?.otpauthUrl), `status ${plainSetup.status}`);
 
   // Promoted without a second factor: the role alone is not enough.
   const adm = await register("mfaadmin");
@@ -2824,6 +2824,8 @@ const adminEmail = `admin${uniq}@example.test`;
   const viewed = await call("GET", `/invoices?asUser=${mine.userId}`, { token: adm.token });
   check("plans", "an admin reads their user's invoices", viewed.status === 200 && Array.isArray(viewed.data?.invoices), `status ${viewed.status}`);
   check("plans", "and their reports", (await call("GET", `/reports/gstr3b?asUser=${mine.userId}`, { token: adm.token })).status === 200);
+  check("plans", "the admin's view is in the audit log once, not once per page",
+    Number(sqlValue(`SELECT count(*) FROM audit_log WHERE action='business.viewed_by_admin' AND actor_id=${adm.userId}`)) === 1);
   check("plans", "viewing is read-only",
     (await call("POST", `/customers?asUser=${mine.userId}`, { token: adm.token, body: { name: "Nope" } })).status === 403);
   check("plans", "an admin cannot view another admin's user",
@@ -3144,6 +3146,62 @@ const adminEmail = `admin${uniq}@example.test`;
   check("dashboard", "one request carries the whole dashboard",
     summary.status === 200 && JSON.stringify(summary.data.stats) === JSON.stringify(stats.data) &&
       Array.isArray(summary.data.recentInvoices) && Array.isArray(summary.data.monthlyRevenue) && Array.isArray(summary.data.lowStock) && !!summary.data.gstSummary);
+}
+
+// === Two-factor for users, recurring invoices, emailed reminders ============
+{
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const adm = await register("teamadmin");
+  sqlExec(`UPDATE users SET role='admin', ${ENROLLED} WHERE id=${adm.userId}`);
+  const member = await register("teammember");
+  sqlExec(`UPDATE users SET created_by_admin_id=${adm.userId} WHERE id=${member.userId}`);
+
+  const on = await call("PUT", "/users/team-mfa", { token: adm.token, body: { required: true } });
+  check("team mfa", "an admin requires two-factor for their users", on.status === 200 && on.data?.requireTeamMfa === true, `status ${on.status}`);
+  const blocked = await call("GET", "/invoices", { token: member.token });
+  check("team mfa", "a user without it is sent to set it up", blocked.status === 403 && blocked.data?.code === "mfa_enrolment_required");
+  check("team mfa", "and is told so on sign-in", (await call("GET", "/auth/me", { token: member.token })).data?.mfaRequired === true);
+  check("team mfa", "a user of another admin is not affected", (await call("GET", "/invoices", { token: alice.token })).status === 200);
+  sqlExec(`UPDATE users SET ${ENROLLED} WHERE id=${member.userId}`);
+  check("team mfa", "once set up, the books open", (await call("GET", "/invoices", { token: member.token })).status === 200);
+  check("team mfa", "a business user cannot set the rule", (await call("PUT", "/users/team-mfa", { token: member.token, body: { required: false } })).status === 403);
+
+  const reset = await call("POST", `/users/${member.userId}/mfa-reset`, { token: adm.token, body: { confirmPassword: PASSWORD } });
+  check("team mfa", "the admin resets a user's lost phone", reset.status === 200 && sqlValue(`SELECT mfa_enabled_at IS NULL FROM users WHERE id=${member.userId}`) === "t", `status ${reset.status}`);
+  check("team mfa", "which signs the user out", (await call("GET", "/auth/me", { token: member.token })).status === 401);
+  check("team mfa", "not without the admin's password",
+    (await call("POST", `/users/${alice.userId}/mfa-reset`, { token: adm.token, body: { confirmPassword: "wrong" } })).status !== 200);
+  check("team mfa", "and not for another admin's user",
+    (await call("POST", `/users/${alice.userId}/mfa-reset`, { token: adm.token, body: { confirmPassword: PASSWORD } })).status === 404);
+  sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
+
+  // Recurring: an August invoice marked to repeat is due in a later month.
+  const rc = (await call("POST", "/customers", { token: alice.token, body: { name: "Monthly Retainer Client", email: "retainer@example.test", stateCode: "29" } })).data;
+  const first = (await call("POST", "/invoices", { token: alice.token, body: {
+    invoiceDate: "2026-08-01", dueDate: "2026-08-15", customerId: rc.id, placeOfSupply: "29",
+    items: [{ description: "Monthly retainer", quantity: 1, unitPrice: 5000, gstRate: 18 }] } })).data?.invoice;
+  const marked = await call("PUT", `/invoices/${first.id}/repeat`, { token: alice.token, body: { repeatMonthly: true } });
+  const due1 = (await call("GET", "/dashboard/summary", { token: alice.token })).data;
+  check("recurring", "a monthly invoice shows on the dashboard to repeat", marked.status === 200 && due1?.repeatDue?.some((i) => i.id === first.id));
+  check("recurring", "and an overdue one to chase", due1?.overdue?.some((i) => i.id === first.id));
+  const today = new Date().toISOString().slice(0, 10);
+  const next = (await call("POST", "/invoices", { token: alice.token, body: {
+    invoiceDate: today, customerId: rc.id, placeOfSupply: "29", repeatOf: first.id,
+    items: [{ description: "Monthly retainer", quantity: 1, unitPrice: 5000, gstRate: 18 }] } })).data?.invoice;
+  const due2 = (await call("GET", "/dashboard/summary", { token: alice.token })).data;
+  check("recurring", "repeating it moves the mark to the new invoice", next?.repeatMonthly === true && !due2?.repeatDue?.some((i) => i.id === first.id || i.id === next.id));
+  check("recurring", "another business cannot mark it", (await call("PUT", `/invoices/${first.id}/repeat`, { token: (await register("repeatother")).token, body: { repeatMonthly: false } })).status === 404);
+
+  // Reminders: only once the business turns them on, and once a week.
+  await sleep(2500);
+  const reminders = () => outbox().filter((m) => m.to === "retainer@example.test" && m.subject.startsWith(`Payment reminder: invoice ${first.invoiceNumber}`)).length;
+  check("reminders", "off by default", reminders() === 0);
+  await call("PATCH", "/business", { token: alice.token, body: { autoReminders: true } });
+  await sleep(4500);
+  check("reminders", "the overdue invoice's customer is emailed", reminders() === 1, String(reminders()));
+  await sleep(2500);
+  check("reminders", "and not again within the week", reminders() === 1);
+  await call("PATCH", "/business", { token: alice.token, body: { autoReminders: false } });
 }
 
 // ---------------------------------------------------------------------------

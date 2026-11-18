@@ -259,7 +259,15 @@ export async function requireAuth(req: any, res: any, next: any) {
     return res.status(401).json({ error: "Session expired. Please sign in again." });
   }
 
-  req.user = user;
+  // A user whose admin requires two-factor sign-in for the team, and who has
+  // not set it up yet. Only looked up for users without it, so the usual
+  // request pays nothing.
+  let mfaRequired = false;
+  if (user.role === "user" && !user.mfaEnabledAt && user.createdByAdminId) {
+    const [admin] = await db.select({ r: usersTable.requireTeamMfa }).from(usersTable).where(eq(usersTable.id, user.createdByAdminId)).limit(1);
+    mfaRequired = Boolean(admin?.r);
+  }
+  req.user = { ...user, mfaRequired };
   req.userId = user.id;
   // Read from the row, not the token.
   req.userRole = user.role;
@@ -331,6 +339,14 @@ async function viewedBusinessId(req: any): Promise<number | { status: number; er
   return target.businessId;
 }
 
+/**
+ * When an admin last opened each client's records, so a session of page loads
+ * is one audit entry rather than one per request.
+ * ponytail: per-process map, a few bytes per admin and client; fine for one server.
+ */
+const lastViewLogged = new Map<string, number>();
+const VIEW_LOG_INTERVAL_MS = 30 * 60 * 1000;
+
 export async function requireBusiness(req: any, res: any, next: any) {
   let businessId = req.user?.businessId ?? null;
   if (req.query?.asUser !== undefined) {
@@ -339,6 +355,9 @@ export async function requireBusiness(req: any, res: any, next: any) {
     businessId = viewed;
   }
   if (!businessId) return res.status(400).json({ error: "No business" });
+  if (req.user?.mfaRequired) {
+    return res.status(403).json({ error: "Your administrator asks everyone to set up two-factor sign-in. Open Security to set it up.", code: "mfa_enrolment_required" });
+  }
   // Staff, intern and client logins: "view" only reads; "entry" cannot delete
   // or change the business's own settings.
   const level = req.query?.asUser === undefined ? req.user?.accessLevel : null;
@@ -358,7 +377,17 @@ export async function requireBusiness(req: any, res: any, next: any) {
       // Resolving the tenant and pinning it to the database session are the same
       // decision, so they happen in the same place. No route opts in, and none can
       // forget to.
-      openTenantScope(req, res, next, businessId);
+      const key = `${req.user.id}:${businessId}`;
+      const viewing = req.query?.asUser !== undefined && Date.now() - (lastViewLogged.get(key) ?? 0) > VIEW_LOG_INTERVAL_MS;
+      if (!viewing) return openTenantScope(req, res, next, businessId);
+      lastViewLogged.set(key, Date.now());
+      openTenantScope(req, res, async (err?: unknown) => {
+        if (!err) {
+          await recordAudit({ ...actorFrom(req), action: "business.viewed_by_admin", targetType: "business",
+            targetId: businessId, businessId, details: { asUser: Number(req.query.asUser), path: req.baseUrl } });
+        }
+        next(err);
+      }, businessId);
     });
   });
 }
@@ -511,11 +540,6 @@ router.post("/mfa/login", authIpLimiter, validateBody(MfaLoginBody), async (req:
   return res.json({ token, user: mapUser(user) });
 });
 
-/** Only administrators enrol: they are who `requireAdmin` asks it of. */
-function requireAdminRole(req: any, res: any, next: any) {
-  if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: "Forbidden" });
-  next();
-}
 
 /**
  * Start enrolment: a new secret, shown once.
@@ -524,7 +548,7 @@ function requireAdminRole(req: any, res: any, next: any) {
  * session could enrol the thief's authenticator and lock the owner out. The
  * secret does not count until `/mfa/enable` confirms a code from it.
  */
-router.post("/mfa/setup", requireAuth, requireAdminRole, validateBody(MfaSetupBody), async (req: Req, res) => {
+router.post("/mfa/setup", requireAuth, validateBody(MfaSetupBody), async (req: Req, res) => {
   if (req.user.mfaEnabledAt) {
     return res.status(409).json({ error: "Two-factor authentication is already on for this account." });
   }
@@ -547,7 +571,7 @@ router.post("/mfa/setup", requireAuth, requireAdminRole, validateBody(MfaSetupBo
  * password alone. This device gets a fresh session, and the recovery codes are
  * returned here and never again.
  */
-router.post("/mfa/enable", requireAuth, requireAdminRole, validateBody(MfaCodeBody), async (req: Req, res) => {
+router.post("/mfa/enable", requireAuth, validateBody(MfaCodeBody), async (req: Req, res) => {
   if (req.user.mfaEnabledAt) {
     return res.status(409).json({ error: "Two-factor authentication is already on for this account." });
   }
@@ -596,7 +620,7 @@ router.post("/mfa/enable", requireAuth, requireAdminRole, validateBody(MfaCodeBo
  * Replace the recovery codes. Takes an authenticator code, not a recovery
  * code: whoever holds one leftover code should not be able to mint ten more.
  */
-router.post("/mfa/recovery-codes", requireAuth, requireAdminRole, validateBody(MfaCodeBody), async (req: Req, res) => {
+router.post("/mfa/recovery-codes", requireAuth, validateBody(MfaCodeBody), async (req: Req, res) => {
   if (!req.user.mfaEnabledAt) {
     return res.status(400).json({ error: "Two-factor authentication is not on for this account." });
   }

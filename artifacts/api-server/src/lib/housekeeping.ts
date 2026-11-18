@@ -17,21 +17,24 @@
 import { pruneLoginAttempts } from "../middleware/rate-limit";
 import { pruneRevokedTokens, prunePendingRegistrations } from "../routes/auth";
 import { logger } from "./logger";
+import { sendDueReminders } from "./reminders";
 
 /** Often enough to stay small, rare enough to be invisible. */
-const INTERVAL_MS = 15 * 60 * 1000;
+const INTERVAL_MS = Number(process.env["HOUSEKEEPING_INTERVAL_MS"]) || 15 * 60 * 1000; // the tests shorten it
 
 export async function sweepOnce(): Promise<{
   loginAttempts: number;
   revokedTokens: number;
   pendingRegistrations: number;
+  remindersSent: number;
 }> {
   const [loginAttempts, revokedTokens, pendingRegistrations] = await Promise.all([
     pruneLoginAttempts(),
     pruneRevokedTokens(),
     prunePendingRegistrations(),
   ]);
-  return { loginAttempts, revokedTokens, pendingRegistrations };
+  const remindersSent = await sendDueReminders();
+  return { loginAttempts, revokedTokens, pendingRegistrations, remindersSent };
 }
 
 /**

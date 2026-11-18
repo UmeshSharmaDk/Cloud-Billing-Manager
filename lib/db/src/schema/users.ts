@@ -44,6 +44,8 @@ export const usersTable = pgTable("users", {
    */
   mfaSecret: text("mfa_secret"),
   mfaEnabledAt: timestamp("mfa_enabled_at"),
+  /** On an admin: every user they manage must set up two-factor sign-in. */
+  requireTeamMfa: boolean("require_team_mfa").notNull().default(false),
   /** The last 30-second step a code was accepted for; a code is spent once. */
   mfaLastStep: integer("mfa_last_step"),
   /** SHA-256 of each unused recovery code. One is removed as it is used. */

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ToggleRow } from "@/components/ToggleRow";
 import { useChangePassword, useGetBusiness, useLogoutAll, useUpdateBusiness } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,6 +85,11 @@ export default function SettingsPage() {
                 <Label>UPI ID</Label>
                 <Input value={form.upiId || ""} onChange={(e) => set("upiId", e.target.value.trim())} placeholder="yourshop@okhdfcbank" className="font-mono" />
                 <p className="text-xs text-muted-foreground">Every unpaid invoice shows a QR code that customers scan in any UPI app to pay the balance.</p>
+              </div>
+              <div className="sm:col-span-2 border-t pt-2">
+                <ToggleRow id="auto-reminders" label="Email payment reminders automatically"
+                  note="Once a week while an invoice is overdue, to customers with an email address. Save to apply."
+                  checked={Boolean(form.autoReminders)} onChange={(v) => setForm((f: any) => ({ ...f, autoReminders: v }))} />
               </div>
             </CardContent>
           </Card>

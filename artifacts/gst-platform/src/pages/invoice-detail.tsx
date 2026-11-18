@@ -4,8 +4,9 @@ import { useGetInvoice, useUpdateInvoiceStatus, useGetBusiness, useGetCustomer }
 import { formatCurrency, formatDate, statusBadge, amountToWords } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Printer, CheckCircle, MessageCircle, Mail } from "lucide-react";
+import { ArrowLeft, Printer, CheckCircle, MessageCircle, Mail, Copy } from "lucide-react";
 import { authFetch } from "@/lib/api-fetch";
+import { ToggleRow } from "@/components/ToggleRow";
 import { reminderLink } from "@/lib/whatsapp";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -32,6 +33,21 @@ export default function InvoiceDetailPage() {
 
   // "Partly paid" is a statement about an amount, so the server will not take it
   // without one — asking for it here is what makes that option usable.
+  const [repeatSaving, setRepeatSaving] = useState(false);
+  const setRepeat = async (repeatMonthly: boolean) => {
+    setRepeatSaving(true);
+    try {
+      const res = await authFetch(`/api/invoices/${inv.id}/repeat`, { method: "PUT", body: JSON.stringify({ repeatMonthly }) });
+      if (!res.ok) throw new Error("Could not save");
+      toast({ title: repeatMonthly ? "The dashboard will remind you to repeat this invoice each month" : "This invoice no longer repeats" });
+      refetch();
+    } catch (err: any) {
+      toast({ title: "Not saved", description: err.message, variant: "destructive" });
+    } finally {
+      setRepeatSaving(false);
+    }
+  };
+
   const [emailOpen, setEmailOpen] = useState(false);
   const [emailTo, setEmailTo] = useState("");
   const [emailing, setEmailing] = useState(false);
@@ -120,6 +136,9 @@ export default function InvoiceDetailPage() {
               <Mail className="w-4 h-4" /> Email invoice
             </Button>
           )}
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => setLocation(`/invoices/new?from=${inv.id}`)}>
+            <Copy className="w-4 h-4" /> Duplicate invoice
+          </Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => window.print()}>
             <Printer className="w-4 h-4" /> Print
           </Button>
@@ -164,6 +183,12 @@ export default function InvoiceDetailPage() {
                 <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} loading={paymentMutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
                 </Button>
+              )}
+              {inv.status !== "cancelled" && (
+                <div className="border-t pt-1">
+                  <ToggleRow id="repeat-monthly" label="Repeat every month" note="Each new month the dashboard offers a copy to send."
+                    checked={Boolean(inv.repeatMonthly)} onChange={setRepeat} busy={repeatSaving} />
+                </div>
               )}
             </CardContent>
           </Card>
