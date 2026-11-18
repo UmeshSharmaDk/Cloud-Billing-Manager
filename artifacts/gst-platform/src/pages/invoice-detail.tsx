@@ -4,7 +4,8 @@ import { useGetInvoice, useUpdateInvoiceStatus, useGetBusiness, useGetCustomer }
 import { formatCurrency, formatDate, statusBadge, amountToWords } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Printer, CheckCircle, MessageCircle } from "lucide-react";
+import { ArrowLeft, Printer, CheckCircle, MessageCircle, Mail } from "lucide-react";
+import { authFetch } from "@/lib/api-fetch";
 import { reminderLink } from "@/lib/whatsapp";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -31,6 +32,29 @@ export default function InvoiceDetailPage() {
 
   // "Partly paid" is a statement about an amount, so the server will not take it
   // without one — asking for it here is what makes that option usable.
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailTo, setEmailTo] = useState("");
+  const [emailing, setEmailing] = useState(false);
+  const openEmail = () => { setEmailTo(customer.email || ""); setEmailOpen(true); };
+  const sendEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (emailing) return;
+    setEmailing(true);
+    try {
+      const res = await authFetch(`/api/invoices/${inv.id}/email`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: emailTo }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "The email could not be sent.");
+      toast({ title: `Invoice sent to ${body.to}` });
+      setEmailOpen(false);
+    } catch (err: any) {
+      toast({ title: "Not sent", description: err.message, variant: "destructive" });
+    } finally {
+      setEmailing(false);
+    }
+  };
+
   const [partialOpen, setPartialOpen] = useState(false);
   const [partialAmount, setPartialAmount] = useState("");
 
@@ -89,6 +113,11 @@ export default function InvoiceDetailPage() {
           {reminder && (
             <Button variant="outline" size="sm" className="gap-1" asChild>
               <a href={reminder} target="_blank" rel="noopener noreferrer"><MessageCircle className="w-4 h-4" /> WhatsApp reminder</a>
+            </Button>
+          )}
+          {inv.status !== "cancelled" && (
+            <Button variant="outline" size="sm" className="gap-1" onClick={openEmail}>
+              <Mail className="w-4 h-4" /> Email invoice
             </Button>
           )}
           <Button variant="outline" size="sm" className="gap-1" onClick={() => window.print()}>
@@ -298,6 +327,26 @@ export default function InvoiceDetailPage() {
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => setPartialOpen(false)}>Cancel</Button>
               <Button type="submit" loading={paymentMutation.isPending}>Record payment</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
+        <DialogContent className="no-print sm:max-w-md">
+          <form onSubmit={sendEmail} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Email {inv.invoiceNumber}</DialogTitle>
+              <DialogDescription>
+                The customer gets the invoice details, the balance due and, when your UPI ID is set, a link to pay.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="email-to">Customer email</Label>
+              <Input id="email-to" type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} required autoFocus />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setEmailOpen(false)}>Cancel</Button>
+              <Button type="submit" loading={emailing}>Send invoice</Button>
             </DialogFooter>
           </form>
         </DialogContent>

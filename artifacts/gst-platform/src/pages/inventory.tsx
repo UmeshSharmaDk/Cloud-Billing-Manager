@@ -3,6 +3,8 @@ import { Link } from "wouter";
 import { useListProducts } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ExportButton } from "@/components/ExportButton";
+import { fetchAllPages } from "@/lib/download";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Search, Package, AlertTriangle } from "lucide-react";
@@ -26,9 +28,12 @@ export default function InventoryPage() {
           <h1 className="text-2xl font-bold">Inventory / Products</h1>
           <p className="text-muted-foreground text-sm">Manage your products, stock, and pricing</p>
         </div>
-        <Link href="/inventory/new">
-          <Button className="gap-2"><Plus className="w-4 h-4" /> Add Product</Button>
-        </Link>
+        <div className="flex gap-2">
+          <ExportButton filename="Products" sheets={async () => [{ name: "Products", rows: (await fetchAllPages<any>("/products", "products")).map((r: any) => ({ Name: r.name, SKU: r.sku ?? "", HSN: r.hsnCode ?? "", Unit: r.unit ?? "", "Selling price": Number(r.sellingPrice ?? 0), "Purchase price": Number(r.purchasePrice ?? 0), "GST %": Number(r.gstRate ?? 0), Stock: Number(r.stockQuantity ?? 0) })) }]} />
+          <Link href="/inventory/new">
+            <Button className="gap-2"><Plus className="w-4 h-4" /> Add Product</Button>
+          </Link>
+        </div>
       </div>
 
       <div className="relative">

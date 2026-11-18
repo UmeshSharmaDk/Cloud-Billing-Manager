@@ -1,4 +1,5 @@
-import { useGetDashboardStats, useGetRecentInvoices, useGetMonthlyRevenue, useGetLowStockAlerts, useGetGstSummary } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
+import { authFetch } from "@/lib/api-fetch";
 import { DashboardSkeleton, Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,11 +10,17 @@ import { Figure, deltaText } from "@/components/Figure";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, LineChart, Line } from "recharts";
 
 export default function DashboardPage() {
-  const { data: statsRaw, isLoading } = useGetDashboardStats();
-  const { data: recentInvData } = useGetRecentInvoices();
-  const { data: revenueData, isLoading: revenueLoading } = useGetMonthlyRevenue();
-  const { data: lowStockData } = useGetLowStockAlerts();
-  const { data: gstData } = useGetGstSummary();
+  // One request for the whole page instead of five.
+  const { data: summary, isLoading } = useQuery({
+    queryKey: ["dashboard-summary"],
+    queryFn: async () => {
+      const res = await authFetch("/api/dashboard/summary");
+      if (!res.ok) throw new Error("Could not load the dashboard");
+      return res.json();
+    },
+  });
+  const revenueLoading = isLoading;
+  const { stats: statsRaw, recentInvoices: recentInvData, monthlyRevenue: revenueData, lowStock: lowStockData, gstSummary: gstData } = summary ?? {};
 
   // API returns: totalSales, totalPurchases, totalOutstanding, invoiceCount, customerCount, vendorCount, productCount, lowStockCount, overdueInvoiceCount, totalGstPayable
   // These are all-time totals, not this month's.

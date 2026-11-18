@@ -5,7 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { FileDown } from "lucide-react";
+import { FileDown, Printer } from "lucide-react";
+import { ExportButton } from "@/components/ExportButton";
+import { downloadFromApi } from "@/lib/download";
+import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TdsTcsReport } from "@/components/TdsTcsReport";
 
@@ -32,6 +35,21 @@ export default function ReportsPage() {
   const gstr3b: any = gstr3bData || {};
   const hsn: any = hsnData || {};
   const hsnItems: any[] = hsn.items || [];
+  const { toast } = useToast();
+  const [downloading, setDownloading] = useState<"" | "json" | "tally">("");
+  const download = async (kind: "json" | "tally") => {
+    setDownloading(kind);
+    try {
+      const q = `month=${range.month}&year=${range.year}`;
+      if (kind === "json") await downloadFromApi(`/api/reports/gstr1/json?${q}`, `GSTR1_${month}.json`);
+      else await downloadFromApi(`/api/reports/tally?${q}`, `Tally_${month}.xml`);
+    } catch (e) {
+      toast({ title: "Download failed", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setDownloading("");
+    }
+  };
+  const money = (v: unknown) => Number(v ?? 0);
 
   return (
     <div className="space-y-4">
@@ -40,9 +58,15 @@ export default function ReportsPage() {
           <h1 className="text-2xl font-bold">GST Reports</h1>
           <p className="text-muted-foreground text-sm">GSTR-1, GSTR-3B, HSN summary, TDS and TCS for the month</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Label htmlFor="month" className="text-sm font-medium whitespace-nowrap">Select Month:</Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor="month" className="text-sm font-medium whitespace-nowrap">Month</Label>
           <Input id="month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40" />
+          <Button variant="outline" size="sm" className="gap-2" loading={downloading === "tally"} onClick={() => download("tally")}>
+            <FileDown className="w-4 h-4" /> Tally vouchers (XML)
+          </Button>
+          <Button variant="ghost" size="sm" className="gap-2 no-print" onClick={() => window.print()}>
+            <Printer className="w-4 h-4" /> Print
+          </Button>
         </div>
       </div>
 
@@ -64,9 +88,18 @@ export default function ReportsPage() {
               <h2 className="text-lg font-semibold">GSTR-1 Report</h2>
               <p className="text-sm text-muted-foreground">Outward supplies (Sales) for {monthLabel}</p>
             </div>
-            <Button variant="outline" size="sm" className="gap-2" onClick={() => window.print()}>
-              <FileDown className="w-4 h-4" /> Export
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" className="gap-2" loading={downloading === "json"} onClick={() => download("json")}>
+                <FileDown className="w-4 h-4" /> GSTR-1 file for the GST portal
+              </Button>
+              <ExportButton filename={`GSTR-1 ${month}`} sheets={() => [
+                { name: "Invoices", rows: (gstr1.invoices ?? []).map((i: any) => ({
+                  "Invoice no.": i.invoiceNumber, Date: i.invoiceDate, Type: i.type, Customer: i.customerName, GSTIN: i.customerGstin ?? "",
+                  "Place of supply": i.placeOfSupply ?? "", Taxable: money(i.subtotal), CGST: money(i.cgst), SGST: money(i.sgst), IGST: money(i.igst), Total: money(i.grandTotal),
+                })) },
+                { name: "By rate", rows: (gstr1.byRate ?? []).map((r: any) => ({ "GST rate %": r.rate, Taxable: money(r.taxable), GST: money(r.gst) })) },
+              ]} />
+            </div>
           </div>
 
           {g1Loading ? (
@@ -164,9 +197,11 @@ export default function ReportsPage() {
               <h2 className="text-lg font-semibold">GSTR-3B Summary</h2>
               <p className="text-sm text-muted-foreground">Monthly self-assessment for {monthLabel}</p>
             </div>
-            <Button variant="outline" size="sm" className="gap-2" onClick={() => window.print()}>
-              <FileDown className="w-4 h-4" /> Export
-            </Button>
+            <ExportButton filename={`GSTR-3B ${month}`} sheets={() => [{ name: "GSTR-3B", rows: [
+              { Head: "Outward taxable supplies", Taxable: money(gstr3b.outwardTaxable), IGST: money(gstr3b.outwardIgst), CGST: money(gstr3b.outwardCgst), SGST: money(gstr3b.outwardSgst) },
+              { Head: "Input tax credit", Taxable: "", IGST: money(gstr3b.inputIgst), CGST: money(gstr3b.inputCgst), SGST: money(gstr3b.inputSgst) },
+              { Head: "Net payable", Taxable: "", IGST: money(gstr3b.netIgst), CGST: money(gstr3b.netCgst), SGST: money(gstr3b.netSgst) },
+            ] }]} />
           </div>
 
           {g3bLoading ? (
@@ -211,9 +246,10 @@ export default function ReportsPage() {
               <h2 className="text-lg font-semibold">HSN-wise Summary</h2>
               <p className="text-sm text-muted-foreground">Table 12 — Consolidated HSN summary of outward supplies for {monthLabel}</p>
             </div>
-            <Button variant="outline" size="sm" className="gap-2" onClick={() => window.print()}>
-              <FileDown className="w-4 h-4" /> Export
-            </Button>
+            <ExportButton filename={`HSN summary ${month}`} sheets={() => [{ name: "HSN", rows: hsnItems.map((h) => ({
+              HSN: h.hsnCode, Description: h.description, UQC: h.uqc, Quantity: money(h.quantity), Taxable: money(h.taxableValue),
+              CGST: money(h.cgst), SGST: money(h.sgst), IGST: money(h.igst), "Total tax": money(h.totalTax),
+            })) }]} />
           </div>
 
           {hsnLoading ? (

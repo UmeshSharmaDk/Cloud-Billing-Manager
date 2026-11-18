@@ -3,6 +3,8 @@ import { Link } from "wouter";
 import { useListInvoices } from "@workspace/api-client-react";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ExportButton } from "@/components/ExportButton";
+import { fetchAllPages } from "@/lib/download";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Search, FileText } from "lucide-react";
@@ -27,9 +29,12 @@ export default function InvoicesPage() {
           <h1 className="text-2xl font-bold">Sales Invoices</h1>
           <p className="text-muted-foreground text-sm">Manage GST-compliant sales invoices</p>
         </div>
-        <Link href="/invoices/new">
-          <Button className="gap-2"><Plus className="w-4 h-4" /> New Invoice</Button>
-        </Link>
+        <div className="flex gap-2">
+          <ExportButton filename="Invoices" sheets={async () => [{ name: "Invoices", rows: (await fetchAllPages<any>("/invoices", "invoices")).map((r: any) => ({ "Invoice no.": r.invoiceNumber, Date: r.invoiceDate, Type: r.type, Customer: r.customerName, GSTIN: r.customerGstin ?? "", Status: r.status, Taxable: Number(r.subtotal), GST: Number(r.totalGst), Total: Number(r.grandTotal), Paid: Number(r.paidAmount), Due: Number(r.balanceDue ?? 0), "Due date": r.dueDate ?? "" })) }]} />
+          <Link href="/invoices/new">
+            <Button className="gap-2"><Plus className="w-4 h-4" /> New Invoice</Button>
+          </Link>
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3">

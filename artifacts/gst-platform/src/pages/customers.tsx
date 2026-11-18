@@ -3,6 +3,8 @@ import { Link } from "wouter";
 import { useListCustomers } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ExportButton } from "@/components/ExportButton";
+import { fetchAllPages } from "@/lib/download";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Search, Users, Phone, Mail } from "lucide-react";
@@ -26,9 +28,12 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold">Customers</h1>
           <p className="text-muted-foreground text-sm">Manage your customer accounts and receivables</p>
         </div>
-        <Link href="/customers/new">
-          <Button className="gap-2"><Plus className="w-4 h-4" /> Add Customer</Button>
-        </Link>
+        <div className="flex gap-2">
+          <ExportButton filename="Customers" sheets={async () => [{ name: "Customers", rows: (await fetchAllPages<any>("/customers", "customers")).map((r: any) => ({ Name: r.name, GSTIN: r.gstin ?? "", Phone: r.phone ?? "", Email: r.email ?? "", City: r.city ?? "", State: r.state ?? "" })) }]} />
+          <Link href="/customers/new">
+            <Button className="gap-2"><Plus className="w-4 h-4" /> Add Customer</Button>
+          </Link>
+        </div>
       </div>
 
       <div className="relative">

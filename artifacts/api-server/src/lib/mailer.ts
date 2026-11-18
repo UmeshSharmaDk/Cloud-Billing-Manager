@@ -253,6 +253,32 @@ export function passwordResetMessage(to: string, link: string): Message {
   };
 }
 
+/** An invoice summary sent to the customer, with a UPI link when something is due. */
+export function invoiceMessage(to: string, inv: {
+  business: string; number: string; date: string; dueDate?: string | null;
+  customer: string; total: string; balance: string; items: { description: string; quantity: unknown; amount: string }[];
+  upiLink?: string | null;
+}): Message {
+  return {
+    to,
+    subject: `Invoice ${inv.number} from ${inv.business}`,
+    text: [
+      `Dear ${inv.customer},`,
+      "",
+      `Please find the details of invoice ${inv.number} dated ${inv.date} from ${inv.business}.`,
+      "",
+      ...inv.items.map((i) => `  ${i.description} x ${i.quantity}: Rs ${i.amount}`),
+      "",
+      `Total: Rs ${inv.total}`,
+      `Balance due: Rs ${inv.balance}${inv.dueDate ? ` (due by ${inv.dueDate})` : ""}`,
+      ...(inv.upiLink ? ["", "Pay by UPI from your phone:", inv.upiLink] : []),
+      "",
+      `Thank you for your business.`,
+      inv.business,
+    ].join("\n"),
+  };
+}
+
 /**
  * Send without letting a mail failure change what the caller returns.
  *

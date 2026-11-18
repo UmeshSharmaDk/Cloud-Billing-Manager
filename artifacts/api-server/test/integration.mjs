@@ -2909,6 +2909,15 @@ const adminEmail = `admin${uniq}@example.test`;
   check("consultant", "and what is still owed", mine?.receivable === 354, String(mine?.receivable));
   check("consultant", "a business user cannot open it", (await call("GET", "/admin/clients", { token: owner.token })).status === 403);
 
+  const mark = await call("PUT", `/admin/users/${owner.userId}/filings`, { token: adm.token, body: { period: "2026-04", form: "GSTR-1", filed: true, arn: "AA270426000001X" } });
+  const filed = (await call("GET", "/admin/clients?month=2026-04", { token: adm.token })).data?.clients?.find((c) => c.id === owner.userId);
+  check("consultant", "the admin marks a client's GSTR-1 as filed", mark.status === 200 && filed?.filings?.["GSTR-1"]?.arn === "AA270426000001X", JSON.stringify(filed?.filings));
+  check("consultant", "another admin's client cannot be marked",
+    (await call("PUT", `/admin/users/${other.userId}/filings`, { token: adm.token, body: { period: "2026-04", form: "GSTR-1", filed: true } })).status === 404);
+  await call("PUT", `/admin/users/${owner.userId}/filings`, { token: adm.token, body: { period: "2026-04", form: "GSTR-1", filed: false } });
+  const unfiled = (await call("GET", "/admin/clients?month=2026-04", { token: adm.token })).data?.clients?.find((c) => c.id === owner.userId);
+  check("consultant", "and unmarks it", !unfiled?.filings?.["GSTR-1"]);
+
   sqlExec(`UPDATE users SET role='user', ${NOT_ENROLLED} WHERE id=${adm.userId}`);
 }
 
@@ -3107,6 +3116,34 @@ const adminEmail = `admin${uniq}@example.test`;
     bot.status === 202 && Number(sqlValue("SELECT count(*) FROM demo_requests")) === before + 1);
   check("book a demo", "a bad phone number is refused", (await call("POST", "/demo-requests", { body: { ...form, phone: "call me" } })).status === 400);
   check("book a demo", "only the superadmin can list requests", (await call("GET", "/demo-requests", { token: (await register("demolist")).token })).status === 403);
+}
+
+// === Exports, invoice email and the one-request dashboard ====================
+{
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const g = await call("GET", "/reports/gstr1/json?month=8&year=2026", { token: alice.token });
+  const b2b = g.data?.b2b?.find((x) => x.ctin === "29AAAAA1111A1Z5");
+  check("exports", "GSTR-1 file lists the B2B invoice for the portal", g.status === 200 && g.data?.fp === "082026" && b2b?.inv?.some((i) => i.inum === aInv.invoiceNumber), JSON.stringify(g.data)?.slice(0, 300));
+  const t = await fetch(`${B}/reports/tally?month=8&year=2026`, { headers: { authorization: `Bearer ${alice.token}` } });
+  const xml = await t.text();
+  check("exports", "Tally file is XML with the sales voucher", t.status === 200 && xml.includes("<ENVELOPE>") && xml.includes(aInv.invoiceNumber));
+  check("exports", "another business's invoices are not in it",
+    !(await (await fetch(`${B}/reports/tally?month=8&year=2026`, { headers: { authorization: `Bearer ${bob.token}` } })).text()).includes("Alice Secret Customer"));
+
+  const noAddress = await call("POST", `/invoices/${aInv.id}/email`, { token: alice.token, body: {} });
+  check("invoice email", "a customer without an email is explained", noAddress.status === 400);
+  const sent = await call("POST", `/invoices/${aInv.id}/email`, { token: alice.token, body: { to: "buyer@example.test" } });
+  await sleep(200);
+  check("invoice email", "the invoice is emailed to the customer",
+    sent.status === 200 && outbox().some((m) => m.to === "buyer@example.test" && m.subject.startsWith(`Invoice ${aInv.invoiceNumber}`) && m.text.includes("Balance due")), `status ${sent.status}`);
+  const cross = await call("POST", `/invoices/${aInv.id}/email`, { token: (await register("mailother")).token, body: { to: "x@example.test" } });
+  check("invoice email", "another business cannot email it", cross.status === 404, `status ${cross.status}`);
+
+  const summary = await call("GET", "/dashboard/summary", { token: alice.token });
+  const stats = await call("GET", "/dashboard/stats", { token: alice.token });
+  check("dashboard", "one request carries the whole dashboard",
+    summary.status === 200 && JSON.stringify(summary.data.stats) === JSON.stringify(stats.data) &&
+      Array.isArray(summary.data.recentInvoices) && Array.isArray(summary.data.monthlyRevenue) && Array.isArray(summary.data.lowStock) && !!summary.data.gstSummary);
 }
 
 // ---------------------------------------------------------------------------

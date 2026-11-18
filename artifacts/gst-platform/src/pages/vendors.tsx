@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useListVendors } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
+import { ExportButton } from "@/components/ExportButton";
+import { fetchAllPages } from "@/lib/download";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Search, Building2, Phone, Mail } from "lucide-react";
@@ -24,9 +26,12 @@ export default function VendorsPage() {
           <h1 className="text-2xl font-bold">Vendors / Suppliers</h1>
           <p className="text-muted-foreground text-sm">Manage your suppliers and purchase accounts</p>
         </div>
-        <Link href="/vendors/new">
-          <Button className="gap-2"><Plus className="w-4 h-4" /> Add Vendor</Button>
-        </Link>
+        <div className="flex gap-2">
+          <ExportButton filename="Vendors" sheets={async () => [{ name: "Vendors", rows: (await fetchAllPages<any>("/vendors", "vendors")).map((r: any) => ({ Name: r.name, GSTIN: r.gstin ?? "", Phone: r.phone ?? "", Email: r.email ?? "", City: r.city ?? "", State: r.state ?? "" })) }]} />
+          <Link href="/vendors/new">
+            <Button className="gap-2"><Plus className="w-4 h-4" /> Add Vendor</Button>
+          </Link>
+        </div>
       </div>
 
       <div className="relative">

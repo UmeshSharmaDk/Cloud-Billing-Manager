@@ -13,7 +13,9 @@ import { Figure } from "../(tabs)/index";
 type Stats = Record<string, number> & { recentUsers: User[] };
 export type CapacityRequest = { id: number; adminName: string; adminEmail: string; additionalUsers: number; amountInr: number; status: string; createdAt: string; grantedUserLimit?: number | null };
 
-type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number };
+type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number;
+  overdue?: number; filings?: Record<string, { filedAt: string } | undefined> };
+const FORMS = ["GSTR-1", "GSTR-3B"] as const;
 
 /** Consultant view: each client's month at a glance; tap to open the client. */
 export function Clients() {
@@ -31,7 +33,8 @@ export function Clients() {
         q.data.clients.map((c) => (
           <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, minHeight: 44, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
             <Row label={c.business?.name ?? c.name} value={money(c.sales ?? 0)} />
-            <Text style={s.muted}>{c.invoices ?? 0} invoices · GST {money(c.netGst ?? 0)} · owed {money(c.receivable ?? 0)}{c.business?.lockDate ? ` · frozen to ${date(c.business.lockDate)}` : ""}</Text>
+            <Text style={s.muted}>{c.invoices ?? 0} invoices · GST {money(c.netGst ?? 0)} · owed {money(c.receivable ?? 0)}{c.overdue ? ` (${c.overdue} overdue)` : ""}{c.business?.lockDate ? ` · frozen to ${date(c.business.lockDate)}` : ""}</Text>
+            {c.business && <Text style={s.muted}>{FORMS.map((f) => `${f} ${c.filings?.[f] ? "filed" : "not filed"}`).join(" · ")}</Text>}
           </Pressable>
         ))}
     </Card>

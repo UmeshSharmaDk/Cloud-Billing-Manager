@@ -230,6 +230,13 @@ export const LockDateBody = z.object({
 
 export const AuditPageQuery = z.object({ ...paginationShape });
 
+export const ReturnFilingBody = z.object({
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  form: z.enum(["GSTR-1", "GSTR-3B"]),
+  filed: z.boolean(),
+  arn: z.string().trim().max(40).optional(),
+});
+
 export const ClientsQuery = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional() });
 
 export const UpdateAdminPlanBody = z.object({
@@ -271,6 +278,11 @@ export const DemoRequestBody = z.object({
 });
 
 export const DemoRequestStatusBody = z.object({ status: z.enum(["new", "contacted", "closed"]) });
+
+/** Send an invoice to the customer; `to` overrides the customer's saved email. */
+export const EmailInvoiceBody = z.object({
+  to: z.string().email().max(320).optional(),
+});
 
 export const ForgotPasswordBody = z.object({
   email: z.string().email().max(320),
