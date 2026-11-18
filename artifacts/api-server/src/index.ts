@@ -2,7 +2,12 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startHousekeeping } from "./lib/housekeeping";
 import { checkMailTransport } from "./lib/mailer";
-import { pool, rootDb, inspectRls, describeRlsProblem } from "@workspace/db";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  pool, rootDb, inspectRls, describeRlsProblem, sslConfig,
+  readMigrations, pendingMigrations, appliedMigrations, migrateDatabase,
+} from "@workspace/db";
 import { config } from "./lib/config";
 import { sql } from "drizzle-orm";
 
@@ -54,7 +59,44 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+/**
+ * Bring the database up to the schema this build expects, or refuse to serve.
+ *
+ * With MIGRATION_DATABASE_URL (the schema owner) set, pending migrations are
+ * applied before the server listens, so a deploy can never run ahead of its
+ * own columns. Without it, the server only checks, and in production refuses
+ * to start while any migration is missing: a clear "apply migrations" in the
+ * log beats pages failing one by one on a missing column.
+ */
+async function ensureMigrations(): Promise<boolean> {
+  const dir = process.env["MIGRATIONS_DIR"]
+    ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../lib/db/migrations");
+  const all = readMigrations(dir);
+  const ownerUrl = process.env["MIGRATION_DATABASE_URL"]?.trim();
+  if (ownerUrl) {
+    await migrateDatabase(ownerUrl, sslConfig(), all, (line) => logger.info(line));
+  }
+  const applied = await appliedMigrations({
+    query: async (q: string) => ({ rows: ((await rootDb.execute(sql.raw(q))) as any).rows }),
+  } as any);
+  const pending = pendingMigrations(all, applied ?? []);
+  if (pending.length === 0) return true;
+  logger.error(
+    { pending },
+    "The database is missing schema migrations. Run `pnpm --filter @workspace/db run migrate` with the owner's DATABASE_URL, or set MIGRATION_DATABASE_URL.",
+  );
+  return false;
+}
+
 async function start(): Promise<void> {
+  const schemaIsCurrent = await ensureMigrations();
+  if (!schemaIsCurrent && !config.isDevelopment) {
+    logger.fatal("Refusing to start the production API because the database schema is behind this build");
+    await pool.end();
+    process.exitCode = 1;
+    return;
+  }
+
   const rlsIsEffective = await reportRlsStatus();
   if (!rlsIsEffective && !config.isDevelopment) {
     logger.fatal(

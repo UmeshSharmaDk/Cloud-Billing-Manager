@@ -132,7 +132,7 @@ export default function InvoiceDetailPage() {
                 <div className="flex justify-between text-red-600 border-t pt-1"><span className="font-semibold">Balance Due</span><span className="font-bold">{formatCurrency(balanceDue)}</span></div>
               )}
               {inv.status !== "paid" && (
-                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} disabled={paymentMutation.isPending}>
+                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} loading={paymentMutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
                 </Button>
               )}
@@ -296,8 +296,8 @@ export default function InvoiceDetailPage() {
               />
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setPartialOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={paymentMutation.isPending}>Save</Button>
+              <Button type="button" variant="ghost" onClick={() => setPartialOpen(false)}>Cancel</Button>
+              <Button type="submit" loading={paymentMutation.isPending}>Record payment</Button>
             </DialogFooter>
           </form>
         </DialogContent>

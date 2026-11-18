@@ -93,9 +93,9 @@ function CustomerCombobox({ customers, onChange }: {
             onFocus={() => setOpen(true)}
           />
           {query && (
-            <button type="button" onClick={clear} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+            <Button type="button" variant="ghost" size="icon" aria-label="Clear customer" onClick={clear} className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground">
               <X className="w-4 h-4" />
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -282,7 +282,7 @@ export default function InvoiceNewPage() {
                       <span>Taxable: {formatCurrency(c.taxable)} · GST: {formatCurrency(c.gstAmt)}</span>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground text-sm">{formatCurrency(c.total)}</span>
-                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></button>}
+                        {items.length > 1 && <Button type="button" variant="ghost" size="icon" aria-label={`Remove line ${i + 1}`} onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></Button>}
                       </div>
                     </div>
                   </div>
@@ -310,7 +310,7 @@ export default function InvoiceNewPage() {
                   {isInterstate ? "⚡ Inter-state → IGST applies" : "🏠 Intra-state → CGST + SGST applies"}
                 </div>
               )}
-              <Button type="submit" className="w-full" disabled={mutation.isPending}>{mutation.isPending ? "Creating..." : "Create Invoice"}</Button>
+              <Button type="submit" className="w-full" loading={mutation.isPending}>Create Invoice</Button>
             </CardContent>
           </Card>
         </div>

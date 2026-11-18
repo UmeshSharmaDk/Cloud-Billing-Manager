@@ -113,9 +113,9 @@ export default function SettingsPage() {
       </Tabs>
 
       <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={mutation.isPending} className="gap-2 min-w-[140px]">
+        <Button onClick={handleSave} loading={mutation.isPending} className="gap-2 min-w-[140px]">
           <Save className="w-4 h-4" />
-          {mutation.isPending ? "Saving..." : "Save Changes"}
+          Save business settings
         </Button>
       </div>
     </div>
@@ -186,8 +186,9 @@ function ChangePasswordCard() {
               onChange={(e) => setForm((f) => ({ ...f, confirm: e.target.value }))} />
             {mismatch && <p className="text-xs text-destructive">These do not match.</p>}
           </div>
-          <Button type="submit" disabled={!canSubmit || mutation.isPending}>
-            {mutation.isPending ? "Changing..." : "Change password"}
+          <Button type="submit" loading={mutation.isPending}
+            disabledReason={canSubmit ? undefined : "Fill in all three fields, with matching new passwords"}>
+            Change password
           </Button>
         </form>
       </CardContent>
@@ -213,7 +214,7 @@ function SignOutEverywhereCard() {
         </p>
         <Button
           variant="destructive"
-          disabled={mutation.isPending}
+          loading={mutation.isPending}
           onClick={() =>
             mutation.mutate(undefined as never, {
               onSuccess: () => {
@@ -225,7 +226,7 @@ function SignOutEverywhereCard() {
             })
           }
         >
-          {mutation.isPending ? "Signing out..." : "Sign out on all devices"}
+          Sign out on all devices
         </Button>
       </CardContent>
     </Card>

@@ -5,6 +5,7 @@ import { authFetch } from "@/lib/api-fetch";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 type Tab = "invoices" | "purchases" | "reports";
 type Row = { id: number; invoiceNumber: string; customerName?: string; vendorName?: string; invoiceDate: string; grandTotal: number; status: string };
@@ -45,8 +46,8 @@ export function UserRecords({ userId }: { userId: number }) {
         <CardTitle className="text-base">Records (view only)</CardTitle>
         <div className="flex gap-2 pt-2">
           {(["invoices", "purchases", "reports"] as Tab[]).map((t) => (
-            <button key={t} type="button" onClick={() => setTab(t)}
-              className={`rounded-full px-3 py-1 text-sm capitalize ${tab === t ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{t}</button>
+            <Button key={t} type="button" size="sm" variant={tab === t ? "secondary" : "ghost"} aria-pressed={tab === t} onClick={() => setTab(t)}
+              className="rounded-full capitalize">{t}</Button>
           ))}
         </div>
       </CardHeader>

@@ -25,6 +25,7 @@ export type AuditAction =
   | "user.updated"
   | "user.role_changed"
   | "user.password_reset"
+  | "user.password_reset_requested"
   | "user.deleted"
   | "user.restored"
   | "user.status_changed"

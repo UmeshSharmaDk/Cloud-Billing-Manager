@@ -133,15 +133,15 @@ export default function AdminUserDetailPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-xs px-2 py-1 rounded-full font-medium ${user.isActive ? "bg-success-bg text-success-text" : "bg-danger-bg text-danger-text"}`}>{user.isActive ? "Active" : "Inactive"}</span>
-          <Button variant="outline" size="sm" className="gap-1" onClick={handleToggleActive} disabled={toggleMutation.isPending}>
+          <Button variant="outline" size="sm" className="gap-1" onClick={handleToggleActive} loading={toggleMutation.isPending}>
             {user.isActive ? <><UserX className="w-3.5 h-3.5" /> Deactivate</> : <><UserCheck className="w-3.5 h-3.5" /> Activate</>}
           </Button>
           {!editing ? (
             <Button variant="outline" size="sm" className="gap-1" onClick={() => setEditing(true)}><Edit2 className="w-3.5 h-3.5" /> Edit</Button>
           ) : (
             <>
-              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
-              <Button size="sm" className="gap-1" onClick={handleSave} disabled={updateMutation.isPending}><Save className="w-3.5 h-3.5" /> Save</Button>
+              <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button size="sm" className="gap-1" onClick={handleSave} loading={updateMutation.isPending}><Save className="w-3.5 h-3.5" /> Save user</Button>
             </>
           )}
         </div>

@@ -256,6 +256,31 @@ export const ReviewCapacityRequestBody = z.object({
   { message: "Set an explicit user limit to approve a capacity request", path: ["userLimit"] },
 );
 
+export const DEMO_BUSINESS_TYPES = ["CA or accounting firm", "Business with branches", "Single business", "Other"] as const;
+
+export const DemoRequestBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  phone: z.string().trim().regex(/^[+\d][\d\s-]{6,19}$/, "Enter a phone number"),
+  email: z.union([z.literal(""), z.string().email().max(320)]).optional(),
+  city: z.string().trim().max(80).optional(),
+  businessType: z.enum(DEMO_BUSINESS_TYPES),
+  clientCount: z.number().int().min(0).max(100000).optional(),
+  message: z.string().trim().max(1000).optional(),
+  /** Hidden from people; bots fill it in. */
+  website: z.string().max(200).optional(),
+});
+
+export const DemoRequestStatusBody = z.object({ status: z.enum(["new", "contacted", "closed"]) });
+
+export const ForgotPasswordBody = z.object({
+  email: z.string().email().max(320),
+});
+
+export const ResetForgottenPasswordBody = z.object({
+  token: z.string().min(1).max(2048),
+  password: newPassword,
+});
+
 export const AcceptAdminInvitationBody = z.object({
   token: z.string().min(1).max(512),
   password: newPassword,

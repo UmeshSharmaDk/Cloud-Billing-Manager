@@ -15,7 +15,7 @@ import {
 import { validateBody } from "../middleware/validate";
 import {
   LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody,
-  MfaSetupBody, MfaCodeBody, MfaLoginBody,
+  MfaSetupBody, MfaCodeBody, MfaLoginBody, ForgotPasswordBody, ResetForgottenPasswordBody,
 } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { mapUser } from "../lib/serialise";
@@ -24,7 +24,7 @@ import {
   generateTotpSecret, matchTotp, otpauthUri, generateRecoveryCodes, hashRecoveryCode, looksLikeTotp,
 } from "../lib/mfa";
 import { validatePassword } from "../lib/password-policy";
-import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
+import { sendQuietly, verificationMessage, alreadyRegisteredMessage, passwordResetMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
 import { openTenantScope } from "../middleware/tenant-scope";
 import {
@@ -67,7 +67,9 @@ interface TokenPayload {
    * a correct second factor. It names an account but is not a session:
    * `requireAuth` refuses it, and `/auth/mfa/login` accepts nothing else.
    */
-  purpose?: "mfa";
+  purpose?: "mfa" | "reset";
+  /** On a reset token: a fingerprint of the password it may replace (see /forgot-password). */
+  ph?: string;
 }
 
 /** Long enough to open an authenticator app, short enough to be useless later. */
@@ -901,6 +903,84 @@ router.post("/accept-admin-invite", authIpLimiter, validateBody(AcceptAdminInvit
       user: mapUser(admin),
     });
   });
+
+/**
+ * Forgotten passwords. There is still no sign-up: this only resets an account
+ * an admin already created.
+ *
+ * The reset link carries a signed token rather than a stored one. It names the
+ * account's session generation and a fingerprint of its current password hash,
+ * so it stops working the moment the password changes (one use), when the
+ * admin resets it, or after 30 minutes. The answer is the same whether or not
+ * the address has an account, and the mail is sent after the response is
+ * decided, so neither the body nor the timing says which.
+ */
+const RESET_TTL_SECONDS = 30 * 60;
+const RESET_ACCEPTED = {
+  message: "If that address has an account, we have emailed a link to reset its password. It works for 30 minutes.",
+} as const;
+const resetFingerprint = (passwordHash: string) =>
+  crypto.createHash("sha256").update(passwordHash).digest("base64url").slice(0, 16);
+
+router.post("/forgot-password", registerIpLimiter, validateBody(ForgotPasswordBody), async (req: Req, res) => {
+  const email = String(req.body.email).toLowerCase();
+  // Charged for every request, account or not, so the count reveals nothing.
+  const withinBudget = await consumeBudget(`reset:${email}`, REGISTER_RECIPIENT_LIMIT);
+  if (!withinBudget) {
+    return res.status(429).json({ error: "Too many reset requests for this address. Try again later." });
+  }
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email)).limit(1);
+  res.status(202).json(RESET_ACCEPTED);
+
+  if (!user || user.deletedAt || !user.isActive) return undefined;
+  const token = jwt.sign(
+    { userId: user.id, v: user.tokenVersion, purpose: "reset", ph: resetFingerprint(user.passwordHash) },
+    JWT_SECRET,
+    { algorithm: "HS256", expiresIn: RESET_TTL_SECONDS },
+  );
+  // In the fragment, which browsers never send to a server or a Referer.
+  const link = `${config.appBaseUrl}/reset-password#token=${encodeURIComponent(token)}`;
+  await sendQuietly(passwordResetMessage(user.email, link));
+  await recordAudit({
+    actorId: user.id, actorEmail: user.email, action: "user.password_reset_requested",
+    targetType: "user", targetId: user.id, sourceIp: req.ip, details: {},
+  });
+  return undefined;
+});
+
+router.post("/reset-password", authIpLimiter, validateBody(ResetForgottenPasswordBody), async (req: Req, res) => {
+  const invalid = { error: "That reset link is invalid or has expired. Ask for a new one." };
+  const payload = verifyToken(String(req.body.token));
+  if (!payload || payload.purpose !== "reset" || !payload.ph) return res.status(400).json(invalid);
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, payload.userId)).limit(1);
+  if (!user || user.deletedAt || !user.isActive
+      || (payload.v ?? 0) !== user.tokenVersion
+      || payload.ph !== resetFingerprint(user.passwordHash)) {
+    return res.status(400).json(invalid);
+  }
+
+  const password = String(req.body.password);
+  const policyFailure = await validatePassword(password);
+  if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+
+  // Bumping tokenVersion signs out every device, as a reset should. Two
+  // requests racing with one link: the second matches no row and fails.
+  const updated = await rootDb.update(usersTable)
+    .set({ passwordHash: await hashPassword(password), tokenVersion: user.tokenVersion + 1 })
+    .where(and(eq(usersTable.id, user.id), eq(usersTable.tokenVersion, user.tokenVersion)))
+    .returning({ id: usersTable.id });
+  if (!updated.length) return res.status(400).json(invalid);
+
+  await clearFailures([userKey(user.id), loginKey(user.email, req.ip)]);
+  await recordAudit({
+    actorId: user.id, actorEmail: user.email, action: "user.password_reset",
+    targetType: "user", targetId: user.id, sourceIp: req.ip, details: {},
+  });
+  // No session is issued: the person signs in, with their second factor if
+  // they have one, so a mailbox alone never gets past MFA.
+  return res.json({ success: true });
+});
 
 /** Drop pending registrations whose links have expired. */
 export async function prunePendingRegistrations(): Promise<number> {

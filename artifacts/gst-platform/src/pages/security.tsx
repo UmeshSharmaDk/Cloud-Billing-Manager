@@ -121,7 +121,7 @@ export default function SecurityPage() {
               <Label htmlFor="regen-code">Authenticator code</Label>
               <Input id="regen-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" required />
               {errorLine}
-              <Button type="submit" disabled={regenerate.isPending}>{regenerate.isPending ? "Checking..." : "Replace recovery codes"}</Button>
+              <Button type="submit" loading={regenerate.isPending}>Replace recovery codes</Button>
             </form>
           </CardContent>
         </Card>
@@ -140,7 +140,7 @@ export default function SecurityPage() {
               <Label htmlFor="enable-code">Code shown in the app</Label>
               <Input id="enable-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" required autoFocus />
               {errorLine}
-              <Button type="submit" disabled={enableMfa.isPending}>{enableMfa.isPending ? "Checking..." : "Turn on"}</Button>
+              <Button type="submit" loading={enableMfa.isPending}>Turn on</Button>
             </form>
           </CardContent>
         </Card>
@@ -155,7 +155,7 @@ export default function SecurityPage() {
               <Label htmlFor="mfa-password">Your password</Label>
               <Input id="mfa-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
               {errorLine}
-              <Button type="submit" disabled={setupMfa.isPending}>{setupMfa.isPending ? "Starting..." : "Start setup"}</Button>
+              <Button type="submit" loading={setupMfa.isPending}>Start setup</Button>
             </form>
           </CardContent>
         </Card>

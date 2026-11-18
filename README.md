@@ -1,36 +1,35 @@
-# GST Pro — GST Billing & Inventory Platform
+# Billing Pilot — GST Billing & Inventory Platform
 
 A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indian businesses. Full-stack SaaS with Admin and User panels.
 
 ## Run & Operate
 
-- Replit development preview: start the managed workflows
-  `artifacts/api-server: API Server` and `artifacts/gst-platform: web`.
-  The frontend is served at `/`; the API is served at `/api`.
-  The unused Canvas workflow does not need to run.
-- This import runs on Node.js 24. Install dependencies with
-  `pnpm install --frozen-lockfile`. The development schema and RLS policies
-  have been initialized in the workspace PostgreSQL database; no user
-  accounts or business records were imported from GitHub.
-- The API development workflow supplies the preview CORS origins and its
-  `dev` script sets `NODE_ENV=development`. Without `SMTP_URL`, verification
-  only mail metadata is logged in the API workflow console; no message or
-  verification token is delivered. Use development SMTP or the test file
-  transport to complete a development registration.
-- Production uses `ALLOWED_ORIGINS` and `APP_BASE_URL` from production-scoped
-  environment variables. Keep both aligned with the verified published domain.
-  `PRODUCTION_SMTP_URL` selects SMTP outside development; `SMTP_URL` is only a
-  development opt-in. Development ignores the production credential.
-  A dedicated non-superuser, non-BYPASSRLS application database connection is
-  still required before publishing the fail-closed startup code.
-  The current workspace owner connection bypasses RLS, as reported by the
-  API startup warning; application query filters still apply.
+- Production is billing.myindiatrips.com on Hostinger (Node.js, Git auto-deploy from `main`,
+  build `pnpm run build:hostinger`, entry `server.mjs`), with Postgres on Neon.
+  The Android app lives in `exports/GST-Pro-Android`.
+- Node.js 24. Install dependencies with `pnpm install --frozen-lockfile`.
+- Mail: `PRODUCTION_SMTP_URL` selects SMTP outside development. In development, `SMTP_URL`
+  opts in to SMTP; without it, mail is only logged (or written to `MAIL_OUTBOX_PATH`).
+
+### Schema changes
+
+Every schema change ships as a numbered SQL file in `lib/db/migrations` (write it so it can
+run twice: `IF NOT EXISTS`), together with the matching change in `lib/db/src/schema`. CI builds
+its database only from the migrations and fails if they disagree with the schema code
+(`lib/db/test/schema-drift.sh`).
+
+- Apply: `DATABASE_URL=<owner url> pnpm --filter @workspace/db run migrate`
+- Or set `MIGRATION_DATABASE_URL` (the schema owner) on the host: the server then applies pending
+  migrations before it starts listening.
+- Without either, a production server refuses to start while a migration is missing, and says
+  which one, rather than serving pages that fail on a missing column.
+
 - `pnpm --filter @workspace/api-server run dev` — run the API server (port 8080)
 - `pnpm --filter @workspace/gst-platform run dev` — run the frontend (port 25512)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/db run push` — push the schema code to a scratch database (never production)
 - `pnpm --filter @workspace/api-server run test` — unit tests (password policy, breach lookup)
 - Both suites run in CI (`.github/workflows/security.yml`); the integration job brings up its own
   Postgres service container
@@ -43,13 +42,12 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
   - `SESSION_SECRET` — session signing key, minimum 32 chars (`openssl rand -base64 48`)
   - `ALLOWED_ORIGINS` — comma-separated browser origins permitted by CORS; never `*`
   - `PRODUCTION_SMTP_URL` + `MAIL_FROM` — production registration email uses user-approved Hostinger SMTP. The production secret is ignored in development; `SMTP_URL` is a separate development opt-in.
-- Optional env: `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
+- Optional env: `MIGRATION_DATABASE_URL` (see Schema changes), `DEMO_REQUEST_TO` (who receives
+  "Book a demo" requests; defaults to `MAIL_FROM`), `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
   for the client address, default 1), `AUTH_RATE_LIMIT_MAX` (default 30), `REGISTER_RATE_LIMIT_MAX`,
   `TENANT_WRITE_RATE_LIMIT_MAX`, `TENANT_READ_RATE_LIMIT_MAX`, `TENANT_MAX_IN_FLIGHT` (default 16, keep below
   `DB_POOL_MAX`), `DISABLE_BREACH_CHECK` (skips the Have I Been Pwned lookup on new passwords), `NODE_ENV`
-- After a development/disposable-database `push`, run `pnpm --filter @workspace/db run rls:apply`
-  with the owner connection (`scripts/post-merge.sh` does both). Replit Publish manages production
-  schema changes; do not run schema scripts against managed production or add startup/build-time DDL.
+- RLS policies: `pnpm --filter @workspace/db run rls:apply` with the owner connection (safe to repeat).
 
 ## Stack
 
@@ -62,7 +60,7 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 - API codegen: Orval (from OpenAPI spec)
 - Frontend: React + Vite, TanStack Query, Wouter router, shadcn/ui, Tailwind CSS
 - Charts: Recharts
-- Build: esbuild (CJS bundle)
+- Build: esbuild (ESM bundle)
 
 ## Where things live
 
@@ -97,8 +95,13 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 
 ## Product
 
-- **User Panel**: Dashboard, Sales Invoices (create/view/status), Purchase Bills (ITC tracking), Inventory/Products, Customers, Vendors, Payments, GST Reports (GSTR-1, GSTR-3B), Business Settings
-- **Admin Panel**: Platform dashboard, User management (subscriptions, activation)
+- No public sign-up. The superadmin invites admins; admins create their users. The public site
+  has sign-in, forgot password and "Book a free demo" only.
+- **User**: dashboard, invoices, purchases, inventory, customers, vendors, payments, e-way bills,
+  GST reports (GSTR-1, GSTR-3B, HSN, TDS, TCS), business settings.
+- **Admin**: every client's month on one screen, users, read-only view of a user's books, books freeze.
+  Admins have a plan end date; when it passes, the admin and their users cannot sign in.
+- **Superadmin**: admins, seat requests (granted only on approval), demo requests.
 
 ## User preferences
 
@@ -115,7 +118,6 @@ A cloud-based, multi-tenant GST Billing & Inventory Management Platform for Indi
 
 ## Pointers
 
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
 - Generated hooks: `lib/api-client-react/src/generated/api.ts`
-- DB schema: `lib/db/src/schema.ts`
+- DB schema: `lib/db/src/schema/`, migrations: `lib/db/migrations/`
 - API routes: `artifacts/api-server/src/routes/`

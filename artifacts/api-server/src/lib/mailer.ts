@@ -232,6 +232,27 @@ export function adminInvitationMessage(to: string, link: string): Message {
   };
 }
 
+/** A password reset link for an existing account. */
+export function passwordResetMessage(to: string, link: string): Message {
+  return {
+    to,
+    subject: "Reset your Billing Pilot password",
+    text: [
+      "Hello,",
+      "",
+      "Someone, we hope you, asked to reset the password for this Billing Pilot",
+      "account. Open the link below to choose a new one:",
+      "",
+      link,
+      "",
+      "The link works once and expires in 30 minutes. Resetting signs you out on",
+      "every device.",
+      "",
+      "If this was not you, ignore this message. Your password has not changed.",
+    ].join("\n"),
+  };
+}
+
 /**
  * Send without letting a mail failure change what the caller returns.
  *

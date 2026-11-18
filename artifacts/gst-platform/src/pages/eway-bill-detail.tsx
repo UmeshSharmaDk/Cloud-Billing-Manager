@@ -129,13 +129,13 @@ export default function EwayBillDetailPage() {
         </div>
         <div className="flex items-center gap-2 print:hidden">
           {bill.status === "draft" && (
-            <Button variant="default" className="gap-2" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
-              <Truck className="w-4 h-4" />{generateMutation.isPending ? "Generating…" : "Generate EWB"}
+            <Button variant="default" className="gap-2" onClick={() => generateMutation.mutate()} loading={generateMutation.isPending}>
+              <Truck className="w-4 h-4" />Generate e-way bill
             </Button>
           )}
           {bill.status === "generated" && (
-            <Button variant="outline" className="gap-2 text-danger border-danger/30 hover:bg-danger-bg" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
-              <XCircle className="w-4 h-4" />{cancelMutation.isPending ? "Cancelling…" : "Cancel EWB"}
+            <Button variant="outline" className="gap-2 text-danger border-danger/30 hover:bg-danger-bg" onClick={() => cancelMutation.mutate()} loading={cancelMutation.isPending}>
+              <XCircle className="w-4 h-4" />Cancel e-way bill
             </Button>
           )}
           <Button variant="outline" className="gap-2" onClick={() => window.print()}>

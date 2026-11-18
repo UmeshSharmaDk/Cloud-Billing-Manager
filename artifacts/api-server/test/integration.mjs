@@ -3053,6 +3053,62 @@ const adminEmail = `admin${uniq}@example.test`;
   check("pdf import", "saving the imported bill adds the product with its stock", bill.status === 201 && Number(stock?.stockQuantity) === 10, `status ${bill.status}, stock ${stock?.stockQuantity}`);
 }
 
+// === Forgot password: existing accounts only, one use, same answer for strangers ===
+{
+  const u = await register("forgot");
+  const ghost = `nobody${uniq}@example.test`;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const resetLink = (email) => {
+    const m = [...outbox()].reverse().find((x) => x.to === email && /reset-password#token=/.test(x.text ?? ""));
+    return m ? decodeURIComponent(/reset-password#token=([^\s]+)/.exec(m.text)[1]) : null;
+  };
+  const known = await call("POST", "/auth/forgot-password", { body: { email: u.email.toUpperCase() } });
+  const unknown = await call("POST", "/auth/forgot-password", { body: { email: ghost } });
+  check("forgot password", "the answer is the same whether or not the account exists",
+    known.status === 202 && unknown.status === 202 && JSON.stringify(known.data) === JSON.stringify(unknown.data));
+  await sleep(300);
+  const token = resetLink(u.email);
+  check("forgot password", "an existing account is mailed a link, a stranger nothing", !!token && !resetLink(ghost));
+
+  const weak = await call("POST", "/auth/reset-password", { body: { token, password: "short" } });
+  check("forgot password", "the new password must meet the policy", weak.status === 400);
+  const NEW = "a-brand-new-passphrase-2026";
+  const done = await call("POST", "/auth/reset-password", { body: { token, password: NEW } });
+  check("forgot password", "the link sets a new password", done.status === 200, `status ${done.status}`);
+  check("forgot password", "the old session is signed out", (await call("GET", "/auth/me", { token: u.token })).status === 401);
+  check("forgot password", "the new password signs in", (await signIn(u.email, NEW)).status === 200);
+  const again = await call("POST", "/auth/reset-password", { body: { token, password: "yet-another-passphrase-99" } });
+  check("forgot password", "the link works only once", again.status === 400);
+
+  const session = (await signIn(u.email, NEW)).data?.token;
+  const forged = await call("POST", "/auth/reset-password", { body: { token: session, password: "yet-another-passphrase-99" } });
+  check("forgot password", "a session token is not a reset token", forged.status === 400);
+
+  sqlExec(`UPDATE users SET is_active=false WHERE id=${u.userId}`);
+  await call("POST", "/auth/forgot-password", { body: { email: u.email } });
+  await sleep(300);
+  check("forgot password", "a deactivated account gets no new link", resetLink(u.email) === token);
+}
+
+// === Book a demo: public, saves and emails, creates no account, bots dropped ===
+{
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const before = Number(sqlValue("SELECT count(*) FROM demo_requests"));
+  const users = Number(sqlValue("SELECT count(*) FROM users"));
+  const form = { name: `Demo ${uniq}`, phone: "+91 98765 43210", city: "Pune", businessType: "CA or accounting firm", clientCount: 40, message: "Monthly GST for 40 clients" };
+  const ok = await call("POST", "/demo-requests", { body: form });
+  check("book a demo", "a visitor can ask for a demo without signing in", ok.status === 202, `status ${ok.status}`);
+  check("book a demo", "the request is saved and no account is created",
+    Number(sqlValue("SELECT count(*) FROM demo_requests")) === before + 1 && Number(sqlValue("SELECT count(*) FROM users")) === users);
+  await sleep(200);
+  check("book a demo", "the team is emailed the request", outbox().some((m) => /Demo request: Demo /.test(m.subject ?? "") && m.text.includes("+91 98765 43210")));
+  const bot = await call("POST", "/demo-requests", { body: { ...form, website: "http://spam.example" } });
+  check("book a demo", "a bot that fills the hidden field is answered the same and dropped",
+    bot.status === 202 && Number(sqlValue("SELECT count(*) FROM demo_requests")) === before + 1);
+  check("book a demo", "a bad phone number is refused", (await call("POST", "/demo-requests", { body: { ...form, phone: "call me" } })).status === 400);
+  check("book a demo", "only the superadmin can list requests", (await call("GET", "/demo-requests", { token: (await register("demolist")).token })).status === 403);
+}
+
 // ---------------------------------------------------------------------------
 let group = "";
 for (const r of results) {

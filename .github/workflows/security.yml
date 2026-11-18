@@ -262,10 +262,20 @@ jobs:
       - name: Install the psql client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
 
-      - name: Create the schema
+      # The suite runs against a database built only from lib/db/migrations,
+      # the same files production receives, so a schema change that ships
+      # without its migration fails here rather than on the live site.
+      - name: Create the schema from the migrations
         env:
           DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
-        run: pnpm --filter @workspace/db run push --force
+        run: pnpm --filter @workspace/db run migrate
+
+      - name: Assert the migrations match the schema code
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: lib/db/test/schema-drift.sh
 
       - name: Create the unprivileged application role
         env:

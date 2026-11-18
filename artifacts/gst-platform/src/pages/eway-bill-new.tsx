@@ -426,10 +426,10 @@ export default function EwayBillNewPage() {
 
       {/* ── Actions ── */}
       <div className="flex gap-3 justify-end pb-8">
-        <Link href="/eway-bills"><Button variant="outline" type="button">Cancel</Button></Link>
-        <Button type="submit" disabled={createMutation.isPending} className="gap-2">
+        <Button asChild variant="ghost" type="button"><Link href="/eway-bills">Cancel</Link></Button>
+        <Button type="submit" loading={createMutation.isPending} className="gap-2">
           <Truck className="w-4 h-4" />
-          {createMutation.isPending ? "Creating…" : "Create E-Way Bill"}
+          Create e-way bill
         </Button>
       </div>
     </form>

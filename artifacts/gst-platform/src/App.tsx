@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -5,36 +6,39 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { AppShell } from "@/components/AppShell";
 import { ShellSkeleton } from "@/components/ui/skeleton";
-import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
-import DashboardPage from "@/pages/dashboard";
-import InvoicesPage from "@/pages/invoices";
-import InvoiceNewPage from "@/pages/invoice-new";
-import InvoiceDetailPage from "@/pages/invoice-detail";
-import PurchasesPage from "@/pages/purchases";
-import PurchaseNewPage from "@/pages/purchase-new";
-import PurchaseDetailPage from "@/pages/purchase-detail";
-import InventoryPage from "@/pages/inventory";
-import ProductNewPage from "@/pages/product-new";
-import ProductDetailPage from "@/pages/product-detail";
-import CustomersPage from "@/pages/customers";
-import CustomerNewPage from "@/pages/customer-new";
-import CustomerDetailPage from "@/pages/customer-detail";
-import VendorsPage from "@/pages/vendors";
-import VendorNewPage from "@/pages/vendor-new";
-import VendorDetailPage from "@/pages/vendor-detail";
-import PaymentsPage from "@/pages/payments";
-import ReportsPage from "@/pages/reports";
-import EwayBillsPage from "@/pages/eway-bills";
-import EwayBillNewPage from "@/pages/eway-bill-new";
-import EwayBillDetailPage from "@/pages/eway-bill-detail";
-import SettingsPage from "@/pages/settings";
-import AdminDashboardPage from "@/pages/admin-dashboard";
-import AdminUsersPage from "@/pages/admin-users";
-import AdminUserDetailPage from "@/pages/admin-user-detail";
-import SuperadminDashboardPage from "@/pages/superadmin-dashboard";
-import AcceptAdminInvitePage from "@/pages/accept-admin-invite";
-import SecurityPage from "@/pages/security";
+const NotFound = lazy(() => import("@/pages/not-found"));
+const DashboardPage = lazy(() => import("@/pages/dashboard"));
+const InvoicesPage = lazy(() => import("@/pages/invoices"));
+const InvoiceNewPage = lazy(() => import("@/pages/invoice-new"));
+const InvoiceDetailPage = lazy(() => import("@/pages/invoice-detail"));
+const PurchasesPage = lazy(() => import("@/pages/purchases"));
+const PurchaseNewPage = lazy(() => import("@/pages/purchase-new"));
+const PurchaseDetailPage = lazy(() => import("@/pages/purchase-detail"));
+const InventoryPage = lazy(() => import("@/pages/inventory"));
+const ProductNewPage = lazy(() => import("@/pages/product-new"));
+const ProductDetailPage = lazy(() => import("@/pages/product-detail"));
+const CustomersPage = lazy(() => import("@/pages/customers"));
+const CustomerNewPage = lazy(() => import("@/pages/customer-new"));
+const CustomerDetailPage = lazy(() => import("@/pages/customer-detail"));
+const VendorsPage = lazy(() => import("@/pages/vendors"));
+const VendorNewPage = lazy(() => import("@/pages/vendor-new"));
+const VendorDetailPage = lazy(() => import("@/pages/vendor-detail"));
+const PaymentsPage = lazy(() => import("@/pages/payments"));
+const ReportsPage = lazy(() => import("@/pages/reports"));
+const EwayBillsPage = lazy(() => import("@/pages/eway-bills"));
+const EwayBillNewPage = lazy(() => import("@/pages/eway-bill-new"));
+const EwayBillDetailPage = lazy(() => import("@/pages/eway-bill-detail"));
+const SettingsPage = lazy(() => import("@/pages/settings"));
+const AdminDashboardPage = lazy(() => import("@/pages/admin-dashboard"));
+const AdminUsersPage = lazy(() => import("@/pages/admin-users"));
+const AdminUserDetailPage = lazy(() => import("@/pages/admin-user-detail"));
+const SuperadminDashboardPage = lazy(() => import("@/pages/superadmin-dashboard"));
+const AcceptAdminInvitePage = lazy(() => import("@/pages/accept-admin-invite"));
+const SecurityPage = lazy(() => import("@/pages/security"));
+const DemoPage = lazy(() => import("@/pages/demo"));
+const ForgotPasswordPage = lazy(() => import("@/pages/password-reset").then((m) => ({ default: m.ForgotPasswordPage })));
+const ResetPasswordPage = lazy(() => import("@/pages/password-reset").then((m) => ({ default: m.ResetPasswordPage })));
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 1000 * 60 } }
@@ -83,6 +87,9 @@ function Router() {
     <Switch>
       <Route path="/login" component={LoginPage} />
       <Route path="/accept-admin-invite" component={AcceptAdminInvitePage} />
+      <Route path="/demo" component={DemoPage} />
+      <Route path="/forgot-password" component={ForgotPasswordPage} />
+      <Route path="/reset-password" component={ResetPasswordPage} />
       <Route path="/">{() => <Redirect to="/login" />}</Route>
       <Route path="/dashboard">{() => <ProtectedRoute component={DashboardPage} />}</Route>
       <Route path="/invoices">{() => <ProtectedRoute component={InvoicesPage} />}</Route>
@@ -122,7 +129,10 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <AuthProvider>
-            <Router />
+            {/* Pages load on demand, so the sign-in screen does not download the whole app. */}
+            <Suspense fallback={<ShellSkeleton />}>
+              <Router />
+            </Suspense>
             <Toaster />
           </AuthProvider>
         </WouterRouter>

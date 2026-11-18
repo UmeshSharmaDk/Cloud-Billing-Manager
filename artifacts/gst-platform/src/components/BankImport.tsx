@@ -106,8 +106,8 @@ export function BankImport() {
               </table>
             </div>
             <div className="flex gap-2">
-              <Button disabled={!picked.size} onClick={record}>Record {picked.size} payment{picked.size === 1 ? "" : "s"}</Button>
-              <Button variant="outline" onClick={() => { setRows([]); setMatches([]); }}>Discard</Button>
+              <Button disabledReason={picked.size ? undefined : "Tick the matches to record first"} onClick={record}>Record {picked.size} payment{picked.size === 1 ? "" : "s"}</Button>
+              <Button variant="ghost" onClick={() => { setRows([]); setMatches([]); }}>Discard statement</Button>
             </div>
           </>
         )}

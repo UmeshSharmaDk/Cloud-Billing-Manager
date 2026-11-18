@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useLogin, useLoginMfa } from "@workspace/api-client-react";
 import { useAuth } from "@/context/AuthContext";
+import { Link } from "wouter";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -78,10 +79,8 @@ export default function LoginPage() {
                 <Input id="mfa-code" inputMode="numeric" autoComplete="one-time-code" placeholder="123456" value={code} onChange={(e) => setCode(e.target.value)} required autoFocus maxLength={32} />
                 <p className="text-xs text-muted-foreground">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
               </div>
-              <Button type="submit" className="w-full" disabled={mfaMutation.isPending}>
-                {mfaMutation.isPending ? "Checking..." : "Verify"}
-              </Button>
-              <button type="button" onClick={() => { setMfaToken(null); setCode(""); }} className="w-full text-center text-sm text-muted-foreground hover:underline">Use a different account</button>
+              <Button type="submit" className="w-full" loading={mfaMutation.isPending}>Verify code</Button>
+              <Button type="button" variant="ghost" className="w-full" onClick={() => { setMfaToken(null); setCode(""); }}>Use a different account</Button>
             </form>
             ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -93,13 +92,13 @@ export default function LoginPage() {
                 <Label htmlFor="password">Password</Label>
                 <Input id="password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
               </div>
-              <Button type="submit" className="w-full" disabled={mutation.isPending}>
-                {mutation.isPending ? "Signing in..." : "Sign In"}
-              </Button>
+              <Button type="submit" className="w-full" loading={mutation.isPending}>Sign in</Button>
+              <p className="text-center text-sm"><Link href="/forgot-password" className="inline-flex min-h-11 items-center text-muted-foreground hover:underline">Forgot your password?</Link></p>
             </form>
             )}
           </CardContent>
         </Card>
+        <p className="mt-6 text-center text-sm text-muted-foreground">New to Billing Pilot? <Link href="/demo" className="inline-flex min-h-11 items-center font-medium text-foreground hover:underline">Book a free demo</Link></p>
       </div>
     </div>
   );

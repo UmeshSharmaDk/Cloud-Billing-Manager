@@ -35,6 +35,8 @@ export const purchasesTable = pgTable("purchases", {
   // Every query is for one business; without this each one scans the table, and
   // the row-level-security filter is applied after the scan rather than before.
   index("purchases_business_idx").on(t.businessId),
+  // Reports and dashboards ask for one business over a date range.
+  index("purchases_business_date_idx").on(t.businessId, t.invoiceDate),
 ]);
 
 export const insertPurchaseSchema = createInsertSchema(purchasesTable).omit({ id: true, createdAt: true });

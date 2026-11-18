@@ -29,7 +29,7 @@ export function Clients() {
       </View>
       {q.isLoading ? <Loading layout="rows" /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : !q.data?.clients.length ? <Text style={s.muted}>No clients yet.</Text> :
         q.data.clients.map((c) => (
-          <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
+          <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, minHeight: 44, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
             <Row label={c.business?.name ?? c.name} value={money(c.sales ?? 0)} />
             <Text style={s.muted}>{c.invoices ?? 0} invoices · GST {money(c.netGst ?? 0)} · owed {money(c.receivable ?? 0)}{c.business?.lockDate ? ` · frozen to ${date(c.business.lockDate)}` : ""}</Text>
           </Pressable>
@@ -81,7 +81,7 @@ export default function AdminHome() {
       {!!d.recentUsers?.length && (
         <Card title="Recent users">
           {d.recentUsers.map((u) => (
-            <Pressable key={u.id} onPress={() => router.push(`/admin/user/${u.id}`)} style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 6 }}>
+            <Pressable key={u.id} onPress={() => router.push(`/admin/user/${u.id}`)} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6, minHeight: 44 }}>
               <View style={{ flexShrink: 1 }}>
                 <Text style={{ color: colors.text, fontWeight: "600" }}>{u.name}</Text>
                 <Text style={s.muted}>{u.email}</Text>
