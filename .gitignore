@@ -37,6 +37,8 @@ node_modules
 *.key
 *.p12
 *.sql
+# ...except the reviewed schema migrations, which are source code.
+!lib/db/migrations/*.sql
 *.dump
 *.bak
 
