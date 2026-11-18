@@ -7,6 +7,7 @@ import { Link } from "wouter";
 import { FileText, Package, Plus, ArrowRight, MessageCircle } from "lucide-react";
 import { useGetBusiness } from "@workspace/api-client-react";
 import { reminderLink } from "@/lib/whatsapp";
+import { FirstSteps } from "@/components/FirstSteps";
 import { Button } from "@/components/ui/button";
 import { Figure, deltaText } from "@/components/Figure";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, LineChart, Line } from "recharts";
@@ -58,6 +59,14 @@ export default function DashboardPage() {
           <Button className="gap-1"><Plus className="w-4 h-4" /> New invoice</Button>
         </Link>
       </div>
+
+      <FirstSteps steps={[
+        { label: "Add your GSTIN and address", href: "/settings", done: Boolean(business.gstin) },
+        { label: "Add your UPI ID so customers can pay by QR", href: "/settings", done: Boolean(business.upiId) },
+        { label: "Add your first product", href: "/inventory/new", done: (stats.productCount ?? 0) > 0 },
+        { label: "Add your first customer", href: "/customers/new", done: (stats.customerCount ?? 0) > 0 },
+        { label: "Create your first invoice", href: "/invoices/new", done: (stats.invoiceCount ?? 0) > 0 },
+      ]} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
         {/* The one figure that matters: this month's sales */}
@@ -128,6 +137,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
 
       {(repeatDue.length > 0 || overdue.length > 0) && (
         <Card>

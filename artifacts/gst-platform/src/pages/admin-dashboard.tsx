@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ClientsBoard } from "@/components/ClientsBoard";
 import { Figure } from "@/components/Figure";
 import { ToggleRow } from "@/components/ToggleRow";
+import { FirstSteps } from "@/components/FirstSteps";
 import { useAuth } from "@/context/AuthContext";
 import { authFetch } from "@/lib/api-fetch";
 import { useQueryClient } from "@tanstack/react-query";
@@ -46,6 +47,7 @@ function TeamMfa() {
 
 export default function AdminDashboardPage() {
   const { data, isLoading } = useGetAdminStats();
+  const { user } = useAuth();
   // API returns: totalUsers, activeUsers, inactiveUsers, expiredSubscriptions, totalBusinesses,
   //              totalInvoices, activeSubscriptions, newUsersThisMonth,
   //              monthlyCount, yearlyCount, trialCount, expiredCount, recentUsers
@@ -95,6 +97,12 @@ export default function AdminDashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <FirstSteps steps={[
+        { label: "Add your first user", href: "/admin/users", done: total > 0 },
+        { label: "Set up their business details", href: "/admin/users", done: (stats.totalBusinesses ?? 0) > 0 },
+        { label: "Turn on two-factor sign-in for your users (below)", href: "/admin", done: Boolean((user as any)?.requireTeamMfa) },
+      ]} />
 
       <TeamMfa />
 

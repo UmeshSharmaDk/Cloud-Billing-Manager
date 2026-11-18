@@ -43,7 +43,8 @@ its database only from the migrations and fails if they disagree with the schema
   - `ALLOWED_ORIGINS` — comma-separated browser origins permitted by CORS; never `*`
   - `PRODUCTION_SMTP_URL` + `MAIL_FROM` — production registration email uses user-approved Hostinger SMTP. The production secret is ignored in development; `SMTP_URL` is a separate development opt-in.
 - Optional env: `MIGRATION_DATABASE_URL` (see Schema changes), `DEMO_REQUEST_TO` (who receives
-  "Book a demo" requests; defaults to `MAIL_FROM`), `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
+  "Book a demo" requests; defaults to `MAIL_FROM`), `ERROR_ALERT_TO` (emailed when the server answers 500,
+  at most every ten minutes), `HOUSEKEEPING_INTERVAL_MS` (default 15 minutes; also when payment reminders go out), `COOKIE_SAME_SITE` (lax | strict | none), `APP_BASE_URL`, `TRUST_PROXY` (reverse-proxy hops
   for the client address, default 1), `AUTH_RATE_LIMIT_MAX` (default 30), `REGISTER_RATE_LIMIT_MAX`,
   `TENANT_WRITE_RATE_LIMIT_MAX`, `TENANT_READ_RATE_LIMIT_MAX`, `TENANT_MAX_IN_FLIGHT` (default 16, keep below
   `DB_POOL_MAX`), `DISABLE_BREACH_CHECK` (skips the Have I Been Pwned lookup on new passwords), `NODE_ENV`
@@ -97,9 +98,12 @@ its database only from the migrations and fails if they disagree with the schema
 
 - No public sign-up. The superadmin invites admins; admins create their users. The public site
   has sign-in, forgot password and "Book a free demo" only.
-- **User**: dashboard, invoices, purchases, inventory, customers, vendors, payments, e-way bills,
-  GST reports (GSTR-1, GSTR-3B, HSN, TDS, TCS), business settings.
-- **Admin**: every client's month on one screen, users, read-only view of a user's books, books freeze.
+- **User**: dashboard (with a getting-started list and a To do of invoices to repeat and to chase),
+  invoices (email, duplicate, repeat monthly, UPI QR), purchases, inventory, customers, vendors, payments,
+  e-way bills, GST reports (GSTR-1 with the portal JSON file, GSTR-3B, HSN, TDS, TCS, GSTR-2B match),
+  Excel and Tally exports, weekly emailed payment reminders (opt in), two-factor sign-in, business settings.
+- **Admin**: every client's month on one screen with GSTR-1 and 3B filing status, users, read-only view of a
+  user's books (audited), books freeze, can require two-factor sign-in for their users and reset it.
   Admins have a plan end date; when it passes, the admin and their users cannot sign in.
 - **Superadmin**: admins, seat requests (granted only on approval), demo requests.
 

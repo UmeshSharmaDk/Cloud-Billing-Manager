@@ -11,6 +11,7 @@ import { downloadFromApi } from "@/lib/download";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TdsTcsReport } from "@/components/TdsTcsReport";
+import { Gstr2bReconcile } from "@/components/Gstr2bReconcile";
 
 function parseMonth(monthStr: string) {
   const [year, month] = monthStr.split("-").map(Number);
@@ -77,8 +78,10 @@ export default function ReportsPage() {
           <TabsTrigger value="hsn">HSN Summary</TabsTrigger>
           <TabsTrigger value="tds">TDS</TabsTrigger>
           <TabsTrigger value="tcs">TCS</TabsTrigger>
+          <TabsTrigger value="gstr2b">GSTR-2B match</TabsTrigger>
         </TabsList>
         <TabsContent value="tds" className="mt-4"><TdsTcsReport kind="tds" month={Number(month.slice(5))} year={Number(month.slice(0, 4))} /></TabsContent>
+        <TabsContent value="gstr2b" className="mt-4"><Gstr2bReconcile month={month} /></TabsContent>
         <TabsContent value="tcs" className="mt-4"><TdsTcsReport kind="tcs" month={Number(month.slice(5))} year={Number(month.slice(0, 4))} /></TabsContent>
 
         {/* ─── GSTR-1 ─── */}

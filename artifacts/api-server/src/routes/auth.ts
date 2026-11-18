@@ -356,7 +356,7 @@ export async function requireBusiness(req: any, res: any, next: any) {
   }
   if (!businessId) return res.status(400).json({ error: "No business" });
   if (req.user?.mfaRequired) {
-    return res.status(403).json({ error: "Your administrator asks everyone to set up two-factor sign-in. Open Security to set it up.", code: "mfa_enrolment_required" });
+    return res.status(403).json({ error: "Your administrator asks everyone to set up two-factor sign-in. Sign in on the website and open Security to set it up.", code: "mfa_enrolment_required" });
   }
   // Staff, intern and client logins: "view" only reads; "entry" cannot delete
   // or change the business's own settings.
