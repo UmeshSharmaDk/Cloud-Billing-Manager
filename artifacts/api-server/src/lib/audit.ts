@@ -41,6 +41,8 @@ export type AuditAction =
   | "capacity_request.created"
   | "capacity_request.approved"
   | "capacity_request.declined"
+  | "capacity_request.paid"
+  | "capacity_request.payment_failed"
   | "business.lock_date_changed"
   | "business.updated_by_admin"
   | "business.viewed_by_admin"

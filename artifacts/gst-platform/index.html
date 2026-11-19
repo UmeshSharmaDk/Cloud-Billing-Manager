@@ -13,7 +13,7 @@
         img-src      data: blob:                  canvas/PDF page previews and inline SVG icons
         connect-src  'self'                       the API is same-origin (/api); OCR assets are under /ocr
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://test.payu.in https://secure.payu.in" />
     <meta name="referrer" content="same-origin" />
     <title>Billing Pilot</title>
     <meta name="description" content="Billing Pilot: GST billing, inventory and returns for Indian businesses." />

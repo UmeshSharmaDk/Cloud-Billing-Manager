@@ -2551,6 +2551,31 @@ const adminEmail = `admin${uniq}@example.test`;
   check("capacity", "an admin cannot create a second pending request",
     duplicateRequest.status === 409, `status ${duplicateRequest.status}`);
 
+  // PayU: the server signs the checkout form, and only a correctly signed
+  // callback for the quoted amount marks the request paid.
+  {
+    const { payuConfig, verifyPayuResponse } = await import("../src/lib/payu.ts");
+    const crypto = await import("node:crypto");
+    const cfg = payuConfig({});
+    const pay = await call("POST", `/superadmin/capacity-requests/${capacity.data?.id}/pay`, { token: accepted.data?.token });
+    const f = pay.data?.fields ?? {};
+    check("payu", "the admin gets a signed PayU test checkout", pay.status === 200 && pay.data?.action === "https://test.payu.in/_payment" && f.amount === "2000.00" && /^[0-9a-f]{128}$/.test(f.hash ?? ""), `status ${pay.status}`);
+    check("payu", "another admin cannot pay for it", (await call("POST", `/superadmin/capacity-requests/${capacity.data?.id}/pay`, { token: operator.token })).status === 403);
+    const reply = { status: "success", txnid: f.txnid, amount: f.amount, productinfo: f.productinfo, firstname: f.firstname, email: f.email, udf1: f.udf1, mihpayid: "403993715000000001" };
+    const sign = (r) => crypto.createHash("sha512").update(`${cfg.salt}|${r.status}||||||||||${r.udf1}|${r.email}|${r.firstname}|${r.productinfo}|${r.amount}|${r.txnid}|${cfg.key}`).digest("hex");
+    const post = (body) => fetch(`${B}/payments/payu/callback`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://test.payu.in" }, body: new URLSearchParams(body) });
+    const forged = await post({ ...reply, hash: "0".repeat(128) });
+    check("payu", "a forged callback changes nothing", forged.status === 303 && /payment=failed/.test(forged.headers.get("location") ?? "") && sqlValue(`SELECT payment_status FROM capacity_requests WHERE id=${capacity.data?.id}`) === "unpaid");
+    const cheap = { ...reply, amount: "1.00" };
+    await post({ ...cheap, hash: sign(cheap) });
+    check("payu", "a signed callback for the wrong amount is not a payment", sqlValue(`SELECT payment_status FROM capacity_requests WHERE id=${capacity.data?.id}`) !== "paid");
+    check("payu", "the test verifies its own signature", verifyPayuResponse(cfg, { ...reply, hash: sign(reply) }));
+    const ok = await post({ ...reply, hash: sign(reply) });
+    check("payu", "a genuine PayU callback marks the request paid", ok.status === 303 && /payment=success/.test(ok.headers.get("location") ?? "") &&
+      sqlValue(`SELECT payment_status FROM capacity_requests WHERE id=${capacity.data?.id}`) === "paid");
+    check("payu", "payment does not add seats by itself", sqlValue(`SELECT user_limit FROM users WHERE id=${tenantAdminId}`) === "1");
+  }
+
   const review = await call("PATCH", `/superadmin/capacity-requests/${capacity.data?.id}/review`, {
     token: operator.token,
     body: { decision: "approve", userLimit: 2, confirmPassword: PASSWORD },

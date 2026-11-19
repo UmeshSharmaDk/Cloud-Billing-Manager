@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { authFetch } from "@/lib/api-fetch";
 import { BusinessFields, cleanBusiness, type BusinessForm } from "@/components/BusinessFields";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
@@ -58,6 +59,32 @@ export default function AdminUsersPage() {
     u.email.toLowerCase().includes(search.toLowerCase())
   ), [users, search]);
   const pending = createUser.isPending || requestCapacity.isPending;
+
+  // PayU is a hosted checkout: post the server-signed form to PayU's page.
+  const [paying, setPaying] = useState(false);
+  const payNow = async (id: number) => {
+    if (paying) return;
+    setPaying(true);
+    try {
+      const res = await authFetch(`/api/superadmin/capacity-requests/${id}/pay`, { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "Could not start the payment.");
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = body.action;
+      for (const [k, v] of Object.entries(body.fields as Record<string, string>)) {
+        const input = document.createElement("input");
+        input.type = "hidden"; input.name = k; input.value = v;
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    } catch (err: any) {
+      setCapacityError(err.message);
+      setPaying(false);
+    }
+  };
+  const paymentResult = new URLSearchParams(window.location.search).get("payment");
 
   const submitUser = (event: React.FormEvent) => {
     event.preventDefault();
@@ -139,19 +166,33 @@ export default function AdminUsersPage() {
           <CircleAlert className="h-4 w-4 text-warning-text" />
           <AlertTitle>User allowance reached</AlertTitle>
           <AlertDescription className="mt-1 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <span>The fixed quote is {currency(1000)} for each additional user. A request is pending review only; it does not add capacity or enable user creation.</span>
+            <span>Each additional user costs {currency(1000)}. Ask for the seats, pay online, and the seats are added once the platform team approves.</span>
             {pendingCapacityRequest
               ? <span className="shrink-0 rounded-md border border-warning/30 bg-white px-3 py-1.5 text-xs font-semibold text-warning-text">Request pending review</span>
               : <Button variant="outline" size="sm" className="shrink-0 border-warning/30 bg-white text-warning-text hover:bg-warning-bg" onClick={() => setShowCapacity(true)}>Request capacity <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></Button>}
           </AlertDescription>
         </Alert>
       )}
+      {paymentResult && (
+        <p role="status" className={`rounded-lg px-3 py-2 text-sm ${paymentResult === "success" ? "bg-success-bg text-success-text" : "bg-danger-bg text-danger-text"}`}>
+          {paymentResult === "success" ? "Payment received. The seats are added once the platform team approves." : "The payment did not go through. You can try again."}
+        </p>
+      )}
+      {capacityError && !showCapacity && <p role="alert" className="rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger-text">{capacityError}</p>}
       {pendingCapacityRequest && (
         <Alert className="border-warning/30 bg-warning-bg text-warning-text">
           <Clock3 className="h-4 w-4 text-warning-text" />
-          <AlertTitle>Capacity request pending review</AlertTitle>
-          <AlertDescription>
-            Your request for {pendingCapacityRequest.additionalUsers} additional user(s) has a quote of {currency(pendingCapacityRequest.amountInr)}. It does not add capacity or authorize payment.
+          <AlertTitle>{(pendingCapacityRequest as any).paymentStatus === "paid" ? "Paid, waiting for approval" : "Seat request waiting for payment"}</AlertTitle>
+          <AlertDescription className="mt-1 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              {pendingCapacityRequest.additionalUsers} additional user(s) for {currency(pendingCapacityRequest.amountInr)}.{" "}
+              {(pendingCapacityRequest as any).paymentStatus === "paid"
+                ? "Thank you. The seats are added as soon as the platform team approves."
+                : (pendingCapacityRequest as any).paymentStatus === "failed" ? "The last payment did not go through. You can try again." : "Pay online to have it approved."}
+            </span>
+            {(pendingCapacityRequest as any).paymentStatus !== "paid" && (
+              <Button size="sm" className="shrink-0" loading={paying} onClick={() => void payNow(pendingCapacityRequest.id)}>Pay {currency(pendingCapacityRequest.amountInr)} with PayU</Button>
+            )}
           </AlertDescription>
         </Alert>
       )}
