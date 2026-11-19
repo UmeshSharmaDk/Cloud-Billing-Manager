@@ -16,4 +16,6 @@ reply.hash = sha(`${cfg.salt}|success||||||||||1|a@example.test|Asha|2 more user
 assert.equal(verifyPayuResponse(cfg, reply), true);
 assert.equal(verifyPayuResponse(cfg, { ...reply, amount: "1.00" }), false, "a changed amount fails");
 assert.equal(verifyPayuResponse(cfg, { ...reply, hash: "00" }), false);
+const fromApp = payuForm(cfg, { txnid: "CR1-abc", amount: "1000.00", productinfo: "2 more users", firstname: "Asha", email: "a@example.test", udf1: "1", udf2: "app" }, "https://x/s", "https://x/f");
+assert.equal(fromApp.hash, sha(`${cfg.key}|CR1-abc|1000.00|2 more users|Asha|a@example.test|1|app|||||||||${cfg.salt}`));
 console.log("  ok    PayU request and response hashes");

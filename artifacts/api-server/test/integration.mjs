@@ -2564,6 +2564,13 @@ const adminEmail = `admin${uniq}@example.test`;
     const reply = { status: "success", txnid: f.txnid, amount: f.amount, productinfo: f.productinfo, firstname: f.firstname, email: f.email, udf1: f.udf1, mihpayid: "403993715000000001" };
     const sign = (r) => crypto.createHash("sha512").update(`${cfg.salt}|${r.status}||||||||||${r.udf1}|${r.email}|${r.firstname}|${r.productinfo}|${r.amount}|${r.txnid}|${cfg.key}`).digest("hex");
     const post = (body) => fetch(`${B}/payments/payu/callback`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://test.payu.in" }, body: new URLSearchParams(body) });
+    // The Android app's checkout page, opened in the phone's browser.
+    const checkoutPath = pay.data?.checkoutUrl ? new URL(pay.data.checkoutUrl).pathname : "";
+    const page = await fetch(`${B.replace(/\/api$/, "")}${checkoutPath}`);
+    const html = await page.text();
+    check("payu", "the app's checkout page posts a signed form to PayU", page.status === 200 && /^\/api\/payments\/payu\/checkout\/CR\d+-[0-9a-f]{16}$/.test(checkoutPath) &&
+      html.includes('action="https://test.payu.in/_payment"') && html.includes('name="udf2" value="app"') && /form-action https:\/\/test\.payu\.in/.test(page.headers.get("content-security-policy") ?? ""), `status ${page.status}`);
+    check("payu", "a made-up checkout link is not found", (await fetch(`${B}/payments/payu/checkout/CR${capacity.data?.id}-0000000000000000`)).status === 404);
     const forged = await post({ ...reply, hash: "0".repeat(128) });
     check("payu", "a forged callback changes nothing", forged.status === 303 && /payment=failed/.test(forged.headers.get("location") ?? "") && sqlValue(`SELECT payment_status FROM capacity_requests WHERE id=${capacity.data?.id}`) === "unpaid");
     const cheap = { ...reply, amount: "1.00" };
@@ -2574,6 +2581,10 @@ const adminEmail = `admin${uniq}@example.test`;
     check("payu", "a genuine PayU callback marks the request paid", ok.status === 303 && /payment=success/.test(ok.headers.get("location") ?? "") &&
       sqlValue(`SELECT payment_status FROM capacity_requests WHERE id=${capacity.data?.id}`) === "paid");
     check("payu", "payment does not add seats by itself", sqlValue(`SELECT user_limit FROM users WHERE id=${tenantAdminId}`) === "1");
+    const appReply = { ...reply, udf2: "app" };
+    const appSigned = crypto.createHash("sha512").update([cfg.salt, appReply.status, "", "", "", "", "", "", "", "", "app", appReply.udf1, appReply.email, appReply.firstname, appReply.productinfo, appReply.amount, appReply.txnid, cfg.key].join("|")).digest("hex");
+    const appDone = await post({ ...appReply, hash: appSigned });
+    check("payu", "a payment from the app ends on a page that sends the admin back to the app", appDone.status === 200 && /go back to the Billing Pilot app/.test(await appDone.text()));
   }
 
   const review = await call("PATCH", `/superadmin/capacity-requests/${capacity.data?.id}/review`, {
