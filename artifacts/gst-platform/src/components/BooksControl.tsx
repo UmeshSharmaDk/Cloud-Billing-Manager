@@ -68,8 +68,8 @@ export function BooksControl({ userId, lockDate }: { userId: number; lockDate: s
           </p>
           <div className="flex flex-wrap gap-2">
             <Input type="date" value={day} onChange={(e) => setDay(e.target.value)} className="max-w-[12rem]" />
-            <Button disabled={saving || !day || day === lockDate} onClick={() => save(day)} className="gap-1"><Lock className="h-3.5 w-3.5" /> Freeze</Button>
-            {lockDate && <Button variant="outline" disabled={saving} onClick={() => save(null)} className="gap-1"><LockOpen className="h-3.5 w-3.5" /> Unfreeze</Button>}
+            <Button loading={saving} disabledReason={!day ? "Pick a date first" : day === lockDate ? "Already frozen up to this date" : undefined} onClick={() => save(day)} className="gap-1"><Lock className="h-3.5 w-3.5" /> Freeze</Button>
+            {lockDate && <Button variant="outline" loading={saving} onClick={() => save(null)} className="gap-1"><LockOpen className="h-3.5 w-3.5" /> Unfreeze</Button>}
           </div>
         </CardContent>
       </Card>

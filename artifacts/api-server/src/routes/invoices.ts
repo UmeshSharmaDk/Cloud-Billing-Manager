@@ -7,10 +7,13 @@ import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } f
 import { resolveSupplyType } from "../lib/gst";
 import { applyStockChanges, applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
 import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
-import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, IdParam } from "../schemas";
+import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, RepeatInvoiceBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
 import QRCode from "qrcode";
+import { mailer, invoiceMessage, describeMailError } from "../lib/mailer";
+import { recordAudit, actorFrom } from "../lib/audit";
+import { logger } from "../lib/logger";
 
 import { books } from "../middleware/books";
 
@@ -165,7 +168,7 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), 
 router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
 
-  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate } = req.body;
+  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate, repeatOf } = req.body;
 
   if (!invoiceDate) return res.status(400).json({ error: "invoiceDate required" });
   if (!customerId && !customCustomerName) return res.status(400).json({ error: "customerId or customerName required" });
@@ -228,10 +231,30 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
     // cancellation can reverse exactly this movement.
     await applyStockMovement(tx, productsTable, eq, businessId, lines, stockDirectionFor(created.type));
 
+    // Repeating a monthly invoice moves the "repeat" mark onto the new one, so
+    // the dashboard asks again next month and not twice this month.
+    if (repeatOf) {
+      const moved = await tx.update(invoicesTable).set({ repeatMonthly: false })
+        .where(and(eq(invoicesTable.id, repeatOf), eq(invoicesTable.businessId, businessId), eq(invoicesTable.repeatMonthly, true)))
+        .returning({ id: invoicesTable.id });
+      if (moved.length) {
+        const [marked] = await tx.update(invoicesTable).set({ repeatMonthly: true }).where(eq(invoicesTable.id, created.id)).returning();
+        return marked;
+      }
+    }
+
     return created;
   });
 
   return res.status(201).json({ invoice: mapInvoice(invoice) });
+});
+
+// PUT /invoices/:id/repeat — mark or unmark an invoice to repeat every month.
+router.put("/:id/repeat", requireAuth, requireBusiness, validateParams(IdParam), validateBody(RepeatInvoiceBody), async (req: Req, res) => {
+  const [row] = await db.update(invoicesTable).set({ repeatMonthly: req.body.repeatMonthly })
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).returning();
+  if (!row) return res.status(404).json({ error: "Not found" });
+  return res.json(mapInvoice(row));
 });
 
 router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
@@ -245,7 +268,7 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
  * A UPI pay link and its QR for what is still due, when the business has a UPI
  * ID: any UPI app scans it with the payee, amount and invoice number filled in.
  */
-async function upiPayment(invoice: any) {
+export async function upiPayment(invoice: any) {
   const due = dec(invoice.grandTotal).minus(dec(invoice.paidAmount));
   if (invoice.status === "cancelled" || due.lessThanOrEqualTo(0)) return null;
   const [business] = await db.select({ name: businessesTable.name, upiId: businessesTable.upiId })
@@ -255,6 +278,37 @@ async function upiPayment(invoice: any) {
   const link = `upi://pay?${q.toString().replace(/\+/g, "%20")}`;
   return { link, amount: toJson(due), qr: await QRCode.toDataURL(link, { margin: 1, width: 240 }) };
 }
+
+// POST /invoices/:id/email — send the invoice summary to the customer.
+router.post("/:id/email", requireAuth, requireBusiness, validateParams(IdParam), validateBody(EmailInvoiceBody), async (req: Req, res) => {
+  const [invoice] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).limit(1);
+  if (!invoice) return res.status(404).json({ error: "Not found" });
+  if (invoice.status === "cancelled") return res.status(409).json({ error: "A cancelled invoice cannot be sent." });
+  let to: string | null | undefined = req.body.to;
+  if (!to && invoice.customerId) {
+    const [c] = await db.select({ email: customersTable.email }).from(customersTable)
+      .where(and(eq(customersTable.id, invoice.customerId), eq(customersTable.businessId, req.businessId))).limit(1);
+    to = c?.email;
+  }
+  if (!to) return res.status(400).json({ error: "This customer has no email address. Add one to the customer, or enter it here." });
+  const [business] = await db.select({ name: businessesTable.name }).from(businessesTable).where(eq(businessesTable.id, req.businessId)).limit(1);
+  const upi = await upiPayment(invoice);
+  const money = (v: unknown) => paise(dec(v)).toFixed(2);
+  const items = (invoice.items as any[]).map((i) => ({ description: String(i.description ?? i.productName ?? "Item"), quantity: i.quantity, amount: money(i.totalAmount ?? 0) }));
+  try {
+    await mailer.send(invoiceMessage(to, {
+      business: business?.name ?? "", number: invoice.invoiceNumber, date: invoice.invoiceDate, dueDate: invoice.dueDate,
+      customer: invoice.customerName, total: money(invoice.grandTotal),
+      balance: money(dec(invoice.grandTotal).minus(dec(invoice.paidAmount))), items, upiLink: upi?.link,
+    }));
+  } catch (err) {
+    logger.error({ ...describeMailError(err), invoiceId: invoice.id }, "Could not email invoice");
+    return res.status(502).json({ error: "The email could not be sent. Try again in a few minutes." });
+  }
+  await recordAudit({ ...actorFrom(req), action: "invoice.emailed", targetType: "invoice", targetId: invoice.id, details: { to } });
+  return res.json({ success: true, to });
+});
 
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;

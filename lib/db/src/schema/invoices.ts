@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, numeric, boolean, timestamp, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, numeric, boolean, timestamp, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -27,12 +27,17 @@ export const invoicesTable = pgTable("invoices", {
   tcsRate: numeric("tcs_rate", { precision: 5, scale: 3 }).notNull().default("0"),
   tcsAmount: numeric("tcs_amount", { precision: 15, scale: 2 }).notNull().default("0"),
   notes: text("notes"),
+  /** Shown on the dashboard each new month until it is repeated. */
+  repeatMonthly: boolean("repeat_monthly").notNull().default(false),
+  lastRemindedAt: timestamp("last_reminded_at", { withTimezone: true }),
   items: jsonb("items").notNull().default([]),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   // Two invoices in one business must never share a number. Enforced here so
   // a numbering bug becomes a failed write rather than a corrupt tax record.
   uniqueIndex("invoices_business_number_unique").on(t.businessId, t.invoiceNumber),
+  // Reports and dashboards ask for one business over a date range.
+  index("invoices_business_date_idx").on(t.businessId, t.invoiceDate),
 ]);
 
 export const insertInvoiceSchema = createInsertSchema(invoicesTable).omit({ id: true, createdAt: true });

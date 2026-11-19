@@ -1,9 +1,10 @@
 import { Redirect } from "expo-router";
 import { useState } from "react";
-import { Image, KeyboardAvoidingView, Platform, Pressable, Text, TextInput, View } from "react-native";
+import { Image, KeyboardAvoidingView, Linking, Platform, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/lib/auth";
-import { colors, s } from "@/lib/ui";
+import { Button, colors, s } from "@/lib/ui";
+import { API_BASE } from "@/lib/api";
 
 export default function Login() {
   const { user, signIn, finishMfa } = useAuth();
@@ -54,9 +55,11 @@ export default function Login() {
           </>
         )}
         {error && <Text style={{ color: colors.danger }}>{error}</Text>}
-        <Pressable style={[s.button, busy && { opacity: 0.6 }]} onPress={submit} disabled={busy} accessibilityRole="button">
-          <Text style={s.buttonText}>{busy ? "Signing in…" : "Sign in"}</Text>
-        </Pressable>
+        <Button title={mfaToken ? "Verify code" : "Sign in"} onPress={submit} busy={busy} />
+        {!mfaToken && API_BASE && (
+          <Button title="Forgot your password?" variant="outline"
+            onPress={() => Linking.openURL(API_BASE.replace(/\/api$/, "/forgot-password"))} />
+        )}
         <View style={{ height: 8 }} />
         <Text style={[s.muted, { textAlign: "center" }]}>Accounts are created by your administrator.</Text>
       </KeyboardAvoidingView>

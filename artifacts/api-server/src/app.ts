@@ -12,6 +12,8 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger, scrubError } from "./lib/logger";
 import { config } from "./lib/config";
+import { alertServerError } from "./lib/error-alerts";
+import { sendQuietly } from "./lib/mailer";
 import { csrfProtection, issueCsrfCookie, requireAllowedOrigin } from "./middleware/csrf";
 
 const app: Express = express();
@@ -189,6 +191,9 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
   const raw = (err as { status?: unknown; statusCode?: unknown } | null)?.status
     ?? (err as { statusCode?: unknown } | null)?.statusCode;
   const isClientError = typeof raw === "number" && raw >= 400 && raw < 500;
+
+  // Path only: the query string can carry tokens.
+  if (!isClientError) alertServerError({ requestId: req.id, method: req.method, path: req.path, error: String(scrubError(err)?.message ?? "unknown").slice(0, 300) }, sendQuietly);
 
   res.status(isClientError ? raw : 500).json({
     error: isClientError ? "Bad request" : "Internal server error",

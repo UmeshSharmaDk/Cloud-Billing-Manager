@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
-import { eq, and, gte, lte, ne, sql, desc, count, sum as sqlSum } from "drizzle-orm";
+import { eq, and, gte, lte, lt, ne, sql, desc, count, sum as sqlSum } from "drizzle-orm";
 import { requireAuth, requireBusiness } from "./auth";
 import { dec, sum, sumBy, toJson } from "../lib/money";
 import type { TenantRequest, IdParams } from "../lib/http";
@@ -26,7 +26,7 @@ type Req = TenantRequest<any, any, IdParams>;
  * wire, to return ten numbers. The cost grew with the size of the business
  * rather than with the size of the answer.
  */
-router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => {
+async function stats(req: Req) {
   const businessId = req.businessId;
   const today = new Date().toISOString().slice(0, 10);
 
@@ -72,7 +72,7 @@ router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => {
 
   const totalGstPayable = dec(invoiceAgg.totalGst).minus(dec(purchaseAgg.totalGst));
 
-  return res.json({
+  return ({
     totalSales: toJson(invoiceAgg.totalSales),
     totalPurchases: toJson(purchaseAgg.totalPurchases),
     totalGstPayable: toJson(totalGstPayable),
@@ -84,23 +84,23 @@ router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => {
     lowStockCount: Number(productAgg.lowStock),
     overdueInvoiceCount: Number(invoiceAgg.overdue),
   });
-});
+}
 
-router.get("/recent-invoices", requireAuth, requireBusiness, async (req: Req, res) => {
+async function recentInvoices(req: Req) {
   const businessId = req.businessId;
   const invoices = await db.select().from(invoicesTable)
     .where(eq(invoicesTable.businessId, businessId))
     .orderBy(desc(invoicesTable.createdAt)).limit(5);
-  return res.json(invoices.map(inv => ({
+  return (invoices.map(inv => ({
     ...inv,
     subtotal: toJson(inv.subtotal), cgst: toJson(inv.cgst), sgst: toJson(inv.sgst),
     igst: toJson(inv.igst), totalGst: toJson(inv.totalGst), grandTotal: toJson(inv.grandTotal),
     roundOff: toJson(inv.roundOff), paidAmount: toJson(inv.paidAmount),
     items: Array.isArray(inv.items) ? inv.items : [],
   })));
-});
+}
 
-router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, res) => {
+async function monthlyRevenue(req: Req) {
   const businessId = req.businessId;
 
   // Six months in two grouped queries. This was twelve sequential round trips —
@@ -151,8 +151,8 @@ router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, re
       gst: dec(invByMonth.get(key)?.gst ?? 0).toDecimalPlaces(0).toNumber(),
     });
   }
-  return res.json(months);
-});
+  return (months);
+}
 
 /**
  * The five best-selling products.
@@ -168,7 +168,7 @@ router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, re
  * actually carry. The old code read `item.productName`, a field nothing writes,
  * so every walk-in line keyed on `undefined` and the name came back empty.
  */
-router.get("/top-products", requireAuth, requireBusiness, async (req: Req, res) => {
+async function topProducts(req: Req) {
   const businessId = req.businessId;
 
   const rows = await db.execute(sql`
@@ -188,15 +188,15 @@ router.get("/top-products", requireAuth, requireBusiness, async (req: Req, res) 
   `);
 
   const list = ((rows as any).rows ?? rows) as Array<Record<string, unknown>>;
-  return res.json(list.map((r) => ({
+  return (list.map((r) => ({
     productId: Number(r["product_id"] ?? 0),
     productName: String(r["product_name"] ?? ""),
     totalQuantity: Number(dec(r["total_quantity"] as any).toFixed(3)),
     totalRevenue: toJson(dec(r["total_revenue"] as any)),
   })));
-});
+}
 
-router.get("/gst-summary", requireAuth, requireBusiness, async (req: Req, res) => {
+async function gstSummary(req: Req) {
   const businessId = req.businessId;
   const now = new Date();
   const from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
@@ -217,14 +217,14 @@ router.get("/gst-summary", requireAuth, requireBusiness, async (req: Req, res) =
 
   const netPayable = sum([out.cgst, out.sgst, out.igst]).minus(sum([inp.cgst, inp.sgst, inp.igst]));
 
-  return res.json({
+  return ({
     outputCgst: toJson(out.cgst), outputSgst: toJson(out.sgst), outputIgst: toJson(out.igst),
     inputCgst: toJson(inp.cgst), inputSgst: toJson(inp.sgst), inputIgst: toJson(inp.igst),
     netPayable: toJson(netPayable),
   });
-});
+}
 
-router.get("/low-stock", requireAuth, requireBusiness, async (req: Req, res) => {
+async function lowStock(req: Req) {
   const businessId = req.businessId;
   // Filtered in SQL rather than by reading the whole catalog and discarding
   // most of it, and capped so a large catalog cannot return unboundedly.
@@ -236,7 +236,7 @@ router.get("/low-stock", requireAuth, requireBusiness, async (req: Req, res) => 
     ))
     .orderBy(productsTable.name)
     .limit(100);
-  return res.json(lowStock.map(p => ({
+  return (lowStock.map(p => ({
     ...p,
     purchasePrice: p.purchasePrice ? toJson(p.purchasePrice) : null,
     sellingPrice: p.sellingPrice ? toJson(p.sellingPrice) : null,
@@ -244,6 +244,42 @@ router.get("/low-stock", requireAuth, requireBusiness, async (req: Req, res) => 
     stockQuantity: Number(dec(p.stockQuantity).toFixed(3)),
     lowStockThreshold: p.lowStockThreshold ? Number(dec(p.lowStockThreshold).toFixed(3)) : null,
   })));
+}
+
+/** What needs doing: monthly invoices to repeat, and overdue invoices to chase. */
+async function toDo(req: Req) {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 8) + "01";
+  const pick = { id: invoicesTable.id, invoiceNumber: invoicesTable.invoiceNumber, customerName: invoicesTable.customerName,
+    invoiceDate: invoicesTable.invoiceDate, dueDate: invoicesTable.dueDate, grandTotal: invoicesTable.grandTotal,
+    paidAmount: invoicesTable.paidAmount, status: invoicesTable.status, phone: customersTable.phone };
+  const q = () => db.select(pick).from(invoicesTable)
+    .leftJoin(customersTable, and(eq(customersTable.id, invoicesTable.customerId), eq(customersTable.businessId, invoicesTable.businessId)));
+  const [repeat, overdue] = [
+    await q().where(and(eq(invoicesTable.businessId, req.businessId), eq(invoicesTable.repeatMonthly, true),
+      lt(invoicesTable.invoiceDate, monthStart), ne(invoicesTable.status, "cancelled"))).orderBy(invoicesTable.customerName).limit(20),
+    await q().where(and(eq(invoicesTable.businessId, req.businessId), receivableInvoice(invoicesTable), sql`${invoicesTable.status} IN ('unpaid', 'partial')`,
+        sql`${invoicesTable.dueDate} IS NOT NULL`, lt(invoicesTable.dueDate, today))).orderBy(invoicesTable.dueDate).limit(10),
+  ];
+  const money = (r: typeof repeat[number]) => ({ ...r, grandTotal: toJson(r.grandTotal), paidAmount: toJson(r.paidAmount) });
+  return { repeatDue: repeat.map(money), overdue: overdue.map(money) };
+}
+
+router.get("/stats", requireAuth, requireBusiness, async (req: Req, res) => res.json(await stats(req)));
+router.get("/recent-invoices", requireAuth, requireBusiness, async (req: Req, res) => res.json(await recentInvoices(req)));
+router.get("/monthly-revenue", requireAuth, requireBusiness, async (req: Req, res) => res.json(await monthlyRevenue(req)));
+router.get("/top-products", requireAuth, requireBusiness, async (req: Req, res) => res.json(await topProducts(req)));
+router.get("/gst-summary", requireAuth, requireBusiness, async (req: Req, res) => res.json(await gstSummary(req)));
+router.get("/low-stock", requireAuth, requireBusiness, async (req: Req, res) => res.json(await lowStock(req)));
+
+// GET /dashboard/summary — everything the dashboard shows, in one request.
+router.get("/summary", requireAuth, requireBusiness, async (req: Req, res) => {
+  // Sequential on purpose: the request's queries share one scoped connection.
+  return res.json({
+    stats: await stats(req), recentInvoices: await recentInvoices(req), monthlyRevenue: await monthlyRevenue(req),
+    lowStock: await lowStock(req), gstSummary: await gstSummary(req),
+    ...(await toDo(req)),
+  });
 });
 
 export default router;

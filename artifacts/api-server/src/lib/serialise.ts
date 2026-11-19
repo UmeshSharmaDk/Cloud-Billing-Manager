@@ -27,6 +27,9 @@ export function mapUser(user: User) {
     accessLevel: user.accessLevel ?? null,
     userLimit: user.role === "admin" || user.role === "superadmin" ? user.userLimit : undefined,
     mfaEnabled: user.mfaEnabledAt !== null,
+    /** This user's admin requires two-factor sign-in and they have not set it up. */
+    mfaRequired: Boolean((user as User & { mfaRequired?: boolean }).mfaRequired),
+    requireTeamMfa: user.role === "admin" ? user.requireTeamMfa : undefined,
     createdAt: user.createdAt,
   };
 }

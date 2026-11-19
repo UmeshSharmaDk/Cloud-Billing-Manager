@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useListCustomers, useListProducts, useCreateInvoice } from "@workspace/api-client-react";
+import { useListCustomers, useListProducts, useCreateInvoice, useGetInvoice } from "@workspace/api-client-react";
 import { formatCurrency } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,14 +35,16 @@ function calcLine(item: LineItem) {
 }
 
 // Customer Combobox — allows selecting existing customer OR typing a custom name
-function CustomerCombobox({ customers, onChange }: {
+function CustomerCombobox({ customers, onChange, initial }: {
   customers: any[];
+  initial?: { id: number | null; name: string; stateCode: string };
   onChange: (customerId: number | null, customerName: string, stateCode: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<{ id: number | null; name: string; stateCode: string } | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (initial?.name) { setSelected(initial); setQuery(initial.name); } }, [initial]);
 
   useEffect(() => {
     const handle = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
@@ -93,9 +95,9 @@ function CustomerCombobox({ customers, onChange }: {
             onFocus={() => setOpen(true)}
           />
           {query && (
-            <button type="button" onClick={clear} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+            <Button type="button" variant="ghost" size="icon" aria-label="Clear customer" onClick={clear} className="absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 text-muted-foreground hover:text-foreground">
               <X className="w-4 h-4" />
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -153,6 +155,29 @@ export default function InvoiceNewPage() {
   const [customer, setCustomer] = useState<{ id: number | null; name: string; stateCode: string }>({ id: null, name: "", stateCode: "" });
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const mutation = useCreateInvoice();
+  const [focusRow, setFocusRow] = useState(-1);
+  const addRow = () => { setItems(prev => [...prev, emptyItem()]); setFocusRow(items.length); };
+
+  // "Duplicate" on an invoice opens this page with ?from=<id>: same customer and
+  // lines, today's date, a new number.
+  const search = new URLSearchParams(window.location.search);
+  const fromId = Number(search.get("from")) || 0;
+  const repeatOf = search.get("repeat") === "1" ? fromId : 0;
+  const { data: source } = useGetInvoice(fromId, { query: { enabled: fromId > 0 } as any });
+  const [initialCustomer, setInitialCustomer] = useState<typeof customer | undefined>();
+  useEffect(() => {
+    const src: any = source;
+    if (!src?.id) return;
+    const c = { id: src.customerId ?? null, name: src.customerName ?? "", stateCode: customers.find((x) => x.id === src.customerId)?.stateCode ?? src.placeOfSupply ?? "" };
+    setCustomer(c);
+    setInitialCustomer(c);
+    setForm(f => ({ ...f, placeOfSupply: src.placeOfSupply ?? "", notes: src.notes ?? "" }));
+    setItems((src.items ?? []).map((it: any) => ({
+      productId: it.productId ?? null, description: it.description ?? it.productName ?? "", hsnCode: it.hsnCode ?? "",
+      quantity: Number(it.quantity) || 1, unit: it.unit ?? "Nos", unitPrice: Number(it.unitPrice ?? it.rate) || 0,
+      gstRate: Number(it.gstRate) || 0, discount: Number(it.discount) || 0,
+    })));
+  }, [source, customers.length]);
 
   const setItem = (i: number, update: Partial<LineItem>) => {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...update } : it));
@@ -194,6 +219,7 @@ export default function InvoiceNewPage() {
       })),
     };
 
+    if (repeatOf) payload.repeatOf = repeatOf;
     // Include customerId if the customer is registered
     if (customer.id) payload.customerId = customer.id;
 
@@ -225,6 +251,7 @@ export default function InvoiceNewPage() {
               <div className="sm:col-span-2 space-y-2">
                 <Label>Customer *</Label>
                 <CustomerCombobox
+                  initial={initialCustomer}
                   customers={customers}
                   onChange={(id, name, stateCode) => setCustomer({ id, name, stateCode })}
                 />
@@ -243,7 +270,7 @@ export default function InvoiceNewPage() {
           <Card>
             <CardHeader className="pb-3 flex flex-row items-center justify-between">
               <CardTitle className="text-base">Line Items</CardTitle>
-              <Button type="button" size="sm" variant="outline" className="gap-1" onClick={() => setItems(prev => [...prev, emptyItem()])}>
+              <Button type="button" size="sm" variant="outline" className="gap-1" onClick={addRow}>
                 <Plus className="w-3.5 h-3.5" /> Add Item
               </Button>
             </CardHeader>
@@ -251,7 +278,13 @@ export default function InvoiceNewPage() {
               {items.map((item, i) => {
                 const c = calcLine(item);
                 return (
-                  <div key={i} className="border border-border rounded-lg p-3 space-y-3">
+                  <div key={i} className="border border-border rounded-lg p-3 space-y-3"
+                    onKeyDown={(e) => {
+                      // Enter in a line adds the next line instead of submitting the invoice.
+                      if (e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+                      e.preventDefault();
+                      if (i === items.length - 1) addRow();
+                    }}>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="sm:col-span-2 space-y-1">
                         <Label className="text-xs">Product / Description</Label>
@@ -259,7 +292,7 @@ export default function InvoiceNewPage() {
                           <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select product (optional)..." /></SelectTrigger>
                           <SelectContent>{products.map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}</SelectContent>
                         </Select>
-                        <Input className="h-8 text-xs" value={item.description} onChange={(e) => setItem(i, { description: e.target.value })} placeholder="Description *" />
+                        <Input className="h-8 text-xs" autoFocus={i === focusRow} value={item.description} onChange={(e) => setItem(i, { description: e.target.value })} placeholder="Description *" />
                       </div>
                       <div className="space-y-1">
                         <Label className="text-xs">HSN Code</Label>
@@ -282,7 +315,7 @@ export default function InvoiceNewPage() {
                       <span>Taxable: {formatCurrency(c.taxable)} · GST: {formatCurrency(c.gstAmt)}</span>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground text-sm">{formatCurrency(c.total)}</span>
-                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></button>}
+                        {items.length > 1 && <Button type="button" variant="ghost" size="icon" aria-label={`Remove line ${i + 1}`} onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></Button>}
                       </div>
                     </div>
                   </div>
@@ -310,7 +343,7 @@ export default function InvoiceNewPage() {
                   {isInterstate ? "⚡ Inter-state → IGST applies" : "🏠 Intra-state → CGST + SGST applies"}
                 </div>
               )}
-              <Button type="submit" className="w-full" disabled={mutation.isPending}>{mutation.isPending ? "Creating..." : "Create Invoice"}</Button>
+              <Button type="submit" className="w-full" loading={mutation.isPending}>Create Invoice</Button>
             </CardContent>
           </Card>
         </div>

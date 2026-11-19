@@ -15,7 +15,7 @@ import {
 import { validateBody } from "../middleware/validate";
 import {
   LoginBody, RegisterBody, ChangePasswordBody, VerifyRegistrationBody, AcceptAdminInvitationBody,
-  MfaSetupBody, MfaCodeBody, MfaLoginBody,
+  MfaSetupBody, MfaCodeBody, MfaLoginBody, ForgotPasswordBody, ResetForgottenPasswordBody,
 } from "../schemas";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { mapUser } from "../lib/serialise";
@@ -24,7 +24,7 @@ import {
   generateTotpSecret, matchTotp, otpauthUri, generateRecoveryCodes, hashRecoveryCode, looksLikeTotp,
 } from "../lib/mfa";
 import { validatePassword } from "../lib/password-policy";
-import { sendQuietly, verificationMessage, alreadyRegisteredMessage } from "../lib/mailer";
+import { sendQuietly, verificationMessage, alreadyRegisteredMessage, passwordResetMessage } from "../lib/mailer";
 import type { AuthedRequest } from "../lib/http";
 import { openTenantScope } from "../middleware/tenant-scope";
 import {
@@ -67,7 +67,9 @@ interface TokenPayload {
    * a correct second factor. It names an account but is not a session:
    * `requireAuth` refuses it, and `/auth/mfa/login` accepts nothing else.
    */
-  purpose?: "mfa";
+  purpose?: "mfa" | "reset";
+  /** On a reset token: a fingerprint of the password it may replace (see /forgot-password). */
+  ph?: string;
 }
 
 /** Long enough to open an authenticator app, short enough to be useless later. */
@@ -257,7 +259,15 @@ export async function requireAuth(req: any, res: any, next: any) {
     return res.status(401).json({ error: "Session expired. Please sign in again." });
   }
 
-  req.user = user;
+  // A user whose admin requires two-factor sign-in for the team, and who has
+  // not set it up yet. Only looked up for users without it, so the usual
+  // request pays nothing.
+  let mfaRequired = false;
+  if (user.role === "user" && !user.mfaEnabledAt && user.createdByAdminId) {
+    const [admin] = await db.select({ r: usersTable.requireTeamMfa }).from(usersTable).where(eq(usersTable.id, user.createdByAdminId)).limit(1);
+    mfaRequired = Boolean(admin?.r);
+  }
+  req.user = { ...user, mfaRequired };
   req.userId = user.id;
   // Read from the row, not the token.
   req.userRole = user.role;
@@ -329,6 +339,14 @@ async function viewedBusinessId(req: any): Promise<number | { status: number; er
   return target.businessId;
 }
 
+/**
+ * When an admin last opened each client's records, so a session of page loads
+ * is one audit entry rather than one per request.
+ * ponytail: per-process map, a few bytes per admin and client; fine for one server.
+ */
+const lastViewLogged = new Map<string, number>();
+const VIEW_LOG_INTERVAL_MS = 30 * 60 * 1000;
+
 export async function requireBusiness(req: any, res: any, next: any) {
   let businessId = req.user?.businessId ?? null;
   if (req.query?.asUser !== undefined) {
@@ -337,6 +355,9 @@ export async function requireBusiness(req: any, res: any, next: any) {
     businessId = viewed;
   }
   if (!businessId) return res.status(400).json({ error: "No business" });
+  if (req.user?.mfaRequired) {
+    return res.status(403).json({ error: "Your administrator asks everyone to set up two-factor sign-in. Sign in on the website and open Security to set it up.", code: "mfa_enrolment_required" });
+  }
   // Staff, intern and client logins: "view" only reads; "entry" cannot delete
   // or change the business's own settings.
   const level = req.query?.asUser === undefined ? req.user?.accessLevel : null;
@@ -356,7 +377,17 @@ export async function requireBusiness(req: any, res: any, next: any) {
       // Resolving the tenant and pinning it to the database session are the same
       // decision, so they happen in the same place. No route opts in, and none can
       // forget to.
-      openTenantScope(req, res, next, businessId);
+      const key = `${req.user.id}:${businessId}`;
+      const viewing = req.query?.asUser !== undefined && Date.now() - (lastViewLogged.get(key) ?? 0) > VIEW_LOG_INTERVAL_MS;
+      if (!viewing) return openTenantScope(req, res, next, businessId);
+      lastViewLogged.set(key, Date.now());
+      openTenantScope(req, res, async (err?: unknown) => {
+        if (!err) {
+          await recordAudit({ ...actorFrom(req), action: "business.viewed_by_admin", targetType: "business",
+            targetId: businessId, businessId, details: { asUser: Number(req.query.asUser), path: req.baseUrl } });
+        }
+        next(err);
+      }, businessId);
     });
   });
 }
@@ -509,11 +540,6 @@ router.post("/mfa/login", authIpLimiter, validateBody(MfaLoginBody), async (req:
   return res.json({ token, user: mapUser(user) });
 });
 
-/** Only administrators enrol: they are who `requireAdmin` asks it of. */
-function requireAdminRole(req: any, res: any, next: any) {
-  if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: "Forbidden" });
-  next();
-}
 
 /**
  * Start enrolment: a new secret, shown once.
@@ -522,7 +548,7 @@ function requireAdminRole(req: any, res: any, next: any) {
  * session could enrol the thief's authenticator and lock the owner out. The
  * secret does not count until `/mfa/enable` confirms a code from it.
  */
-router.post("/mfa/setup", requireAuth, requireAdminRole, validateBody(MfaSetupBody), async (req: Req, res) => {
+router.post("/mfa/setup", requireAuth, validateBody(MfaSetupBody), async (req: Req, res) => {
   if (req.user.mfaEnabledAt) {
     return res.status(409).json({ error: "Two-factor authentication is already on for this account." });
   }
@@ -545,7 +571,7 @@ router.post("/mfa/setup", requireAuth, requireAdminRole, validateBody(MfaSetupBo
  * password alone. This device gets a fresh session, and the recovery codes are
  * returned here and never again.
  */
-router.post("/mfa/enable", requireAuth, requireAdminRole, validateBody(MfaCodeBody), async (req: Req, res) => {
+router.post("/mfa/enable", requireAuth, validateBody(MfaCodeBody), async (req: Req, res) => {
   if (req.user.mfaEnabledAt) {
     return res.status(409).json({ error: "Two-factor authentication is already on for this account." });
   }
@@ -594,7 +620,7 @@ router.post("/mfa/enable", requireAuth, requireAdminRole, validateBody(MfaCodeBo
  * Replace the recovery codes. Takes an authenticator code, not a recovery
  * code: whoever holds one leftover code should not be able to mint ten more.
  */
-router.post("/mfa/recovery-codes", requireAuth, requireAdminRole, validateBody(MfaCodeBody), async (req: Req, res) => {
+router.post("/mfa/recovery-codes", requireAuth, validateBody(MfaCodeBody), async (req: Req, res) => {
   if (!req.user.mfaEnabledAt) {
     return res.status(400).json({ error: "Two-factor authentication is not on for this account." });
   }
@@ -901,6 +927,84 @@ router.post("/accept-admin-invite", authIpLimiter, validateBody(AcceptAdminInvit
       user: mapUser(admin),
     });
   });
+
+/**
+ * Forgotten passwords. There is still no sign-up: this only resets an account
+ * an admin already created.
+ *
+ * The reset link carries a signed token rather than a stored one. It names the
+ * account's session generation and a fingerprint of its current password hash,
+ * so it stops working the moment the password changes (one use), when the
+ * admin resets it, or after 30 minutes. The answer is the same whether or not
+ * the address has an account, and the mail is sent after the response is
+ * decided, so neither the body nor the timing says which.
+ */
+const RESET_TTL_SECONDS = 30 * 60;
+const RESET_ACCEPTED = {
+  message: "If that address has an account, we have emailed a link to reset its password. It works for 30 minutes.",
+} as const;
+const resetFingerprint = (passwordHash: string) =>
+  crypto.createHash("sha256").update(passwordHash).digest("base64url").slice(0, 16);
+
+router.post("/forgot-password", registerIpLimiter, validateBody(ForgotPasswordBody), async (req: Req, res) => {
+  const email = String(req.body.email).toLowerCase();
+  // Charged for every request, account or not, so the count reveals nothing.
+  const withinBudget = await consumeBudget(`reset:${email}`, REGISTER_RECIPIENT_LIMIT);
+  if (!withinBudget) {
+    return res.status(429).json({ error: "Too many reset requests for this address. Try again later." });
+  }
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email)).limit(1);
+  res.status(202).json(RESET_ACCEPTED);
+
+  if (!user || user.deletedAt || !user.isActive) return undefined;
+  const token = jwt.sign(
+    { userId: user.id, v: user.tokenVersion, purpose: "reset", ph: resetFingerprint(user.passwordHash) },
+    JWT_SECRET,
+    { algorithm: "HS256", expiresIn: RESET_TTL_SECONDS },
+  );
+  // In the fragment, which browsers never send to a server or a Referer.
+  const link = `${config.appBaseUrl}/reset-password#token=${encodeURIComponent(token)}`;
+  await sendQuietly(passwordResetMessage(user.email, link));
+  await recordAudit({
+    actorId: user.id, actorEmail: user.email, action: "user.password_reset_requested",
+    targetType: "user", targetId: user.id, sourceIp: req.ip, details: {},
+  });
+  return undefined;
+});
+
+router.post("/reset-password", authIpLimiter, validateBody(ResetForgottenPasswordBody), async (req: Req, res) => {
+  const invalid = { error: "That reset link is invalid or has expired. Ask for a new one." };
+  const payload = verifyToken(String(req.body.token));
+  if (!payload || payload.purpose !== "reset" || !payload.ph) return res.status(400).json(invalid);
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, payload.userId)).limit(1);
+  if (!user || user.deletedAt || !user.isActive
+      || (payload.v ?? 0) !== user.tokenVersion
+      || payload.ph !== resetFingerprint(user.passwordHash)) {
+    return res.status(400).json(invalid);
+  }
+
+  const password = String(req.body.password);
+  const policyFailure = await validatePassword(password);
+  if (policyFailure) return res.status(400).json({ error: policyFailure.message });
+
+  // Bumping tokenVersion signs out every device, as a reset should. Two
+  // requests racing with one link: the second matches no row and fails.
+  const updated = await rootDb.update(usersTable)
+    .set({ passwordHash: await hashPassword(password), tokenVersion: user.tokenVersion + 1 })
+    .where(and(eq(usersTable.id, user.id), eq(usersTable.tokenVersion, user.tokenVersion)))
+    .returning({ id: usersTable.id });
+  if (!updated.length) return res.status(400).json(invalid);
+
+  await clearFailures([userKey(user.id), loginKey(user.email, req.ip)]);
+  await recordAudit({
+    actorId: user.id, actorEmail: user.email, action: "user.password_reset",
+    targetType: "user", targetId: user.id, sourceIp: req.ip, details: {},
+  });
+  // No session is issued: the person signs in, with their second factor if
+  // they have one, so a mailbox alone never gets past MFA.
+  return res.json({ success: true });
+});
 
 /** Drop pending registrations whose links have expired. */
 export async function prunePendingRegistrations(): Promise<number> {

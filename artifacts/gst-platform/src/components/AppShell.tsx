@@ -41,6 +41,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { name: "Reports", href: "/reports", icon: BarChart3 },
     { name: "E-Way Bills", href: "/eway-bills", icon: Truck },
     { name: "Settings", href: "/settings", icon: Settings },
+    { name: "Security", href: "/security", icon: KeyRound },
   ];
 
   const adminNavigation = [
@@ -82,7 +83,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-background flex flex-col md:flex-row">
       {/* Mobile Header */}
-      <div className="md:hidden flex items-center justify-between p-4 border-b bg-card">
+      <div className="no-print md:hidden flex items-center justify-between p-4 border-b bg-card">
         <div className="flex items-center gap-2">
           <Sheet>
             <SheetTrigger asChild>
@@ -116,7 +117,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Desktop Sidebar */}
-      <div className="hidden md:flex flex-col w-64 bg-sidebar border-r border-sidebar-border shrink-0">
+      <div className="no-print hidden md:flex flex-col w-64 bg-sidebar border-r border-sidebar-border shrink-0">
         <div className="h-16 flex items-center px-6 border-b border-sidebar-border">
           <h1 className="text-2xl font-bold text-sidebar-foreground tracking-tight flex items-center gap-2">
             <Shield className="w-6 h-6 text-primary" />
@@ -139,9 +140,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden print:overflow-visible">
         {/* Desktop Header */}
-        <header className="hidden md:flex h-16 border-b bg-card items-center px-8 justify-between shrink-0">
+        <header className="no-print hidden md:flex h-16 border-b bg-card items-center px-8 justify-between shrink-0">
           <h2 className="text-lg font-semibold text-foreground">
             {navigation.find((n) => location === n.href || location.startsWith(`${n.href}/`))?.name || "Dashboard"}
           </h2>
@@ -156,7 +157,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
         
         {/* Page Content */}
-        <div className="flex-1 overflow-auto p-4 md:p-8">
+        <div className="flex-1 overflow-auto p-4 md:p-8 print:overflow-visible print:p-0">
           <div className="max-w-7xl mx-auto">
             {children}
           </div>

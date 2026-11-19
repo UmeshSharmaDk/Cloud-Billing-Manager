@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { db, usersTable, businessesTable, auditLogTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable } from "@workspace/db";
+import { db, usersTable, businessesTable, auditLogTable, invoicesTable, purchasesTable, customersTable, vendorsTable, productsTable, returnFilingsTable } from "@workspace/db";
 import { eq, ne, and, or, ilike, isNull, count, desc, inArray, sql } from "drizzle-orm";
 import { requireAuth, requireAdmin } from "./auth";
 import { mapUser } from "../lib/serialise";
 import { systemScope } from "../middleware/tenant-scope";
 import { validateBody, validateQuery, validateParams } from "../middleware/validate";
-import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery, ClientsQuery, UpdateBusinessBody } from "../schemas";
+import { AdminListUsersQuery, AdminUpdateUserBody, IdParam, LockDateBody, AuditPageQuery, ClientsQuery, UpdateBusinessBody, ReturnFilingBody } from "../schemas";
 import { taxInvoice, receivableInvoice, invoiceSign, activePurchase } from "../lib/tax-documents";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { requireStepUp, verifyStepUp, sendStepUpFailure } from "../middleware/step-up";
@@ -145,7 +145,8 @@ router.get("/clients", validateQuery(ClientsQuery), async (req: Req, res) => {
   if (!ids.length) return res.json({ month, clients: users.map((u) => ({ ...u, business: null })) });
 
   const sign = invoiceSign(invoicesTable);
-  const [bizRows, sales, purchases, owed] = await Promise.all([
+  const today = new Date().toISOString().slice(0, 10);
+  const [bizRows, sales, purchases, owed, filings] = await Promise.all([
     db.select({ id: businessesTable.id, name: businessesTable.name, gstin: businessesTable.gstin, lockDate: businessesTable.lockDate })
       .from(businessesTable).where(inArray(businessesTable.id, ids)),
     db.select({
@@ -167,9 +168,13 @@ router.get("/clients", validateQuery(ClientsQuery), async (req: Req, res) => {
       businessId: invoicesTable.businessId,
       receivable: sql<string>`coalesce(sum(${invoicesTable.grandTotal} - ${invoicesTable.paidAmount}) FILTER (WHERE ${invoicesTable.status} <> 'paid'), 0)`,
       lastInvoiceAt: sql<string | null>`max(${invoicesTable.createdAt})`,
+      overdue: sql<number>`count(*) FILTER (WHERE ${invoicesTable.status} <> 'paid' AND ${invoicesTable.dueDate} < ${today})`,
     }).from(invoicesTable)
       .where(and(inArray(invoicesTable.businessId, ids), receivableInvoice(invoicesTable)))
       .groupBy(invoicesTable.businessId),
+    db.select({ businessId: returnFilingsTable.businessId, form: returnFilingsTable.form, filedAt: returnFilingsTable.filedAt, arn: returnFilingsTable.arn })
+      .from(returnFilingsTable)
+      .where(and(inArray(returnFilingsTable.businessId, ids), eq(returnFilingsTable.period, month))),
   ]);
   const by = <T extends { businessId: number }>(rows: T[]) => new Map(rows.map((r) => [r.businessId, r]));
   const s = by(sales), p = by(purchases), o = by(owed);
@@ -188,9 +193,37 @@ router.get("/clients", validateQuery(ClientsQuery), async (req: Req, res) => {
         sales: num(si?.sales), invoices: num(si?.invoices), purchases: num(pi?.purchases),
         outputGst, inputGst, netGst: Math.round((outputGst - inputGst) * 100) / 100,
         receivable: num(oi?.receivable), lastInvoiceAt: oi?.lastInvoiceAt ?? null,
+        overdue: num(oi?.overdue),
+        filings: Object.fromEntries(filings.filter((f) => f.businessId === b.id).map((f) => [f.form, { filedAt: f.filedAt, arn: f.arn }])),
       };
     }),
   });
+});
+
+/**
+ * PUT /admin/users/:id/filings — mark (or with `filed: false`, unmark) a GST
+ * return as filed for this client's business and month.
+ */
+router.put("/users/:id/filings", validateParams(IdParam), validateBody(ReturnFilingBody), async (req: Req, res) => {
+  const user = await managedUser(req);
+  if (!user?.businessId) return res.status(404).json({ error: "Client not found" });
+  const { period, form, filed, arn } = req.body;
+  const match = and(eq(returnFilingsTable.businessId, user.businessId), eq(returnFilingsTable.period, period), eq(returnFilingsTable.form, form));
+  if (filed) {
+    await db.insert(returnFilingsTable)
+      .values({ businessId: user.businessId, period, form, arn: arn || null, filedBy: req.user.id })
+      .onConflictDoUpdate({
+        target: [returnFilingsTable.businessId, returnFilingsTable.period, returnFilingsTable.form],
+        set: { arn: arn || null, filedBy: req.user.id, filedAt: new Date() },
+      });
+  } else {
+    await db.delete(returnFilingsTable).where(match);
+  }
+  await recordAudit({
+    ...actorFrom(req), action: filed ? "return.marked_filed" : "return.unmarked_filed",
+    targetType: "business", targetId: user.businessId, details: { period, form, arn: arn || null },
+  });
+  return res.json({ success: true });
 });
 
 /** A business user this admin may manage: their own, or any for the superadmin. */

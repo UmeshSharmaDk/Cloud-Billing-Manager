@@ -122,7 +122,7 @@ export default function PurchaseDetailPage() {
                 <div className="flex justify-between py-1 font-semibold"><span>Net payable to vendor</span><span>{formatCurrency(p.netPayable)}</span></div>
               </>}
               {currentStatus !== "paid" && (
-                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} disabled={mutation.isPending}>
+                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} loading={mutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
                 </Button>
               )}

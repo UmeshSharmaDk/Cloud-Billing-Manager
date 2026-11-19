@@ -59,8 +59,8 @@ export default function ProductNewPage() {
         </Card>
       </div>
       <div className="flex justify-end gap-3">
-        <Button type="button" variant="outline" onClick={() => setLocation("/inventory")}>Cancel</Button>
-        <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : "Add Product"}</Button>
+        <Button type="button" variant="ghost" onClick={() => setLocation("/inventory")}>Cancel</Button>
+        <Button type="submit" loading={mutation.isPending}>Add Product</Button>
       </div>
     </form>
   );

@@ -48,7 +48,7 @@ const poolNumber = (name: string, fallback: number): number => {
  * hosting panels often hold one line). Off unless DATABASE_SSL=true or a CA is
  * given, so local and Replit databases keep working unchanged.
  */
-function sslConfig(): pg.PoolConfig["ssl"] {
+export function sslConfig(): pg.PoolConfig["ssl"] {
   const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, "\n");
   if (!ca && process.env.DATABASE_SSL !== "true") return undefined;
   return ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
@@ -117,3 +117,11 @@ export {
   TENANT_TABLES,
   type RlsStatus,
 } from "./rls";
+export {
+  readMigrations,
+  pendingMigrations,
+  appliedMigrations,
+  runMigrations,
+  migrateDatabase,
+  type Migration,
+} from "./migrate";

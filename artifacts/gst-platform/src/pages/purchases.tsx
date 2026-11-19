@@ -3,6 +3,8 @@ import { Link } from "wouter";
 import { useListPurchases } from "@workspace/api-client-react";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ExportButton } from "@/components/ExportButton";
+import { fetchAllPages } from "@/lib/download";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Search, ShoppingCart, Upload } from "lucide-react";
@@ -28,6 +30,7 @@ export default function PurchasesPage() {
           <p className="text-muted-foreground text-sm">Track all supplier purchases and GST input credit</p>
         </div>
         <div className="flex gap-2">
+          <ExportButton filename="Purchases" sheets={async () => [{ name: "Purchases", rows: (await fetchAllPages<any>("/purchases", "purchases")).map((r: any) => ({ "Bill no.": r.billNumber ?? r.invoiceNumber, Date: r.billDate ?? r.invoiceDate, Vendor: r.vendorName, GSTIN: r.vendorGstin ?? "", Status: r.status, Taxable: Number(r.subtotal), GST: Number(r.totalGst), TDS: Number(r.tdsAmount ?? 0), Total: Number(r.grandTotal) })) }]} />
           <Link href="/purchases/new">
             <Button variant="outline" className="gap-2"><Upload className="w-4 h-4" /> Import bill file</Button>
           </Link>

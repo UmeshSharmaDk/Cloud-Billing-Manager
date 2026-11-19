@@ -12,6 +12,7 @@ import { useState, useEffect } from "react";
 import { ConfirmPasswordDialog } from "@/components/ConfirmPasswordDialog";
 import { UserRecords } from "@/components/UserRecords";
 import { BooksControl } from "@/components/BooksControl";
+import { authFetch } from "@/lib/api-fetch";
 
 export default function AdminUserDetailPage() {
   const [, params] = useRoute("/admin/users/:id");
@@ -19,6 +20,23 @@ export default function AdminUserDetailPage() {
   const userId = parseInt(params?.id || "0");
 
   const { data, isLoading, refetch } = useGetUser(userId);
+  const [mfaResetOpen, setMfaResetOpen] = useState(false);
+  const [mfaResetting, setMfaResetting] = useState(false);
+  const resetMfa = async (confirmPassword: string) => {
+    if (mfaResetting) return;
+    setMfaResetting(true);
+    try {
+      const res = await authFetch(`/api/users/${userId}/mfa-reset`, { method: "POST", body: JSON.stringify({ confirmPassword }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not reset");
+      toast({ title: "Two-factor sign-in turned off for this user" });
+      setMfaResetOpen(false);
+      refetch();
+    } catch (err: any) {
+      toast({ title: "Not reset", description: err.message, variant: "destructive" });
+    } finally {
+      setMfaResetting(false);
+    }
+  };
   const updateMutation = useUpdateUser();
   const toggleMutation = useToggleUserStatus();
   const { toast } = useToast();
@@ -122,6 +140,16 @@ export default function AdminUserDetailPage() {
         onConfirm={(password) => submit(changedFields(), password)}
       />
 
+      <ConfirmPasswordDialog
+        open={mfaResetOpen}
+        onOpenChange={setMfaResetOpen}
+        title="Turn off two-factor sign-in"
+        description={`Do this only when ${user.name || "this user"} has lost their phone and you have confirmed it is them. They are signed out everywhere and set it up again on their next sign-in. Enter your own password to continue.`}
+        confirmLabel="Turn off two-factor"
+        pending={mfaResetting}
+        onConfirm={resetMfa}
+      />
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3">
@@ -133,15 +161,18 @@ export default function AdminUserDetailPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-xs px-2 py-1 rounded-full font-medium ${user.isActive ? "bg-success-bg text-success-text" : "bg-danger-bg text-danger-text"}`}>{user.isActive ? "Active" : "Inactive"}</span>
-          <Button variant="outline" size="sm" className="gap-1" onClick={handleToggleActive} disabled={toggleMutation.isPending}>
+          {user.mfaEnabled && (
+            <Button variant="outline" size="sm" onClick={() => setMfaResetOpen(true)}>Reset two-factor</Button>
+          )}
+          <Button variant="outline" size="sm" className="gap-1" onClick={handleToggleActive} loading={toggleMutation.isPending}>
             {user.isActive ? <><UserX className="w-3.5 h-3.5" /> Deactivate</> : <><UserCheck className="w-3.5 h-3.5" /> Activate</>}
           </Button>
           {!editing ? (
             <Button variant="outline" size="sm" className="gap-1" onClick={() => setEditing(true)}><Edit2 className="w-3.5 h-3.5" /> Edit</Button>
           ) : (
             <>
-              <Button variant="outline" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
-              <Button size="sm" className="gap-1" onClick={handleSave} disabled={updateMutation.isPending}><Save className="w-3.5 h-3.5" /> Save</Button>
+              <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button size="sm" className="gap-1" onClick={handleSave} loading={updateMutation.isPending}><Save className="w-3.5 h-3.5" /> Save user</Button>
             </>
           )}
         </div>

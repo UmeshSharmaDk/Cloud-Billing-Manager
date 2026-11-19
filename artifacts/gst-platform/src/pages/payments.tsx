@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useListPayments } from "@workspace/api-client-react";
+import { ExportButton } from "@/components/ExportButton";
+import { fetchAllPages } from "@/lib/download";
 import { BankImport } from "@/components/BankImport";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -24,9 +26,12 @@ export default function PaymentsPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">Payments</h1>
-        <p className="text-muted-foreground text-sm">Track all payment receipts and disbursements</p>
+      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Payments</h1>
+          <p className="text-muted-foreground text-sm">Track all payment receipts and disbursements</p>
+        </div>
+        <ExportButton filename="Payments" sheets={async () => [{ name: "Payments", rows: (await fetchAllPages<any>("/payments", "payments")).map((r: any) => ({ Date: r.date, Type: r.type, Reference: r.referenceNumber ?? "", Mode: r.mode ?? "", Amount: Number(r.amount), Notes: r.notes ?? "" })) }]} />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -143,9 +143,9 @@ export default function PurchaseNewPage() {
             className="hidden"
             onChange={handleFileImport}
           />
-          <Button type="button" variant="outline" className="gap-2" onClick={() => fileRef.current?.click()} disabled={importParsing}>
+          <Button type="button" variant="outline" className="gap-2" onClick={() => fileRef.current?.click()} loading={importParsing}>
             {importParsing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            {importParsing ? "Reading file..." : "Import bill file"}
+            Import bill file
           </Button>
         </div>
       </div>
@@ -231,7 +231,7 @@ export default function PurchaseNewPage() {
                       <span>Taxable: {formatCurrency(c.taxable)} · ITC: {formatCurrency(c.gstAmt)}</span>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground text-sm">{formatCurrency(c.total)}</span>
-                        {items.length > 1 && <button type="button" onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></button>}
+                        {items.length > 1 && <Button type="button" variant="ghost" size="icon" aria-label={`Remove line ${i + 1}`} onClick={() => setItems(prev => prev.filter((_, idx) => idx !== i))} className="text-danger hover:text-danger-text"><Trash2 className="w-3.5 h-3.5" /></Button>}
                       </div>
                     </div>
                     {item.description && (
@@ -256,7 +256,7 @@ export default function PurchaseNewPage() {
               <div className="text-xs text-muted-foreground bg-accent/40 rounded p-2">
                 Items matching an existing product (by name) will have their stock, price &amp; GST updated. New names will be added to your catalog automatically.
               </div>
-              <Button type="submit" className="w-full" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : "Record Purchase & Update Stock"}</Button>
+              <Button type="submit" className="w-full" loading={mutation.isPending}>Record Purchase & Update Stock</Button>
             </CardContent>
           </Card>
         </div>

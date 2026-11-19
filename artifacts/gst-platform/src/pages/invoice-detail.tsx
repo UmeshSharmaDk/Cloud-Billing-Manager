@@ -4,7 +4,9 @@ import { useGetInvoice, useUpdateInvoiceStatus, useGetBusiness, useGetCustomer }
 import { formatCurrency, formatDate, statusBadge, amountToWords } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, Printer, CheckCircle, MessageCircle } from "lucide-react";
+import { ArrowLeft, Printer, CheckCircle, MessageCircle, Mail, Copy } from "lucide-react";
+import { authFetch } from "@/lib/api-fetch";
+import { ToggleRow } from "@/components/ToggleRow";
 import { reminderLink } from "@/lib/whatsapp";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -31,6 +33,44 @@ export default function InvoiceDetailPage() {
 
   // "Partly paid" is a statement about an amount, so the server will not take it
   // without one — asking for it here is what makes that option usable.
+  const [repeatSaving, setRepeatSaving] = useState(false);
+  const setRepeat = async (repeatMonthly: boolean) => {
+    setRepeatSaving(true);
+    try {
+      const res = await authFetch(`/api/invoices/${inv.id}/repeat`, { method: "PUT", body: JSON.stringify({ repeatMonthly }) });
+      if (!res.ok) throw new Error("Could not save");
+      toast({ title: repeatMonthly ? "The dashboard will remind you to repeat this invoice each month" : "This invoice no longer repeats" });
+      refetch();
+    } catch (err: any) {
+      toast({ title: "Not saved", description: err.message, variant: "destructive" });
+    } finally {
+      setRepeatSaving(false);
+    }
+  };
+
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailTo, setEmailTo] = useState("");
+  const [emailing, setEmailing] = useState(false);
+  const openEmail = () => { setEmailTo(customer.email || ""); setEmailOpen(true); };
+  const sendEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (emailing) return;
+    setEmailing(true);
+    try {
+      const res = await authFetch(`/api/invoices/${inv.id}/email`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: emailTo }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "The email could not be sent.");
+      toast({ title: `Invoice sent to ${body.to}` });
+      setEmailOpen(false);
+    } catch (err: any) {
+      toast({ title: "Not sent", description: err.message, variant: "destructive" });
+    } finally {
+      setEmailing(false);
+    }
+  };
+
   const [partialOpen, setPartialOpen] = useState(false);
   const [partialAmount, setPartialAmount] = useState("");
 
@@ -91,6 +131,14 @@ export default function InvoiceDetailPage() {
               <a href={reminder} target="_blank" rel="noopener noreferrer"><MessageCircle className="w-4 h-4" /> WhatsApp reminder</a>
             </Button>
           )}
+          {inv.status !== "cancelled" && (
+            <Button variant="outline" size="sm" className="gap-1" onClick={openEmail}>
+              <Mail className="w-4 h-4" /> Email invoice
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => setLocation(`/invoices/new?from=${inv.id}`)}>
+            <Copy className="w-4 h-4" /> Duplicate invoice
+          </Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => window.print()}>
             <Printer className="w-4 h-4" /> Print
           </Button>
@@ -132,9 +180,15 @@ export default function InvoiceDetailPage() {
                 <div className="flex justify-between text-red-600 border-t pt-1"><span className="font-semibold">Balance Due</span><span className="font-bold">{formatCurrency(balanceDue)}</span></div>
               )}
               {inv.status !== "paid" && (
-                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} disabled={paymentMutation.isPending}>
+                <Button className="w-full mt-2 gap-2" onClick={() => handleStatus("paid")} loading={paymentMutation.isPending}>
                   <CheckCircle className="w-4 h-4" /> Mark as Paid
                 </Button>
+              )}
+              {inv.status !== "cancelled" && (
+                <div className="border-t pt-1">
+                  <ToggleRow id="repeat-monthly" label="Repeat every month" note="Each new month the dashboard offers a copy to send."
+                    checked={Boolean(inv.repeatMonthly)} onChange={setRepeat} busy={repeatSaving} />
+                </div>
               )}
             </CardContent>
           </Card>
@@ -296,8 +350,28 @@ export default function InvoiceDetailPage() {
               />
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setPartialOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={paymentMutation.isPending}>Save</Button>
+              <Button type="button" variant="ghost" onClick={() => setPartialOpen(false)}>Cancel</Button>
+              <Button type="submit" loading={paymentMutation.isPending}>Record payment</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
+        <DialogContent className="no-print sm:max-w-md">
+          <form onSubmit={sendEmail} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Email {inv.invoiceNumber}</DialogTitle>
+              <DialogDescription>
+                The customer gets the invoice details, the balance due and, when your UPI ID is set, a link to pay.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="email-to">Customer email</Label>
+              <Input id="email-to" type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} required autoFocus />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setEmailOpen(false)}>Cancel</Button>
+              <Button type="submit" loading={emailing}>Send invoice</Button>
             </DialogFooter>
           </form>
         </DialogContent>

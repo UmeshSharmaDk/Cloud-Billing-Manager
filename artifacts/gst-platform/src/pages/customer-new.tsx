@@ -56,8 +56,8 @@ export default function CustomerNewPage() {
           <div className="space-y-2"><Label>Pincode</Label><Input value={form.pincode} onChange={(e) => set("pincode", e.target.value)} placeholder="400051" maxLength={6} /></div>
           <div className="space-y-2"><Label>Credit Limit (₹)</Label><Input type="number" value={form.creditLimit} onChange={(e) => set("creditLimit", e.target.value)} placeholder="500000" /></div>
           <div className="sm:col-span-2 flex justify-end gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={() => setLocation("/customers")}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : "Add Customer"}</Button>
+            <Button type="button" variant="ghost" onClick={() => setLocation("/customers")}>Cancel</Button>
+            <Button type="submit" loading={mutation.isPending}>Add Customer</Button>
           </div>
         </CardContent>
       </Card>

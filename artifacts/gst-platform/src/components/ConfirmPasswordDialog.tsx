@@ -65,11 +65,11 @@ export function ConfirmPasswordDialog({
             placeholder="••••••••"
           />
           <DialogFooter className="pt-4">
-            <Button type="button" variant="outline" onClick={() => close(false)}>
+            <Button type="button" variant="ghost" onClick={() => close(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!password || pending}>
-              {pending ? "Confirming..." : confirmLabel}
+            <Button type="submit" loading={pending} disabledReason={password ? undefined : "Enter your password first"}>
+              {confirmLabel}
             </Button>
           </DialogFooter>
         </form>

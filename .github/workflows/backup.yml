@@ -1,0 +1,104 @@
+name: Nightly database backup
+
+# A full dump of the production database every night, encrypted, kept for 30
+# days as a workflow artifact, and restored into a scratch database in the same
+# run so we know the backup actually works. Neon's own restore window on the
+# free plan is short; this is the copy that does not depend on Neon.
+#
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   BACKUP_DATABASE_URL  the Neon connection string (owner role, sslmode=require)
+#   BACKUP_PASSPHRASE    a long random passphrase; keep a copy somewhere safe,
+#                        a backup cannot be opened without it
+#
+# To restore by hand: download the artifact, then
+#   gpg --batch --passphrase "$BACKUP_PASSPHRASE" -d billing.dump.gpg > billing.dump
+#   pg_restore --no-owner --no-privileges -d <empty database url> billing.dump
+
+on:
+  schedule:
+    - cron: "30 21 * * *" # 03:00 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      scratch:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: restore_check
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+    steps:
+      - name: Check the secrets are set
+        id: ready
+        run: |
+          if [ -z "$BACKUP_DATABASE_URL" ] || [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::warning::BACKUP_DATABASE_URL or BACKUP_PASSPHRASE is not set, so no backup was taken."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install the Postgres 17 client
+        if: steps.ready.outputs.ok == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
+          sudo apt-get install -y -qq postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Dump the database
+        if: steps.ready.outputs.ok == 'true'
+        run: |
+          pg_dump --format=custom --no-owner --no-privileges --file=billing.dump "$BACKUP_DATABASE_URL"
+          ls -l billing.dump
+
+      - name: Restore it into a scratch database and check it
+        if: steps.ready.outputs.ok == 'true'
+        env:
+          RESTORE_URL: postgres://postgres:postgres@127.0.0.1:5432/restore_check
+        run: |
+          pg_restore --no-owner --no-privileges --exit-on-error -d "$RESTORE_URL" billing.dump
+          for table in users businesses invoices purchases schema_migrations; do
+            src=$(psql "$BACKUP_DATABASE_URL" -AtXc "SELECT count(*) FROM $table")
+            got=$(psql "$RESTORE_URL" -AtXc "SELECT count(*) FROM $table")
+            echo "$table: $src in production, $got restored"
+            if [ "$src" != "$got" ]; then
+              echo "::error::$table restored $got rows but production has $src"
+              exit 1
+            fi
+          done
+
+      - name: Encrypt
+        if: steps.ready.outputs.ok == 'true'
+        run: |
+          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$BACKUP_PASSPHRASE" -o billing.dump.gpg billing.dump
+          rm billing.dump
+
+      - name: Keep for 30 days
+        if: steps.ready.outputs.ok == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: billing-db-${{ github.run_id }}
+          path: billing.dump.gpg
+          retention-days: 30
+          if-no-files-found: error

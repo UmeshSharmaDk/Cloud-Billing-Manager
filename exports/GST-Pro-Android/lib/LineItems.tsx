@@ -57,7 +57,7 @@ export function LineItems({ lines, setLines, price, withDiscount }: {
     <>
       {lines.map((l, i) => (
         <Card key={i} title={`Item ${i + 1}`} right={lines.length > 1 && (
-          <Pressable onPress={() => setLines((ls) => ls.filter((_, j) => j !== i))}><Text style={{ color: colors.danger }}>Remove</Text></Pressable>
+          <Pressable onPress={() => setLines((ls) => ls.filter((_, j) => j !== i))} hitSlop={12} accessibilityRole="button" accessibilityLabel={`Remove item ${i + 1}`}><Text style={{ color: colors.danger }}>Remove item</Text></Pressable>
         )}>
           {products.length > 0 && (
             <Select label="Product (optional)" value={l.productId ? String(l.productId) : ""} placeholder="Pick from inventory"
@@ -77,7 +77,7 @@ export function LineItems({ lines, setLines, price, withDiscount }: {
           <Text style={[s.muted, { textAlign: "right" }]}>Line total {money(calcLine(l).total)}</Text>
         </Card>
       ))}
-      <Pressable onPress={() => setLines((ls) => [...ls, emptyLine()])} style={{ padding: 8 }}>
+      <Pressable onPress={() => setLines((ls) => [...ls, emptyLine()])} style={{ padding: 8, minHeight: 44, justifyContent: "center" }} accessibilityRole="button">
         <Text style={{ color: colors.primary, fontWeight: "600", textAlign: "center" }}>+ Add another item</Text>
       </Pressable>
       <Card>

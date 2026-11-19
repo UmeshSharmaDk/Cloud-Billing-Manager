@@ -39,7 +39,7 @@ export default function SecurityPage() {
   const regenerate = useRegenerateMfaRecoveryCodes();
 
   if (!user) return null;
-  const home = user.role === "superadmin" ? "/superadmin" : "/admin";
+  const home = user.role === "superadmin" ? "/superadmin" : user.role === "admin" ? "/admin" : "/dashboard";
 
   const start = (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,7 +113,7 @@ export default function SecurityPage() {
             <CardTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-success" /> Two-factor authentication is on</CardTitle>
             <CardDescription>
               Lost your recovery codes, or used most of them? Enter a code from your authenticator to get a new set. The old ones stop working.
-              If you have lost your phone as well, ask a superadmin to reset two-factor authentication for you.
+              If you have lost your phone as well, ask {user.role === "user" ? "your administrator" : "a superadmin"} to reset two-factor authentication for you.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -121,7 +121,7 @@ export default function SecurityPage() {
               <Label htmlFor="regen-code">Authenticator code</Label>
               <Input id="regen-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" required />
               {errorLine}
-              <Button type="submit" disabled={regenerate.isPending}>{regenerate.isPending ? "Checking..." : "Replace recovery codes"}</Button>
+              <Button type="submit" loading={regenerate.isPending}>Replace recovery codes</Button>
             </form>
           </CardContent>
         </Card>
@@ -140,7 +140,7 @@ export default function SecurityPage() {
               <Label htmlFor="enable-code">Code shown in the app</Label>
               <Input id="enable-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" required autoFocus />
               {errorLine}
-              <Button type="submit" disabled={enableMfa.isPending}>{enableMfa.isPending ? "Checking..." : "Turn on"}</Button>
+              <Button type="submit" loading={enableMfa.isPending}>Turn on</Button>
             </form>
           </CardContent>
         </Card>
@@ -148,14 +148,18 @@ export default function SecurityPage() {
         <Card>
           <CardHeader>
             <CardTitle>Set it up to continue</CardTitle>
-            <CardDescription>The admin panel needs two-factor authentication. Confirm your password to begin.</CardDescription>
+            <CardDescription>
+              {user.role === "user"
+                ? "A code from your phone, as well as your password, keeps your books safe if your password leaks. Confirm your password to begin."
+                : "The admin panel needs two-factor authentication. Confirm your password to begin."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={start} className="space-y-3">
               <Label htmlFor="mfa-password">Your password</Label>
               <Input id="mfa-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
               {errorLine}
-              <Button type="submit" disabled={setupMfa.isPending}>{setupMfa.isPending ? "Starting..." : "Start setup"}</Button>
+              <Button type="submit" loading={setupMfa.isPending}>Start setup</Button>
             </form>
           </CardContent>
         </Card>

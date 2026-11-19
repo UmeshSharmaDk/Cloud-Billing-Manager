@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BadgeCheck, CircleAlert, LoaderCircle, ShieldCheck, KeyRound, ArrowRight } from "lucide-react";
+import { BadgeCheck, CircleAlert, ShieldCheck, KeyRound, ArrowRight } from "lucide-react";
 
 function getError(error: any) {
   return error?.data?.error ?? error?.data?.message ?? error?.message ?? "This invitation could not be accepted. Contact the person who invited you.";
@@ -94,7 +94,7 @@ export default function AcceptAdminInvitePage() {
                   <div className="space-y-2"><Label htmlFor="invite-password">New password</Label><Input id="invite-password" data-testid="input-invite-password" type="password" minLength={12} maxLength={128} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 12 characters" required /><p className="text-xs leading-5 text-muted-foreground">Use 12 or more characters. Avoid passwords used for other services.</p></div>
                   <div className="space-y-2"><Label htmlFor="invite-password-confirm">Confirm password</Label><Input id="invite-password-confirm" data-testid="input-invite-password-confirm" type="password" minLength={12} maxLength={128} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required /></div>
                   {formError && <div role="alert" className="flex gap-2 rounded-lg border border-danger/30 bg-danger-bg p-3 text-sm text-danger-text"><CircleAlert className="mt-0.5 h-4 w-4 shrink-0" /><span>{formError}</span></div>}
-                  <Button type="submit" className="h-11 w-full gap-2 bg-primary font-semibold hover:bg-primary-hover" disabled={accept.isPending} data-testid="button-accept-invitation">{accept.isPending ? <><LoaderCircle className="h-4 w-4 animate-spin" /> Activating account…</> : <>Activate administrator account <ArrowRight className="h-4 w-4" /></>}</Button>
+                  <Button type="submit" className="h-11 w-full gap-2 bg-primary font-semibold hover:bg-primary-hover" loading={accept.isPending} data-testid="button-accept-invitation">Activate administrator account <ArrowRight className="h-4 w-4" /></Button>
                   <p className="text-center text-xs leading-5 text-muted-foreground">By continuing, this one-time invite will be accepted and you will be signed in.</p>
                 </form>
               ) : (

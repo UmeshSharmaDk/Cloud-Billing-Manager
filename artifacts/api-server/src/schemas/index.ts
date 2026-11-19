@@ -230,6 +230,13 @@ export const LockDateBody = z.object({
 
 export const AuditPageQuery = z.object({ ...paginationShape });
 
+export const ReturnFilingBody = z.object({
+  period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  form: z.enum(["GSTR-1", "GSTR-3B"]),
+  filed: z.boolean(),
+  arn: z.string().trim().max(40).optional(),
+});
+
 export const ClientsQuery = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional() });
 
 export const UpdateAdminPlanBody = z.object({
@@ -256,6 +263,36 @@ export const ReviewCapacityRequestBody = z.object({
   { message: "Set an explicit user limit to approve a capacity request", path: ["userLimit"] },
 );
 
+export const DEMO_BUSINESS_TYPES = ["CA or accounting firm", "Business with branches", "Single business", "Other"] as const;
+
+export const DemoRequestBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  phone: z.string().trim().regex(/^[+\d][\d\s-]{6,19}$/, "Enter a phone number"),
+  email: z.union([z.literal(""), z.string().email().max(320)]).optional(),
+  city: z.string().trim().max(80).optional(),
+  businessType: z.enum(DEMO_BUSINESS_TYPES),
+  clientCount: z.number().int().min(0).max(100000).optional(),
+  message: z.string().trim().max(1000).optional(),
+  /** Hidden from people; bots fill it in. */
+  website: z.string().max(200).optional(),
+});
+
+export const DemoRequestStatusBody = z.object({ status: z.enum(["new", "contacted", "closed"]) });
+
+/** Send an invoice to the customer; `to` overrides the customer's saved email. */
+export const EmailInvoiceBody = z.object({
+  to: z.string().email().max(320).optional(),
+});
+
+export const ForgotPasswordBody = z.object({
+  email: z.string().email().max(320),
+});
+
+export const ResetForgottenPasswordBody = z.object({
+  token: z.string().min(1).max(2048),
+  password: newPassword,
+});
+
 export const AcceptAdminInvitationBody = z.object({
   token: z.string().min(1).max(512),
   password: newPassword,
@@ -280,6 +317,8 @@ export const MfaLoginBody = z.object({
   mfaToken: z.string().min(1).max(2048),
   code: mfaCode,
 });
+
+export const TeamMfaBody = z.object({ required: z.boolean() });
 
 export const MfaResetBody = z.object({
   confirmPassword: z.string().min(1).max(1024),
@@ -308,6 +347,7 @@ export const UpdateBusinessBody = z.object({
   bankBranch: optionalText(200),
   // A UPI VPA: handle@provider, the only shape UPI apps accept.
   upiId: z.union([z.string().trim().regex(/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/, "UPI ID looks like name@bank"), z.literal(""), z.null()]).optional(),
+  autoReminders: z.boolean().optional(),
   termsConditions: optionalText(5000),
 });
 
@@ -461,6 +501,8 @@ export const CreateInvoiceBody = z
     notes: optionalText(2000),
     items: lineItems,
     tcsRate: z.coerce.number().finite().min(0).max(10).optional(),
+    /** This invoice is this month's repeat of a monthly invoice. */
+    repeatOf: entityId.optional(),
   })
   .refine((b) => b.customerId !== undefined || Boolean(b.customerName), {
     message: "customerId or customerName is required",
@@ -471,6 +513,8 @@ const tdsShape = {
   tdsSection: optionalText(10),
   tdsRate: z.coerce.number().finite().min(0).max(30).optional(),
 };
+
+export const RepeatInvoiceBody = z.object({ repeatMonthly: z.boolean() });
 
 export const UpdateInvoiceBody = z.object({
   tcsRate,

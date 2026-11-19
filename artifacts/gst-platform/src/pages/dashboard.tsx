@@ -1,19 +1,29 @@
-import { useGetDashboardStats, useGetRecentInvoices, useGetMonthlyRevenue, useGetLowStockAlerts, useGetGstSummary } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
+import { authFetch } from "@/lib/api-fetch";
 import { DashboardSkeleton, Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatDate, statusBadge } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
-import { FileText, Package, Plus, ArrowRight } from "lucide-react";
+import { FileText, Package, Plus, ArrowRight, MessageCircle } from "lucide-react";
+import { useGetBusiness } from "@workspace/api-client-react";
+import { reminderLink } from "@/lib/whatsapp";
+import { FirstSteps } from "@/components/FirstSteps";
 import { Button } from "@/components/ui/button";
 import { Figure, deltaText } from "@/components/Figure";
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, LineChart, Line } from "recharts";
 
 export default function DashboardPage() {
-  const { data: statsRaw, isLoading } = useGetDashboardStats();
-  const { data: recentInvData } = useGetRecentInvoices();
-  const { data: revenueData, isLoading: revenueLoading } = useGetMonthlyRevenue();
-  const { data: lowStockData } = useGetLowStockAlerts();
-  const { data: gstData } = useGetGstSummary();
+  // One request for the whole page instead of five.
+  const { data: summary, isLoading } = useQuery({
+    queryKey: ["dashboard-summary"],
+    queryFn: async () => {
+      const res = await authFetch("/api/dashboard/summary");
+      if (!res.ok) throw new Error("Could not load the dashboard");
+      return res.json();
+    },
+  });
+  const revenueLoading = isLoading;
+  const { stats: statsRaw, recentInvoices: recentInvData, monthlyRevenue: revenueData, lowStock: lowStockData, gstSummary: gstData } = summary ?? {};
 
   // API returns: totalSales, totalPurchases, totalOutstanding, invoiceCount, customerCount, vendorCount, productCount, lowStockCount, overdueInvoiceCount, totalGstPayable
   // These are all-time totals, not this month's.
@@ -24,6 +34,10 @@ export default function DashboardPage() {
   const lowStockProducts: any[] = Array.isArray(lowStockData) ? lowStockData : [];
   // GST summary returns: { outputCgst, outputSgst, outputIgst, inputCgst, inputSgst, inputIgst, netPayable }
   const gstSummary: any = gstData || {};
+  const repeatDue: any[] = summary?.repeatDue ?? [];
+  const overdue: any[] = summary?.overdue ?? [];
+  const { data: businessData } = useGetBusiness();
+  const business: any = businessData || {};
 
   if (isLoading) return <DashboardSkeleton />;
 
@@ -45,6 +59,14 @@ export default function DashboardPage() {
           <Button className="gap-1"><Plus className="w-4 h-4" /> New invoice</Button>
         </Link>
       </div>
+
+      <FirstSteps steps={[
+        { label: "Add your GSTIN and address", href: "/settings", done: Boolean(business.gstin) },
+        { label: "Add your UPI ID so customers can pay by QR", href: "/settings", done: Boolean(business.upiId) },
+        { label: "Add your first product", href: "/inventory/new", done: (stats.productCount ?? 0) > 0 },
+        { label: "Add your first customer", href: "/customers/new", done: (stats.customerCount ?? 0) > 0 },
+        { label: "Create your first invoice", href: "/invoices/new", done: (stats.invoiceCount ?? 0) > 0 },
+      ]} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
         {/* The one figure that matters: this month's sales */}
@@ -112,6 +134,36 @@ export default function DashboardPage() {
                 <Bar dataKey="purchases" fill="hsl(var(--muted-foreground) / 0.35)" name="Purchases" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+
+      {(repeatDue.length > 0 || overdue.length > 0) && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-base">To do</CardTitle></CardHeader>
+          <CardContent className="p-0 divide-y divide-border">
+            {repeatDue.map((inv) => (
+              <div key={`r${inv.id}`} className="flex items-center justify-between gap-3 px-4 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">Repeat {inv.invoiceNumber} for {inv.customerName}</p>
+                  <p className="text-xs text-muted-foreground">Monthly invoice, last sent {formatDate(inv.invoiceDate)} · {formatCurrency(inv.grandTotal)}</p>
+                </div>
+                <Link href={`/invoices/new?from=${inv.id}&repeat=1`}><Button variant="outline" size="sm">Create this month's invoice</Button></Link>
+              </div>
+            ))}
+            {overdue.map((inv) => {
+              const wa = reminderLink(inv, inv.phone, business, formatCurrency, formatDate);
+              return (
+                <div key={`o${inv.id}`} className="flex items-center justify-between gap-3 px-4 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{inv.customerName} owes {formatCurrency(inv.grandTotal - inv.paidAmount)}</p>
+                    <p className="text-xs text-muted-foreground">{inv.invoiceNumber} was due {formatDate(inv.dueDate)}</p>
+                  </div>
+                  {wa && <Button variant="outline" size="sm" className="gap-1" asChild><a href={wa} target="_blank" rel="noopener noreferrer"><MessageCircle className="w-4 h-4" /> Send WhatsApp reminder</a></Button>}
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}

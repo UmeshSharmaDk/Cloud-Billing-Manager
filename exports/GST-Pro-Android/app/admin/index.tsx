@@ -13,7 +13,9 @@ import { Figure } from "../(tabs)/index";
 type Stats = Record<string, number> & { recentUsers: User[] };
 export type CapacityRequest = { id: number; adminName: string; adminEmail: string; additionalUsers: number; amountInr: number; status: string; createdAt: string; grantedUserLimit?: number | null };
 
-type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number };
+type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number;
+  overdue?: number; filings?: Record<string, { filedAt: string } | undefined> };
+const FORMS = ["GSTR-1", "GSTR-3B"] as const;
 
 /** Consultant view: each client's month at a glance; tap to open the client. */
 export function Clients() {
@@ -29,9 +31,10 @@ export function Clients() {
       </View>
       {q.isLoading ? <Loading layout="rows" /> : q.error ? <ErrorView error={q.error} onRetry={q.refetch} /> : !q.data?.clients.length ? <Text style={s.muted}>No clients yet.</Text> :
         q.data.clients.map((c) => (
-          <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
+          <Pressable key={c.id} onPress={() => router.push(`/admin/user/${c.id}`)} style={{ paddingVertical: 8, minHeight: 44, borderTopWidth: 1, borderTopColor: colors.border, gap: 2 }}>
             <Row label={c.business?.name ?? c.name} value={money(c.sales ?? 0)} />
-            <Text style={s.muted}>{c.invoices ?? 0} invoices · GST {money(c.netGst ?? 0)} · owed {money(c.receivable ?? 0)}{c.business?.lockDate ? ` · frozen to ${date(c.business.lockDate)}` : ""}</Text>
+            <Text style={s.muted}>{c.invoices ?? 0} invoices · GST {money(c.netGst ?? 0)} · owed {money(c.receivable ?? 0)}{c.overdue ? ` (${c.overdue} overdue)` : ""}{c.business?.lockDate ? ` · frozen to ${date(c.business.lockDate)}` : ""}</Text>
+            {c.business && <Text style={s.muted}>{FORMS.map((f) => `${f} ${c.filings?.[f] ? "filed" : "not filed"}`).join(" · ")}</Text>}
           </Pressable>
         ))}
     </Card>
@@ -81,7 +84,7 @@ export default function AdminHome() {
       {!!d.recentUsers?.length && (
         <Card title="Recent users">
           {d.recentUsers.map((u) => (
-            <Pressable key={u.id} onPress={() => router.push(`/admin/user/${u.id}`)} style={{ flexDirection: "row", justifyContent: "space-between", paddingVertical: 6 }}>
+            <Pressable key={u.id} onPress={() => router.push(`/admin/user/${u.id}`)} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6, minHeight: 44 }}>
               <View style={{ flexShrink: 1 }}>
                 <Text style={{ color: colors.text, fontWeight: "600" }}>{u.name}</Text>
                 <Text style={s.muted}>{u.email}</Text>

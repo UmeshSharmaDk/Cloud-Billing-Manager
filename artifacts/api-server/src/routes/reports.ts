@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { db, invoicesTable, purchasesTable, productsTable } from "@workspace/db";
+import { db, invoicesTable, purchasesTable, productsTable, businessesTable } from "@workspace/db";
+import { buildGstr1Json } from "../lib/gstr1-json";
+import { buildTallyXml, type TallyDoc } from "../lib/tally-xml";
 import { eq, and, gte, lte, count, desc, sql, sum as sqlSum } from "drizzle-orm";
 import { taxInvoice, activePurchase, invoiceSign, signedInvoice } from "../lib/tax-documents";
 import { requireAuth, requireBusiness } from "./auth";
@@ -112,6 +114,60 @@ router.get("/gstr1", requireAuth, requireBusiness, validateQuery(MonthYearQuery)
     byRate,
     invoices: mapped.map(inv => ({ ...inv, taxableAmount: inv.subtotal, totalAmount: inv.grandTotal })),
   });
+});
+
+/**
+ * GET /reports/gstr1/json — the month's GSTR-1 as a file for the GST portal's
+ * offline upload. Same documents as the GSTR-1 report above.
+ */
+router.get("/gstr1/json", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const { month, year, from, to } = monthRange(req.validatedQuery);
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, req.businessId)).limit(1);
+  if (!business?.gstin) return res.status(400).json({ error: "Add the business GSTIN in Settings before downloading GSTR-1." });
+  const invoices = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.businessId, req.businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)))
+    .orderBy(invoicesTable.invoiceDate, invoicesTable.invoiceNumber);
+  const { json } = buildGstr1Json({
+    gstin: business.gstin,
+    homeState: business.stateCode ?? business.gstin.slice(0, 2),
+    month, year,
+    invoices: invoices.map(mapInvoice),
+  });
+  const name = `GSTR1_${business.gstin.toUpperCase()}_${String(month).padStart(2, "0")}${year}.json`;
+  res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+  return res.json(json);
+});
+
+/**
+ * GET /reports/tally — the month's sales and purchases as TallyPrime vouchers.
+ */
+router.get("/tally", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {
+  const { month, year, from, to } = monthRange(req.validatedQuery);
+  const [business] = await db.select().from(businessesTable).where(eq(businessesTable.id, req.businessId)).limit(1);
+  const [invoices, purchases] = await Promise.all([
+    db.select().from(invoicesTable)
+      .where(and(eq(invoicesTable.businessId, req.businessId), taxInvoice(invoicesTable), gte(invoicesTable.invoiceDate, from), lte(invoicesTable.invoiceDate, to)))
+      .orderBy(invoicesTable.invoiceDate, invoicesTable.invoiceNumber),
+    db.select().from(purchasesTable)
+      .where(and(eq(purchasesTable.businessId, req.businessId), activePurchase(purchasesTable), gte(purchasesTable.invoiceDate, from), lte(purchasesTable.invoiceDate, to)))
+      .orderBy(purchasesTable.invoiceDate, purchasesTable.invoiceNumber),
+  ]);
+  const docs: TallyDoc[] = [
+    ...invoices.map((i) => ({
+      kind: "sale" as const, type: i.type, number: i.invoiceNumber, date: i.invoiceDate,
+      party: i.customerName, partyGstin: i.customerGstin, subtotal: i.subtotal,
+      cgst: i.cgst, sgst: i.sgst, igst: i.igst, tcs: i.tcsAmount, total: i.grandTotal,
+    })),
+    ...purchases.map((p) => ({
+      kind: "purchase" as const, type: "Purchase", number: p.invoiceNumber, date: p.invoiceDate,
+      party: p.vendorName, partyGstin: p.vendorGstin, subtotal: p.subtotal,
+      cgst: p.cgst, sgst: p.sgst, igst: p.igst, total: p.grandTotal,
+    })),
+  ];
+  const name = `Tally_${(business?.name ?? "books").replace(/[^\w]+/g, "_").slice(0, 40)}_${String(month).padStart(2, "0")}${year}.xml`;
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+  return res.send(buildTallyXml(docs, business?.name));
 });
 
 router.get("/gstr3b", requireAuth, requireBusiness, validateQuery(MonthYearQuery), async (req: Req, res) => {

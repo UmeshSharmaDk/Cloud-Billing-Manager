@@ -25,6 +25,7 @@ export type AuditAction =
   | "user.updated"
   | "user.role_changed"
   | "user.password_reset"
+  | "user.password_reset_requested"
   | "user.deleted"
   | "user.restored"
   | "user.status_changed"
@@ -42,6 +43,11 @@ export type AuditAction =
   | "capacity_request.declined"
   | "business.lock_date_changed"
   | "business.updated_by_admin"
+  | "business.viewed_by_admin"
+  | "business.team_mfa_changed"
+  | "return.marked_filed"
+  | "return.unmarked_filed"
+  | "invoice.emailed"
   | `${BookKind}.${"created" | "updated" | "deleted" | "status_changed"}`;
 
 export type BookKind = "invoice" | "purchase" | "payment" | "eway_bill";

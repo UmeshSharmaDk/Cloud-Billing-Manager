@@ -16,6 +16,7 @@ import reportsRouter from "./reports";
 import ewayBillsRouter from "./eway-bills";
 import superadminRouter from "./superadmin";
 import importRouter from "./import";
+import demoRequestsRouter from "./demo-requests";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use("/dashboard", dashboardRouter);
 router.use("/reports", reportsRouter);
 router.use("/eway-bills", ewayBillsRouter);
 router.use("/import", importRouter);
+router.use("/demo-requests", demoRequestsRouter);
 
 export default router;

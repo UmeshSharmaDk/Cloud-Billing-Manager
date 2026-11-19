@@ -150,6 +150,8 @@ jobs:
       - run: pnpm run typecheck
       - name: Unit tests
         run: pnpm --filter @workspace/api-server run test
+      - name: Web unit tests
+        run: pnpm --filter @workspace/gst-platform run test
 
       # `pnpm run typecheck` does not build the app, and two security properties of the
       # browser bundle only exist in the build output: the Content-Security-Policy <meta> tag
@@ -262,10 +264,20 @@ jobs:
       - name: Install the psql client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
 
-      - name: Create the schema
+      # The suite runs against a database built only from lib/db/migrations,
+      # the same files production receives, so a schema change that ships
+      # without its migration fails here rather than on the live site.
+      - name: Create the schema from the migrations
         env:
           DATABASE_URL: ${{ env.ADMIN_DATABASE_URL }}
-        run: pnpm --filter @workspace/db run push --force
+        run: pnpm --filter @workspace/db run migrate
+
+      - name: Assert the migrations match the schema code
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: lib/db/test/schema-drift.sh
 
       - name: Create the unprivileged application role
         env:
@@ -393,7 +405,7 @@ jobs:
         run: |
           env -i PATH="$PATH" PORT="$PORT" NODE_ENV=production \
             APP_DATABASE_URL="$APP_DATABASE_URL" SESSION_SECRET="$(openssl rand -base64 48)" \
-            ALLOWED_ORIGINS="$ALLOWED_ORIGINS" MAIL_OUTBOX_PATH="$MAIL_OUTBOX_PATH" MAIL_FROM="$MAIL_FROM" \
+            ALLOWED_ORIGINS="$ALLOWED_ORIGINS" MAIL_OUTBOX_PATH="$MAIL_OUTBOX_PATH" MAIL_FROM="$MAIL_FROM" HOUSEKEEPING_INTERVAL_MS=2000 \
             DISABLE_BREACH_CHECK="$DISABLE_BREACH_CHECK" AUTH_RATE_LIMIT_MAX="$AUTH_RATE_LIMIT_MAX" \
             REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" ALLOW_PUBLIC_REGISTRATION="$ALLOW_PUBLIC_REGISTRATION" \
             node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
@@ -410,6 +422,35 @@ jobs:
         env:
           DEVELOPMENT_APP_DATABASE_URL: ${{ env.APP_DATABASE_URL }}
         run: pnpm --filter @workspace/db run test:rls
+
+      # The built app in a real browser: sign in and issue an invoice. A second
+      # server serves the web build on the origin the policy allows.
+      - name: Build the frontend for the browser smoke test
+        env:
+          PORT: "25512"
+          BASE_PATH: /
+        run: pnpm --filter @workspace/gst-platform run build
+
+      - name: Browser smoke test
+        run: |
+          mkdir -p /tmp/pw && (cd /tmp/pw && npm init -y >/dev/null && npm install --no-save --no-audit --no-fund playwright@1.49.1 >/dev/null && npx playwright install --with-deps chromium >/dev/null)
+          env -i PATH="$PATH" PORT=25512 NODE_ENV=production \
+            APP_DATABASE_URL="$APP_DATABASE_URL" SESSION_SECRET="$(openssl rand -base64 48)" \
+            ALLOWED_ORIGINS=http://localhost:25512 MAIL_OUTBOX_PATH=/tmp/e2e-outbox.jsonl MAIL_FROM="$MAIL_FROM" \
+            DISABLE_BREACH_CHECK="$DISABLE_BREACH_CHECK" ALLOW_PUBLIC_REGISTRATION="$ALLOW_PUBLIC_REGISTRATION" \
+            WEB_DIST_DIR="$GITHUB_WORKSPACE/artifacts/gst-platform/dist/public" \
+            node artifacts/api-server/dist/index.mjs > /tmp/e2e-api.log 2>&1 &
+          timeout 60 bash -c 'until curl -sf http://localhost:25512/api/healthz >/dev/null; do sleep 1; done'
+          PLAYWRIGHT_FROM=/tmp/pw BASE_URL=http://localhost:25512 MAIL_OUTBOX_PATH=/tmp/e2e-outbox.jsonl \
+            node artifacts/gst-platform/e2e/smoke.mjs
+
+      - name: Browser smoke test screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-failure
+          path: /tmp/e2e-failure.png
+          if-no-files-found: ignore
 
       - name: Server log on failure
         if: failure()

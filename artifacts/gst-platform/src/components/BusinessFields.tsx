@@ -87,7 +87,7 @@ export function BusinessEditor({ userId, business, onSaved }: { userId: number; 
       <CardHeader className="pb-3"><CardTitle className="flex items-center gap-2 text-base"><Building2 className="h-4 w-4" /> Business details</CardTitle></CardHeader>
       <CardContent className="space-y-4">
         <BusinessFields value={form} set={(k, v) => setForm((p) => ({ ...p, [k]: v }))} />
-        <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save business details"}</Button>
+        <Button onClick={save} loading={saving}>Save business details</Button>
       </CardContent>
     </Card>
   );

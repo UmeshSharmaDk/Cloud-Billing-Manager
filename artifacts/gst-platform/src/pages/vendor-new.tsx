@@ -66,8 +66,8 @@ export default function VendorNewPage() {
           <div className="space-y-2"><Label>Pincode</Label><Input value={form.pincode} onChange={(e) => set("pincode", e.target.value)} maxLength={6} /></div>
           <div className="space-y-2"><Label>Payment Terms</Label><Input value={form.paymentTerms} onChange={(e) => set("paymentTerms", e.target.value)} placeholder="Net 30" /></div>
           <div className="sm:col-span-2 flex justify-end gap-3 pt-2">
-            <Button type="button" variant="outline" onClick={() => setLocation("/vendors")}>Cancel</Button>
-            <Button type="submit" disabled={mutation.isPending}>{mutation.isPending ? "Saving..." : "Add Vendor"}</Button>
+            <Button type="button" variant="ghost" onClick={() => setLocation("/vendors")}>Cancel</Button>
+            <Button type="submit" loading={mutation.isPending}>Add Vendor</Button>
           </div>
         </CardContent>
       </Card>

@@ -14,7 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Search, Users, Shield, ChevronRight, UserPlus, CircleAlert, CircleCheck, Clock3,
-  UserRound, ArrowUpRight, LoaderCircle, Info,
+  UserRound, ArrowUpRight, Info,
 } from "lucide-react";
 
 const currency = (value: number) => new Intl.NumberFormat("en-IN", {
@@ -224,7 +224,7 @@ export default function AdminUsersPage() {
                   </fieldset>
                 )}
                 {createError && <p role="alert" className="rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger-text">{createError}</p>}
-                <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button><Button type="submit" disabled={pending} data-testid="button-create-user">{createUser.isPending && <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />}{createUser.isPending ? "Creating…" : "Create user"}</Button></div>
+                <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button><Button type="submit" loading={createUser.isPending} disabled={pending} data-testid="button-create-user">Create user</Button></div>
               </form>
             </CardContent>
           </Card>
@@ -243,7 +243,7 @@ export default function AdminUsersPage() {
                 <div className="space-y-1.5"><Label htmlFor="additional-users">Additional users requested</Label><Input id="additional-users" data-testid="input-capacity-count" type="number" min="1" max="100000" step="1" value={capacityCount} onChange={(e) => setCapacityCount(e.target.value)} required /></div>
                 <div className="flex items-center justify-between rounded-lg bg-muted/60 px-3 py-2.5 text-sm"><span className="text-muted-foreground">Quoted amount</span><strong className="tabular-nums">{currency((Number(capacityCount) || 0) * 1000)}</strong></div>
                 {capacityError && <p role="alert" className="rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger-text">{capacityError}</p>}
-                <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={() => setShowCapacity(false)}>Cancel</Button><Button type="submit" disabled={requestCapacity.isPending} data-testid="button-submit-capacity">{requestCapacity.isPending && <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />}{requestCapacity.isPending ? "Submitting…" : "Submit request"}</Button></div>
+                <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="ghost" onClick={() => setShowCapacity(false)}>Cancel</Button><Button type="submit" loading={requestCapacity.isPending} data-testid="button-submit-capacity">Ask for more seats</Button></div>
                   </form>}
             </CardContent>
           </Card>

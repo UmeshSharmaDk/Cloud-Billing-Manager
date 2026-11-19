@@ -211,7 +211,8 @@
 
 @media print {
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-  body * { visibility: hidden; }
+  /* An invoice prints alone; any other page prints its content without the app's chrome. */
+  body:has(#invoice-print-area) * { visibility: hidden; }
   #invoice-print-area, #invoice-print-area * { visibility: visible; }
   #invoice-print-area {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;

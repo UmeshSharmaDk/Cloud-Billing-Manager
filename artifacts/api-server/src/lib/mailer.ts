@@ -232,6 +232,73 @@ export function adminInvitationMessage(to: string, link: string): Message {
   };
 }
 
+/** A password reset link for an existing account. */
+export function passwordResetMessage(to: string, link: string): Message {
+  return {
+    to,
+    subject: "Reset your Billing Pilot password",
+    text: [
+      "Hello,",
+      "",
+      "Someone, we hope you, asked to reset the password for this Billing Pilot",
+      "account. Open the link below to choose a new one:",
+      "",
+      link,
+      "",
+      "The link works once and expires in 30 minutes. Resetting signs you out on",
+      "every device.",
+      "",
+      "If this was not you, ignore this message. Your password has not changed.",
+    ].join("\n"),
+  };
+}
+
+/** An invoice summary sent to the customer, with a UPI link when something is due. */
+export function invoiceMessage(to: string, inv: {
+  business: string; number: string; date: string; dueDate?: string | null;
+  customer: string; total: string; balance: string; items: { description: string; quantity: unknown; amount: string }[];
+  upiLink?: string | null;
+}): Message {
+  return {
+    to,
+    subject: `Invoice ${inv.number} from ${inv.business}`,
+    text: [
+      `Dear ${inv.customer},`,
+      "",
+      `Please find the details of invoice ${inv.number} dated ${inv.date} from ${inv.business}.`,
+      "",
+      ...inv.items.map((i) => `  ${i.description} x ${i.quantity}: Rs ${i.amount}`),
+      "",
+      `Total: Rs ${inv.total}`,
+      `Balance due: Rs ${inv.balance}${inv.dueDate ? ` (due by ${inv.dueDate})` : ""}`,
+      ...(inv.upiLink ? ["", "Pay by UPI from your phone:", inv.upiLink] : []),
+      "",
+      `Thank you for your business.`,
+      inv.business,
+    ].join("\n"),
+  };
+}
+
+/** A gentle reminder for an overdue invoice, sent weekly when the business turns it on. */
+export function paymentReminderMessage(to: string, r: {
+  business: string; customer: string; number: string; date: string; dueDate: string; balance: string; upiLink?: string | null; replyTo?: string | null;
+}): Message {
+  return {
+    to,
+    subject: `Payment reminder: invoice ${r.number} from ${r.business}`,
+    text: [
+      `Dear ${r.customer},`,
+      "",
+      `This is a reminder that invoice ${r.number} dated ${r.date} from ${r.business} has Rs ${r.balance} due since ${r.dueDate}.`,
+      ...(r.upiLink ? ["", "Pay by UPI from your phone:", r.upiLink] : []),
+      "",
+      r.replyTo ? `If you have already paid, please let us know at ${r.replyTo}.` : "If you have already paid, please ignore this message.",
+      "",
+      r.business,
+    ].join("\n"),
+  };
+}
+
 /**
  * Send without letting a mail failure change what the caller returns.
  *

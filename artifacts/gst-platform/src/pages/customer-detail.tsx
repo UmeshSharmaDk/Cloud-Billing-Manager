@@ -47,8 +47,8 @@ export default function CustomerDetailPage() {
           <Button variant="outline" className="gap-2" onClick={() => setEditing(true)}><Edit2 className="w-4 h-4" /> Edit</Button>
         ) : (
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => { setEditing(false); setForm(c); }}>Cancel</Button>
-            <Button className="gap-2" onClick={handleSave} disabled={mutation.isPending}><Save className="w-4 h-4" />{mutation.isPending ? "Saving..." : "Save"}</Button>
+            <Button variant="ghost" onClick={() => { setEditing(false); setForm(c); }}>Cancel</Button>
+            <Button className="gap-2" onClick={handleSave} loading={mutation.isPending}><Save className="w-4 h-4" />Save customer</Button>
           </div>
         )}
       </div>

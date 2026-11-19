@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -24,6 +24,8 @@ export const businessesTable = pgTable("businesses", {
   bankBranch: text("bank_branch"),
   /** UPI ID (VPA) shown as a pay-by-QR on invoices, e.g. shop@okhdfcbank. */
   upiId: text("upi_id"),
+  /** Email customers a payment reminder each week while an invoice is overdue. */
+  autoReminders: boolean("auto_reminders").notNull().default(false),
   termsConditions: text("terms_conditions"),
   /**
    * Books are frozen on and before this day (YYYY-MM-DD): invoices, purchases,
