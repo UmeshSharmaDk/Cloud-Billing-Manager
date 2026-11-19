@@ -13,6 +13,7 @@ import router from "./routes";
 import { logger, scrubError } from "./lib/logger";
 import { config } from "./lib/config";
 import { alertServerError } from "./lib/error-alerts";
+import { payuCallback } from "./routes/payu-callback";
 import { sendQuietly } from "./lib/mailer";
 import { csrfProtection, issueCsrfCookie, requireAllowedOrigin } from "./middleware/csrf";
 
@@ -50,7 +51,7 @@ if (webDir) {
           workerSrc: ["'self'"],
           objectSrc: ["'none'"],
           baseUri: ["'self'"],
-          formAction: ["'self'"],
+          formAction: ["'self'", "https://test.payu.in", "https://secure.payu.in"], // PayU checkout
           frameAncestors: ["'none'"],
         },
       },
@@ -148,6 +149,9 @@ app.use(
     maxAge: 86_400,
   }),
 );
+
+// PayU's result arrives as a cross-site form POST; it is verified by signature.
+app.post("/api/payments/payu/callback", ...payuCallback);
 
 // Refused before the body is read, so a forged cross-site submission costs
 // nothing to reject.

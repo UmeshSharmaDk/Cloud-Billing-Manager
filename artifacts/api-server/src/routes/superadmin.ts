@@ -26,6 +26,7 @@ import { mailer, adminInvitationMessage, describeMailError } from "../lib/mailer
 import { config } from "../lib/config";
 import { assertNotSelf } from "../lib/admin-guards";
 import { clearFailures, mfaKey } from "../middleware/rate-limit";
+import { payuConfig, payuForm } from "../lib/payu";
 
 export const DEFAULT_ADMIN_USER_LIMIT = 15;
 export const ADDITIONAL_USER_PRICE_INR = 1000;
@@ -293,6 +294,8 @@ router.get("/capacity-requests", requireAdmin, async (req: Req, res) => {
       reviewedAt: row.reviewedAt,
       grantedUserLimit: row.grantedUserLimit,
       createdAt: row.createdAt,
+      paymentStatus: row.paymentStatus,
+      paidAt: row.paidAt,
     })),
     additionalUserPriceInr: ADDITIONAL_USER_PRICE_INR,
   });
@@ -379,6 +382,31 @@ router.post("/capacity-requests", requireAdmin, validateBody(CreateCapacityReque
       createdAt: created.createdAt,
     });
   });
+
+/**
+ * POST /superadmin/capacity-requests/:id/pay — the signed PayU form for the
+ * admin's own pending request. The browser posts it to PayU; PayU posts the
+ * result to /api/payments/payu/callback.
+ */
+router.post("/capacity-requests/:id/pay", validateParams(IdParam), async (req: Req, res) => {
+  if (req.userRole !== "admin") return res.status(403).json({ error: "Only the admin who asked for the seats can pay." });
+  const [request] = await db.select().from(capacityRequestsTable)
+    .where(and(eq(capacityRequestsTable.id, req.validatedParams.id), eq(capacityRequestsTable.adminId, req.user.id))).limit(1);
+  if (!request || request.status !== "pending") return res.status(404).json({ error: "Pending seat request not found." });
+  if (request.paymentStatus === "paid") return res.status(409).json({ error: "This request is already paid." });
+  const cfg = payuConfig();
+  const txnid = `CR${request.id}-${crypto.randomBytes(5).toString("hex")}`;
+  await db.update(capacityRequestsTable).set({ payuTxnid: txnid }).where(eq(capacityRequestsTable.id, request.id));
+  const back = `${config.appBaseUrl}/api/payments/payu/callback`;
+  return res.json({
+    action: cfg.url,
+    test: !cfg.live,
+    fields: payuForm(cfg, {
+      txnid, amount: request.amountInr.toFixed(2), productinfo: `${request.additionalUsers} more users on Billing Pilot`,
+      firstname: req.user.name.slice(0, 60), email: req.user.email, udf1: String(request.id),
+    }, back, back),
+  });
+});
 
 router.patch("/capacity-requests/:id/review", requireSuperadmin, validateParams(IdParam),
   validateBody(ReviewCapacityRequestBody), async (req: Req, res) => {

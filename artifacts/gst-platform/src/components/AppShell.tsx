@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LanguageToggle } from "@/lib/i18n";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
@@ -112,7 +113,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="text-sm font-medium text-muted-foreground truncate max-w-[120px]">
             {user.name}
           </div>
-          <ThemeToggle />
+          <LanguageToggle />
+            <ThemeToggle />
         </div>
       </div>
 
@@ -152,6 +154,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {isSuperadmin ? "Superadmin" : "Admin"}
               </span>
             )}
+            <LanguageToggle />
             <ThemeToggle />
           </div>
         </header>

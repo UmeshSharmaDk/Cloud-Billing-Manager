@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LanguageToggle } from "@/lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -56,7 +57,8 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+    <div className="relative min-h-screen bg-background flex items-center justify-center p-4">
+      <LanguageToggle className="absolute right-4 top-4" />
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           {/* The logo's dark lettering needs a white plate to stay readable in dark mode. */}
