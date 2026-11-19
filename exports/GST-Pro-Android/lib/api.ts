@@ -79,6 +79,25 @@ export async function apiUpload<T>(path: string, uri: string, contentType: strin
   return data as T;
 }
 
+/** Saves a file the server makes (a GSTR-1 JSON, Tally XML) into the app's cache and returns its local path. */
+export async function apiDownload(path: string, filename: string): Promise<string> {
+  if (!API_BASE) throw new ApiError(0, "This app was not set up correctly. Please install it again.");
+  const to = `${FileSystem.cacheDirectory}${filename.replace(/[^\w.-]+/g, "_")}`;
+  let res: FileSystem.FileSystemDownloadResult;
+  try {
+    res = await FileSystem.downloadAsync(API_BASE + path, to, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  } catch {
+    throw new ApiError(0, "Could not reach the server. Check your connection and try again.");
+  }
+  if (res.status < 200 || res.status >= 300) {
+    let data: any = null;
+    try { data = JSON.parse(await FileSystem.readAsStringAsync(res.uri)); } catch { /* not JSON */ }
+    if (res.status === 401 && token) onUnauthorized();
+    throw new ApiError(res.status, data?.error ?? `Request failed (${res.status}).`, data);
+  }
+  return res.uri;
+}
+
 /** Adds `asUser` so an admin reads one of their users' records (read-only on the server). */
 export const viewAs = (path: string, asUser?: string) =>
   asUser ? `${path}${path.includes("?") ? "&" : "?"}asUser=${encodeURIComponent(asUser)}` : path;

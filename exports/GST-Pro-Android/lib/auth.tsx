@@ -11,6 +11,7 @@ type Auth = {
   finishMfa: (mfaToken: string, code: string) => Promise<void>;
   /** Swap in a new session token (two-factor enrolment issues one) and reload the user. */
   adopt: (token: string) => Promise<void>;
+  refresh: () => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -67,6 +68,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(await api<User>("/auth/me"));
   }, [forget]);
 
+  /** Reads the signed-in user again after a change to their own account. */
+  const refresh = useCallback(async () => { setUser(await api<User>("/auth/me")); }, []);
+
   const signOut = useCallback(async () => {
     // Revoke the token on the server in the background (the request picks the
     // token up before it is forgotten) and sign out locally at once: waiting
@@ -75,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await forget();
   }, [forget]);
 
-  return <AuthContext.Provider value={{ user, ready, signIn, finishMfa, adopt, signOut }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, ready, signIn, finishMfa, adopt, refresh, signOut }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

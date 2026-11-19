@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { router, Stack } from "expo-router";
-import { useState } from "react";
+import { router, Stack, useLocalSearchParams } from "expo-router";
+import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 import { api } from "@/lib/api";
 import { emptyLine, LineItems, lineError, toItems, type Line } from "@/lib/LineItems";
@@ -26,6 +26,24 @@ export default function NewInvoice() {
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const { busy, run } = useSave();
 
+  // "Duplicate invoice" opens this screen with ?from=<id>, and the dashboard's
+  // monthly repeat adds &repeat=1: same customer and lines, today's date, a new number.
+  const { from, repeat } = useLocalSearchParams<{ from?: string; repeat?: string }>();
+  const source = useQuery({ queryKey: [`/invoices/${from}`], queryFn: () => api<Invoice>(`/invoices/${encodeURIComponent(from!)}`), enabled: !!from }).data;
+  useEffect(() => {
+    if (!source) return;
+    if (source.customerId) setCustomerId(String(source.customerId));
+    setWalkIn(source.customerName ?? ""); // used if the customer is past the picker's first 100
+    setType(source.type || "Tax Invoice");
+    setPlace(source.placeOfSupply ?? "");
+    setNotes(source.notes ?? "");
+    setLines((source.items ?? []).map((it) => ({
+      productId: it.productId ?? null, description: it.description ?? "", hsnCode: it.hsnCode ?? "",
+      quantity: String(it.quantity ?? 1), unit: it.unit ?? "Nos", unitPrice: String(it.unitPrice ?? ""),
+      gstRate: String(it.gstRate ?? 18), discount: String(it.discount ?? 0),
+    })));
+  }, [source]);
+
   const customer = customers.find((c) => String(c.id) === customerId);
   const place = placeOfSupply || customer?.stateCode || "";
 
@@ -40,6 +58,7 @@ export default function NewInvoice() {
           type, invoiceDate, dueDate: dueDate || null, placeOfSupply: place || null, notes: notes.trim() || null, ...(Number(tcs) > 0 ? { tcsRate: Number(tcs) } : {}),
           ...(customer ? { customerId: customer.id } : { customerName: walkIn.trim() }),
           items: toItems(lines, true),
+          ...(repeat === "1" && from ? { repeatOf: Number(from) } : {}),
         },
       }),
       (r) => router.replace(`/invoice/${r.invoice.id}`),

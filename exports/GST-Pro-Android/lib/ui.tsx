@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
 import * as Updates from "expo-updates";
-import { ActivityIndicator, Animated, DevSettings, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import { ActivityIndicator, Animated, DevSettings, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, TextInput, View, type TextInputProps } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { statusColor } from "./format";
+import { isHindi, setHindi } from "./i18n";
 
 /**
  * Light and dark palettes. Every screen builds its StyleSheet from `colors` when it loads, so the
@@ -25,6 +26,11 @@ export function setDarkMode(on: boolean) {
 /** The light/dark switch on every role's account card. */
 export function ThemeToggle() {
   return <Button title={isDark ? "Switch to light mode" : "Switch to dark mode"} variant="outline" onPress={() => setDarkMode(!isDark)} />;
+}
+
+/** Hindi or English; the label is in the language it switches to. */
+export function LanguageToggle() {
+  return <Button title={isHindi ? "Switch to English" : "हिंदी में देखें"} variant="outline" onPress={() => setHindi(!isHindi)} />;
 }
 
 /** A grey placeholder for text or a box that is still loading. */
@@ -252,11 +258,12 @@ export function Form({ children }: { children: ReactNode }) {
 }
 
 /** A one-field dialog: a part-payment amount, or the caller's own password before a privileged action. */
-export function Prompt({ visible, title, message, secure, numeric, placeholder, onSubmit, onCancel, busy }: {
-  visible: boolean; title: string; message: string; secure?: boolean; numeric?: boolean; placeholder?: string;
+export function Prompt({ visible, title, message, secure, numeric, email, placeholder, initial = "", action = "Confirm", onSubmit, onCancel, busy }: {
+  visible: boolean; title: string; message: string; secure?: boolean; numeric?: boolean; email?: boolean; placeholder?: string; initial?: string; action?: string;
   onSubmit: (value: string) => void; onCancel: () => void; busy?: boolean;
 }) {
-  const [v, setV] = useState("");
+  const [v, setV] = useState(initial);
+  useEffect(() => { if (visible) setV(initial); }, [visible, initial]);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <ModalFrame backgroundColor="#0008">
@@ -265,13 +272,27 @@ export function Prompt({ visible, title, message, secure, numeric, placeholder, 
           <Text style={s.title}>{title}</Text>
           <Text style={s.muted}>{message}</Text>
           <TextInput style={s.input} secureTextEntry={secure} autoFocus autoCapitalize="none" value={v} onChangeText={setV}
-            keyboardType={numeric ? "decimal-pad" : "default"} placeholder={placeholder} placeholderTextColor={colors.muted} />
-          <Button title="Confirm" busy={busy} disabledReason={v ? undefined : "Fill in the box above first."} onPress={() => { onSubmit(v); setV(""); }} />
+            keyboardType={numeric ? "decimal-pad" : email ? "email-address" : "default"} placeholder={placeholder} placeholderTextColor={colors.muted} />
+          <Button title={action} busy={busy} disabledReason={v ? undefined : "Fill in the box above first."} onPress={() => { onSubmit(v); setV(""); }} />
           <Button title="Cancel" variant="outline" onPress={() => { setV(""); onCancel(); }} />
         </View>
       </View>
       </ModalFrame>
     </Modal>
+  );
+}
+
+/** An on/off setting with a line saying what it does. The switch row is at least 44 tall. */
+export function ToggleRow({ label, note, value, onChange, busy }: { label: string; note: string; value: boolean; onChange: (v: boolean) => void; busy?: boolean }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, minHeight: 44 }}>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={{ color: colors.text, fontSize: 15, fontWeight: "500" }}>{label}</Text>
+        <Text style={s.muted}>{note}</Text>
+      </View>
+      {busy ? <ActivityIndicator color={colors.primary} style={{ width: 52 }} />
+        : <Switch value={value} onValueChange={onChange} accessibilityLabel={label} trackColor={{ true: colors.primary, false: colors.border }} thumbColor={colors.card} />}
+    </View>
   );
 }
 

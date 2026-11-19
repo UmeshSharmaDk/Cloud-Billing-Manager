@@ -10,7 +10,7 @@ import { invoiceHtml } from "@/lib/invoiceHtml";
 import { reminderLink } from "@/lib/whatsapp";
 import { useSave } from "@/lib/save";
 import type { Business, Customer, Invoice } from "@/lib/types";
-import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill, pullToRefresh } from "@/lib/ui";
+import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill, ToggleRow, pullToRefresh } from "@/lib/ui";
 
 export default function InvoiceDetail() {
   // `asUser`: an admin looking at one of their users' invoices, read-only.
@@ -23,6 +23,7 @@ export default function InvoiceDetail() {
   const { busy, run } = useSave();
   const [partial, setPartial] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [emailing, setEmailing] = useState(false);
 
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
@@ -30,6 +31,14 @@ export default function InvoiceDetail() {
   const due = inv.grandTotal - (inv.paidAmount ?? 0);
   const setStatus = (paymentStatus: string, paidAmount?: number) =>
     run(() => api(`/invoices/${inv.id}/status`, { method: "PATCH", body: { paymentStatus, ...(paidAmount !== undefined ? { paidAmount } : {}) } }), () => setPartial(false));
+
+  const sendEmail = (to: string) =>
+    run(() => api<{ to: string }>(`/invoices/${inv.id}/email`, { method: "POST", body: { to: to.trim() } }), (r) => {
+      setEmailing(false);
+      Alert.alert("Invoice sent", `Sent to ${r.to}.`);
+    });
+  const setRepeat = (repeatMonthly: boolean) =>
+    run(() => api(`/invoices/${inv.id}/repeat`, { method: "PUT", body: { repeatMonthly } }));
 
   const share = async () => {
     setSharing(true);
@@ -59,6 +68,18 @@ export default function InvoiceDetail() {
         <View style={{ flex: 1 }}><Button title="Share PDF" busy={sharing} onPress={share} /></View>
         <View style={{ flex: 1 }}><Button title="Print" variant="outline" onPress={() => Print.printAsync({ html: invoiceHtml(inv, biz.data, cust.data) }).catch(() => {})} /></View>
       </View>
+      {!asUser && (
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flex: 1 }}><Button title="Email invoice" variant="outline" onPress={() => setEmailing(true)} /></View>
+          <View style={{ flex: 1 }}><Button title="Duplicate invoice" variant="outline" onPress={() => router.push({ pathname: "/invoice/new", params: { from: String(inv.id) } })} /></View>
+        </View>
+      )}
+      {!asUser && inv.status !== "cancelled" && (
+        <Card>
+          <ToggleRow label="Repeat every month" note="Each new month the dashboard offers a copy to send."
+            value={!!inv.repeatMonthly} onChange={setRepeat} busy={busy} />
+        </Card>
+      )}
 
       {!asUser && inv.status !== "cancelled" && (
         <Card title="Payment">
@@ -115,6 +136,9 @@ export default function InvoiceDetail() {
       <Prompt visible={partial} title="Record a part-payment" numeric busy={busy} placeholder="Amount in ₹"
         message={`Total received so far against ${inv.invoiceNumber}. More than zero and less than ${money(inv.grandTotal)}.`}
         onCancel={() => setPartial(false)} onSubmit={(v) => setStatus("partial", Number(v))} />
+      <Prompt visible={emailing} title="Email this invoice" action="Send invoice" email busy={busy} placeholder="customer@example.com" initial={(cust.data?.email as string) ?? ""}
+        message="The customer gets the invoice with a link to pay by UPI when you have one set up."
+        onCancel={() => setEmailing(false)} onSubmit={sendEmail} />
     </ScrollView>
   );
 }

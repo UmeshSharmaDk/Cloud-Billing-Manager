@@ -24,13 +24,16 @@ const sha512 = (s: string) => crypto.createHash("sha512").update(s).digest("hex"
 
 export interface PayuRequest {
   txnid: string; amount: string; productinfo: string; firstname: string; email: string; udf1?: string;
+  /** "app" when the Android app started the payment: the result page then sends the admin back to it. */
+  udf2?: string;
 }
 
 /** The fields to post to PayU, hash included. */
 export function payuForm(cfg: { key: string; salt: string }, r: PayuRequest, surl: string, furl: string) {
   const udf1 = r.udf1 ?? "";
-  const hash = sha512([cfg.key, r.txnid, r.amount, r.productinfo, r.firstname, r.email, udf1, "", "", "", "", "", "", "", "", "", cfg.salt].join("|"));
-  return { key: cfg.key, txnid: r.txnid, amount: r.amount, productinfo: r.productinfo, firstname: r.firstname, email: r.email, udf1, surl, furl, hash };
+  const udf2 = r.udf2 ?? "";
+  const hash = sha512([cfg.key, r.txnid, r.amount, r.productinfo, r.firstname, r.email, udf1, udf2, "", "", "", "", "", "", "", "", cfg.salt].join("|"));
+  return { key: cfg.key, txnid: r.txnid, amount: r.amount, productinfo: r.productinfo, firstname: r.firstname, email: r.email, udf1, udf2, surl, furl, hash };
 }
 
 /** Whether PayU's callback is genuine: the reverse hash over what it posted. */
@@ -41,4 +44,12 @@ export function verifyPayuResponse(cfg: { key: string; salt: string }, b: Record
   const expected = sha512(parts.join("|"));
   const got = f("hash").toLowerCase();
   return got.length === expected.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+}
+
+/** What PayU is asked to charge for a seat request. */
+export function payuRequestFor(request: { id: number; amountInr: number; additionalUsers: number; payuTxnid: string | null }, admin: { name: string; email: string }, udf2 = "") {
+  return {
+    txnid: request.payuTxnid!, amount: request.amountInr.toFixed(2), productinfo: `${request.additionalUsers} more users on Billing Pilot`,
+    firstname: admin.name.slice(0, 60), email: admin.email, udf1: String(request.id), udf2,
+  };
 }

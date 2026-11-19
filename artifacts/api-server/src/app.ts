@@ -13,7 +13,7 @@ import router from "./routes";
 import { logger, scrubError } from "./lib/logger";
 import { config } from "./lib/config";
 import { alertServerError } from "./lib/error-alerts";
-import { payuCallback } from "./routes/payu-callback";
+import { payuCallback, payuCheckout } from "./routes/payu-callback";
 import { sendQuietly } from "./lib/mailer";
 import { csrfProtection, issueCsrfCookie, requireAllowedOrigin } from "./middleware/csrf";
 
@@ -152,6 +152,7 @@ app.use(
 
 // PayU's result arrives as a cross-site form POST; it is verified by signature.
 app.post("/api/payments/payu/callback", ...payuCallback);
+app.get("/api/payments/payu/checkout/:txnid", payuCheckout);
 
 // Refused before the body is read, so a forged cross-site submission costs
 // nothing to reject.

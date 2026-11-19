@@ -26,7 +26,7 @@ import { mailer, adminInvitationMessage, describeMailError } from "../lib/mailer
 import { config } from "../lib/config";
 import { assertNotSelf } from "../lib/admin-guards";
 import { clearFailures, mfaKey } from "../middleware/rate-limit";
-import { payuConfig, payuForm } from "../lib/payu";
+import { payuConfig, payuForm, payuRequestFor } from "../lib/payu";
 
 export const DEFAULT_ADMIN_USER_LIMIT = 15;
 export const ADDITIONAL_USER_PRICE_INR = 1000;
@@ -395,16 +395,16 @@ router.post("/capacity-requests/:id/pay", validateParams(IdParam), async (req: R
   if (!request || request.status !== "pending") return res.status(404).json({ error: "Pending seat request not found." });
   if (request.paymentStatus === "paid") return res.status(409).json({ error: "This request is already paid." });
   const cfg = payuConfig();
-  const txnid = `CR${request.id}-${crypto.randomBytes(5).toString("hex")}`;
+  // Unguessable: the app's checkout page is reached by this id alone.
+  const txnid = `CR${request.id}-${crypto.randomBytes(8).toString("hex")}`;
   await db.update(capacityRequestsTable).set({ payuTxnid: txnid }).where(eq(capacityRequestsTable.id, request.id));
   const back = `${config.appBaseUrl}/api/payments/payu/callback`;
   return res.json({
     action: cfg.url,
     test: !cfg.live,
-    fields: payuForm(cfg, {
-      txnid, amount: request.amountInr.toFixed(2), productinfo: `${request.additionalUsers} more users on Billing Pilot`,
-      firstname: req.user.name.slice(0, 60), email: req.user.email, udf1: String(request.id),
-    }, back, back),
+    fields: payuForm(cfg, payuRequestFor({ ...request, payuTxnid: txnid }, req.user), back, back),
+    // The Android app opens this in the phone's browser, which posts the same form.
+    checkoutUrl: `${config.appBaseUrl}/api/payments/payu/checkout/${txnid}`,
   });
 });
 
