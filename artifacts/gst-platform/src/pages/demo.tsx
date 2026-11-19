@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LanguageToggle } from "@/lib/i18n";
 import { Link } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,8 @@ export default function DemoPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background px-4 py-10">
+    <div className="relative min-h-screen bg-background px-4 py-10">
+      <LanguageToggle className="absolute right-4 top-4" />
       <div className="mx-auto grid w-full max-w-5xl gap-8 md:grid-cols-[1fr_1.1fr] md:items-start">
         <section className="space-y-5 pt-2">
           <img src="/logo.png" alt="Billing Pilot" width={900} height={303} className="h-14 w-auto rounded-xl bg-white px-3 py-2" />
