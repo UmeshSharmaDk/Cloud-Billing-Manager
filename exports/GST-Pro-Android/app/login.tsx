@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Image, KeyboardAvoidingView, Linking, Platform, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/lib/auth";
-import { Button, colors, s } from "@/lib/ui";
+import { Button, colors, LanguageToggle, s } from "@/lib/ui";
 import { API_BASE } from "@/lib/api";
 
 export default function Login() {
@@ -62,6 +62,7 @@ export default function Login() {
         )}
         <View style={{ height: 8 }} />
         <Text style={[s.muted, { textAlign: "center" }]}>Accounts are created by your administrator.</Text>
+        <LanguageToggle />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

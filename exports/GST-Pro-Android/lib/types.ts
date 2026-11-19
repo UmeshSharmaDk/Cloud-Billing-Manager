@@ -11,6 +11,10 @@ export type User = {
   /** The last day sign-in works (a user inherits their admin's). Only from GET /auth/me. */
   planEnd?: string | null;
   createdAt?: string;
+  /** An admin who requires two-factor sign-in of their users. */
+  requireTeamMfa?: boolean;
+  /** This user's admin requires two-factor sign-in. Only from GET /auth/me. */
+  mfaRequired?: boolean;
 };
 
 export type DashboardStats = {
@@ -82,6 +86,8 @@ export type Invoice = {
   items?: InvoiceItem[];
   /** Present on a single invoice with a balance due when the business has a UPI ID. */
   upi?: { link: string; amount: number; qr: string } | null;
+  /** The dashboard offers a copy of it each new month. */
+  repeatMonthly?: boolean;
 };
 
 export type Product = {

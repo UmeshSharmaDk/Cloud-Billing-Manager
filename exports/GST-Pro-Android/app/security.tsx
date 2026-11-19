@@ -8,7 +8,7 @@ import { Button, Card, Field, Form, s } from "@/lib/ui";
 
 type Setup = { secret: string; otpauthUri: string; qrCodeDataUrl: string };
 
-/** Two-factor sign-in for administrators: turn it on, or replace the recovery codes. */
+/** Two-factor sign-in: required for administrators and for users whose admin asks for it, optional for the rest. */
 export default function Security() {
   const { user, adopt, signOut } = useAuth();
   const [password, setPassword] = useState("");
@@ -17,6 +17,7 @@ export default function Security() {
   const [codes, setCodes] = useState<string[] | null>(null);
   const [newToken, setNewToken] = useState<string | null>(null);
   const { busy, run } = useSave();
+  const forced = user?.role !== "user" || !!user?.mfaRequired;
 
   const start = () => run(() => api<Setup>("/auth/mfa/setup", { method: "POST", body: { confirmPassword: password } }), (r) => { setSetup(r); setPassword(""); });
   const enable = () => run(() => api<{ recoveryCodes: string[]; token: string }>("/auth/mfa/enable", { method: "POST", body: { code: code.trim() } }),
@@ -57,13 +58,15 @@ export default function Security() {
 
   return (
     <Form>
-      <Stack.Screen options={{ title: "Turn on two-factor sign-in", headerBackVisible: false }} />
+      <Stack.Screen options={{ title: "Turn on two-factor sign-in", headerBackVisible: !forced }} />
       {!setup ? (
-        <Card title="Protect your admin account">
-          <Text style={s.muted}>Administrator accounts need an authenticator app, such as Google Authenticator or Microsoft Authenticator, before they can be used.</Text>
+        <Card title="Protect your account">
+          <Text style={s.muted}>{forced
+            ? "Your account needs an authenticator app, such as Google Authenticator or Microsoft Authenticator, before it can be used."
+            : "Sign-in will also ask for a code from an authenticator app, such as Google Authenticator or Microsoft Authenticator."}</Text>
           <Field label="Your password" value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" />
-          <Button title="Start" busy={busy} disabled={!password} onPress={start} />
-          <Button title="Sign out" variant="outline" onPress={signOut} />
+          <Button title="Set up two-factor sign-in" busy={busy} disabledReason={password ? undefined : "Enter your password first."} onPress={start} />
+          {forced && <Button title="Sign out" variant="outline" onPress={signOut} />}
         </Card>
       ) : (
         <Card title="Add Billing Pilot to your authenticator">

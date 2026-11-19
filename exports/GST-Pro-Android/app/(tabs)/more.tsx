@@ -5,7 +5,7 @@ import { router, type Href } from "expo-router";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useAuth } from "@/lib/auth";
 import { date } from "@/lib/format";
-import { Button, colors, Row, s, ThemeToggle } from "@/lib/ui";
+import { Button, colors, LanguageToggle, Row, s, ThemeToggle } from "@/lib/ui";
 
 const LINKS: [string, keyof typeof Ionicons.glyphMap, Href][] = [
   ["Customers", "people-outline", "/customers"],
@@ -40,8 +40,9 @@ export function AccountCard() {
       </View>
       <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: colors.border }}>
         <MenuLink title="Password and sessions" icon="key-outline" href="/password" />
-        {user?.role !== "user" && <MenuLink title="Two-factor sign-in" icon="shield-checkmark-outline" href="/security" />}
+        <MenuLink title="Two-factor sign-in" icon="shield-checkmark-outline" href="/security" />
       </View>
+      <LanguageToggle />
       <ThemeToggle />
       <Button title="Sign out" variant="outline" onPress={signOut} />
     </View>

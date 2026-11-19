@@ -85,6 +85,13 @@ export default function AdminUser() {
       </Card>
       <Button title={user.isActive ? "Deactivate account" : "Activate account"} variant={user.isActive ? "danger" : "primary"} busy={busy} onPress={toggle} />
       <Button title="Reset password" variant="outline" onPress={() => setResetting(true)} />
+      {user.mfaEnabled && (
+        <Button title="Reset two-factor sign-in" variant="outline" onPress={() => setConfirm(() => (pw: string) =>
+          run(() => api(`/users/${user.id}/mfa-reset`, { method: "POST", body: { confirmPassword: pw } }), () => {
+            setConfirm(null);
+            Alert.alert("Two-factor sign-in turned off", `${user.name} is signed out everywhere and can set it up again.`);
+          }))} />
+      )}
       {user.business && (
         <Card title="Freeze transactions">
           <Row label="Frozen up to" value={user.business.lockDate ? date(String(user.business.lockDate)) : "Nothing frozen"} />

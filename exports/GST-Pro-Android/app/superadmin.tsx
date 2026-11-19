@@ -91,6 +91,7 @@ export default function Superadmin() {
           <View key={r.id} style={{ gap: 6, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border }}>
             <Row label={`${r.adminName} · +${r.additionalUsers} · ${money(r.amountInr)}`} value={date(r.createdAt)} />
             <StatusPill status={r.status} />
+            {r.status === "pending" && <Text style={s.muted}>{r.paymentStatus === "paid" ? `Paid online${r.paidAt ? ` on ${date(r.paidAt)}` : ""}` : "Not paid yet"}</Text>}
             {r.status === "pending" && (
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <View style={{ flex: 1 }}><Button title="Decline" variant="outline" onPress={() => decline(r)} /></View>

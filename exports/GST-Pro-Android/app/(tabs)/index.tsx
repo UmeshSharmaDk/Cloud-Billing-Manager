@@ -1,16 +1,39 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { Alert, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { PlanExpiryBanner } from "@/lib/PlanExpiry";
-import type { DashboardStats, Invoice, Product } from "@/lib/types";
+import type { Business, DashboardStats, Invoice, Product } from "@/lib/types";
+import { reminderLink } from "@/lib/whatsapp";
 import { Button, Card, colors, ErrorView, Loading, Row, s, StatusPill } from "@/lib/ui";
 
 type Month = { month: string; sales: number; purchases: number; gst: number };
 type Top = { productId: number; productName: string; totalQuantity: number; totalRevenue: number };
 type GstSummary = Record<"outputCgst" | "outputSgst" | "outputIgst" | "inputCgst" | "inputSgst" | "inputIgst" | "netPayable", number>;
 const get = <T,>(path: string) => ({ queryKey: [path], queryFn: () => api<T>(path) });
+type ToDo = Invoice & { phone?: string | null };
+type Summary = {
+  stats: DashboardStats & { productCount?: number }; recentInvoices: Invoice[]; monthlyRevenue: Month[];
+  lowStock: Product[]; gstSummary: GstSummary; repeatDue: ToDo[]; overdue: ToDo[];
+};
+
+/** A short getting-started list, shown until every step is done. */
+function FirstSteps({ steps }: { steps: { label: string; href: string; done: boolean }[] }) {
+  const left = steps.filter((x) => !x.done).length;
+  if (left === 0) return null;
+  return (
+    <Card title={`Get started · ${steps.length - left} of ${steps.length} done`}>
+      {steps.map((x) => (
+        <Pressable key={x.label} onPress={() => router.push(x.href as any)} accessibilityRole="link"
+          style={{ minHeight: 44, flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, borderTopColor: colors.border }}>
+          <Text style={{ color: x.done ? colors.success : colors.muted, fontSize: 16 }}>{x.done ? "\u2713" : "\u25CB"}</Text>
+          <Text style={{ color: x.done ? colors.muted : colors.text, textDecorationLine: x.done ? "line-through" : "none", flexShrink: 1 }}>{x.label}</Text>
+        </Pressable>
+      ))}
+    </Card>
+  );
+}
 
 /** A small muted label above its number, with an optional note under it. */
 export function Figure({ label, value, note, tone }: { label: string; value: string; note?: string | null; tone?: string }) {
@@ -41,17 +64,19 @@ function Sparkline({ values }: { values: number[] }) {
 }
 
 export default function Dashboard() {
-  const stats = useQuery({ queryKey: ["dashboard/stats"], queryFn: () => api<DashboardStats>("/dashboard/stats") });
-  const recent = useQuery(get<Invoice[]>("/dashboard/recent-invoices"));
-  const months = useQuery(get<Month[]>("/dashboard/monthly-revenue"));
+  // One request for the whole screen instead of five.
+  const summary = useQuery(get<Summary>("/dashboard/summary"));
   const top = useQuery(get<Top[]>("/dashboard/top-products"));
-  const gst = useQuery(get<GstSummary>("/dashboard/gst-summary"));
-  const low = useQuery(get<Product[]>("/dashboard/low-stock"));
+  const business = useQuery(get<Business>("/business")).data;
 
-  if (stats.isLoading) return <Loading layout="dashboard" />;
-  if (stats.error) return <ErrorView error={stats.error} onRetry={stats.refetch} />;
-  const d = stats.data!;
-  const refresh = () => [stats, recent, months, top, gst, low].forEach((q) => q.refetch());
+  if (summary.isLoading) return <Loading layout="dashboard" />;
+  if (summary.error) return <ErrorView error={summary.error} onRetry={summary.refetch} />;
+  const { stats: d, repeatDue, overdue } = summary.data!;
+  const recent = { data: summary.data!.recentInvoices };
+  const months = { data: summary.data!.monthlyRevenue };
+  const gst = { data: summary.data!.gstSummary };
+  const low = { data: summary.data!.lowStock };
+  const refresh = () => [summary, top].forEach((q) => q.refetch());
   const peak = Math.max(1, ...(months.data ?? []).map((m) => m.sales));
   // The revenue series is built on UTC months, the last row being this month.
   const now = new Date();
@@ -62,10 +87,41 @@ export default function Dashboard() {
 
   return (
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}
-      refreshControl={<RefreshControl refreshing={stats.isRefetching} onRefresh={refresh} />}>
+      refreshControl={<RefreshControl refreshing={summary.isRefetching} onRefresh={refresh} />}>
       <PlanExpiryBanner />
       <Text style={s.title}>Revenue · 1 {monthName(0)} to {now.getUTCDate()} {monthName(0)} {now.getUTCFullYear()}</Text>
       <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
+      <FirstSteps steps={[
+        { label: "Add your GSTIN and address", href: "/settings", done: !!business?.gstin },
+        { label: "Add your UPI ID so customers can pay by QR", href: "/settings", done: !!business?.upiId },
+        { label: "Add your first product", href: "/product/form", done: (d.productCount ?? 0) > 0 },
+        { label: "Add your first customer", href: "/customer/form", done: (d.customerCount ?? 0) > 0 },
+        { label: "Create your first invoice", href: "/invoice/new", done: (d.invoiceCount ?? 0) > 0 },
+      ]} />
+      {(repeatDue.length > 0 || overdue.length > 0) && (
+        <Card title="To do">
+          {repeatDue.map((inv) => (
+            <View key={`r${inv.id}`} style={{ gap: 6, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border }}>
+              <Text style={{ color: colors.text, fontWeight: "600" }}>Repeat {inv.invoiceNumber} for {inv.customerName}</Text>
+              <Text style={s.muted}>Monthly invoice, last sent {date(inv.invoiceDate)} · {money(inv.grandTotal)}</Text>
+              <Button title="Create this month's invoice" variant="outline"
+                onPress={() => router.push({ pathname: "/invoice/new", params: { from: String(inv.id), repeat: "1" } })} />
+            </View>
+          ))}
+          {overdue.map((inv) => {
+            const wa = reminderLink(inv, inv.phone, { name: business?.name, upiId: business?.upiId as string }, money, date);
+            return (
+              <View key={`o${inv.id}`} style={{ gap: 6, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border }}>
+                <Pressable onPress={() => router.push(`/invoice/${inv.id}`)}>
+                  <Text style={{ color: colors.text, fontWeight: "600" }}>{inv.customerName} owes {money(inv.grandTotal - (inv.paidAmount ?? 0))}</Text>
+                  <Text style={s.muted}>{inv.invoiceNumber} was due {date(inv.dueDate!)}</Text>
+                </Pressable>
+                {wa && <Button title="Send WhatsApp reminder" variant="outline" onPress={() => Linking.openURL(wa).catch(() => Alert.alert("WhatsApp is not installed"))} />}
+              </View>
+            );
+          })}
+        </Card>
+      )}
       <View style={[s.card, { gap: 12 }]}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", gap: 12 }}>
           <View style={{ flexShrink: 1 }}>

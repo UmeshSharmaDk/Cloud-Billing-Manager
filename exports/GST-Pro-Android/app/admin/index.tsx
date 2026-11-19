@@ -1,17 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { Alert, AppState, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import type { User } from "@/lib/types";
-import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill } from "@/lib/ui";
+import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill, ToggleRow } from "@/lib/ui";
 import { AccountCard, MenuLink } from "../(tabs)/more";
 import { Figure } from "../(tabs)/index";
 
 type Stats = Record<string, number> & { recentUsers: User[] };
-export type CapacityRequest = { id: number; adminName: string; adminEmail: string; additionalUsers: number; amountInr: number; status: string; createdAt: string; grantedUserLimit?: number | null };
+export type CapacityRequest = { id: number; adminName: string; adminEmail: string; additionalUsers: number; amountInr: number; status: string; createdAt: string; grantedUserLimit?: number | null;
+  paymentStatus?: "unpaid" | "paid" | "failed"; paidAt?: string | null };
 
 type Client = { id: number; name: string; business: { name: string; lockDate: string | null } | null; sales?: number; invoices?: number; netGst?: number; receivable?: number;
   overdue?: number; filings?: Record<string, { filedAt: string } | undefined> };
@@ -41,6 +43,19 @@ export function Clients() {
   );
 }
 
+/** The admin's choice to require two-factor sign-in for everyone they manage. */
+function TeamMfa() {
+  const { user, refresh } = useAuth();
+  const { busy, run } = useSave();
+  return (
+    <Card>
+      <ToggleRow label="Require two-factor sign-in for my users" note="Each user sets it up on their next visit before they can open their books."
+        value={!!user?.requireTeamMfa} busy={busy}
+        onChange={(required) => run(() => api("/users/team-mfa", { method: "PUT", body: { required } }), refresh)} />
+    </Card>
+  );
+}
+
 export default function AdminHome() {
   const { request } = useLocalSearchParams<{ request?: string }>();
   const stats = useQuery({ queryKey: ["/admin/stats"], queryFn: () => api<Stats>("/admin/stats") });
@@ -48,6 +63,23 @@ export default function AdminHome() {
   const [asking, setAsking] = useState(false);
   useEffect(() => { if (request) setAsking(true); }, [request]);
   const { busy, run } = useSave();
+  // The phone's browser takes the admin through PayU; the request shows as paid when they come back.
+  const [paying, setPaying] = useState<number | null>(null);
+  const payNow = async (id: number) => {
+    setPaying(id);
+    try {
+      const r = await api<{ checkoutUrl: string }>(`/superadmin/capacity-requests/${id}/pay`, { method: "POST", body: {} });
+      await Linking.openURL(r.checkoutUrl);
+    } catch (e) {
+      Alert.alert("Could not start the payment", e instanceof Error ? e.message : String(e));
+    } finally {
+      setPaying(null);
+    }
+  };
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => { if (st === "active") reqs.refetch(); });
+    return () => sub.remove();
+  }, [reqs.refetch]);
 
   if (stats.isLoading) return <Loading layout="dashboard" />;
   if (stats.error) return <ErrorView error={stats.error} onRetry={stats.refetch} />;
@@ -95,12 +127,21 @@ export default function AdminHome() {
         </Card>
       )}
       <Card title="Extra user capacity">
-        <Text style={s.muted}>Each extra user costs {money(price)}. Requests are reviewed by the platform owner.</Text>
+        <Text style={s.muted}>Each extra user costs {money(price)}. Pay online, then the platform owner approves the request.</Text>
         {reqs.data?.requests.map((r) => (
-          <Row key={r.id} label={`+${r.additionalUsers} users · ${date(r.createdAt)}`} value={r.status} />
+          <View key={r.id} style={{ gap: 6 }}>
+            <Row label={`+${r.additionalUsers} users · ${date(r.createdAt)}`} value={r.status === "pending" && r.paymentStatus === "paid" ? "paid, waiting for approval" : r.status} />
+            {r.status === "pending" && r.paymentStatus !== "paid" && (
+              <>
+                {r.paymentStatus === "failed" && <Text style={s.muted}>The last payment did not go through. You can try again.</Text>}
+                <Button title={`Pay ${money(r.amountInr)} with PayU`} busy={paying === r.id} onPress={() => payNow(r.id)} />
+              </>
+            )}
+          </View>
         ))}
         <Button title="Request more users" variant="outline" onPress={() => setAsking(true)} />
       </Card>
+      <TeamMfa />
       <AccountCard />
       <Prompt visible={asking} numeric busy={busy} title="Request more users" placeholder="Number of users"
         message={`How many extra users do you need? Each costs ${money(price)}.`}
