@@ -9,7 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, ArrowLeft, Upload, FileText, AlertCircle, Loader2, FileSpreadsheet, Image as ImageIcon } from "lucide-react";
+import { Plus, Trash2, ArrowLeft, Upload, FileText, AlertCircle, Loader2, FileSpreadsheet, Image as ImageIcon, Sparkles } from "lucide-react";
+import { billType, readBill } from "@/lib/ai";
 
 interface LineItem { productId: number | null; description: string; hsnCode: string; quantity: number; unit: string; unitPrice: number; gstRate: number; }
 const emptyItem = (): LineItem => ({ productId: null, description: "", hsnCode: "", quantity: 1, unit: "Nos", unitPrice: 0, gstRate: 18 });
@@ -41,6 +42,8 @@ export default function PurchaseNewPage() {
   const [importedFile, setImportedFile] = useState<string | null>(null);
   const [importParsing, setImportParsing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const aiFileRef = useRef<HTMLInputElement>(null);
+  const [aiReading, setAiReading] = useState(false);
   const mutation = useCreatePurchase();
 
   const setItem = (i: number, update: Partial<LineItem>) => setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...update } : it));
@@ -103,6 +106,38 @@ export default function PurchaseNewPage() {
     }
   };
 
+  // The AI reads a photo or PDF of the bill; the person reviews everything before saving.
+  const handleAiBill = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const type = billType(file);
+    if (!type) { toast({ title: "Choose a photo or PDF", description: "The AI reads JPEG, PNG, WebP or HEIC photos and PDFs.", variant: "destructive" }); return; }
+    if (file.size > MAX_IMPORT_FILE_BYTES) { toast({ title: "File is too large", description: `Use a file up to ${MAX_IMPORT_FILE_BYTES / (1024 * 1024)} MB.`, variant: "destructive" }); return; }
+    setAiReading(true);
+    try {
+      const bill = await readBill(file, type);
+      if (!bill.items.length) { toast({ title: "No items found on the bill", description: bill.warnings[0] ?? "Try a clearer photo.", variant: "destructive" }); return; }
+      setItems(bill.items.map((it) => {
+        const matched = matchedProduct(it.description);
+        return { productId: matched?.id ?? null, description: it.description, hsnCode: it.hsnCode || matched?.hsnCode || "",
+          quantity: it.quantity, unit: it.unit || matched?.unit || "Nos", unitPrice: it.unitPrice, gstRate: it.gstRate };
+      }));
+      const vendor = vendors.find((v) => bill.vendorGstin && v.gstin?.toUpperCase() === bill.vendorGstin)
+        ?? vendors.find((v) => bill.vendorName && v.name.toLowerCase().trim() === bill.vendorName.toLowerCase().trim());
+      setForm((f) => ({ ...f, vendorId: vendor ? String(vendor.id) : f.vendorId, billNumber: bill.billNumber || f.billNumber, billDate: bill.billDate || f.billDate }));
+      const warnings = [...bill.warnings];
+      if (!vendor && bill.vendorName) warnings.unshift(`The vendor on the bill, ${bill.vendorName}${bill.vendorGstin ? ` (${bill.vendorGstin})` : ""}, is not in your vendors yet. Add them under Vendors, then pick them above.`);
+      setImportWarnings(warnings);
+      setImportedFile(file.name);
+      toast({ title: `The AI read ${bill.items.length} item(s)`, description: "Check every line against the bill before saving." });
+    } catch (err) {
+      toast({ title: "The AI could not read the bill", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setAiReading(false);
+    }
+  };
+
   const totals = items.reduce((acc, it) => { const c = calcLine(it); return { taxable: acc.taxable + c.taxable, gst: acc.gst + c.gstAmt, total: acc.total + c.total }; }, { taxable: 0, gst: 0, total: 0 });
 
   const handleSubmit = (e: React.FormEvent): void => {
@@ -143,7 +178,11 @@ export default function PurchaseNewPage() {
             className="hidden"
             onChange={handleFileImport}
           />
-          <Button type="button" variant="outline" className="gap-2" onClick={() => fileRef.current?.click()} loading={importParsing}>
+          <input ref={aiFileRef} type="file" accept="image/*,.heic,.heif,.pdf,application/pdf" className="hidden" onChange={handleAiBill} />
+          <Button type="button" variant="outline" className="gap-2" onClick={() => aiFileRef.current?.click()} loading={aiReading} disabledReason={importParsing ? "Wait for the file import to finish." : undefined}>
+            <Sparkles className="w-4 h-4" /> Read bill with AI
+          </Button>
+          <Button type="button" variant="outline" className="gap-2" onClick={() => fileRef.current?.click()} loading={importParsing} disabledReason={aiReading ? "Wait for the AI to finish reading." : undefined}>
             {importParsing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             Import bill file
           </Button>

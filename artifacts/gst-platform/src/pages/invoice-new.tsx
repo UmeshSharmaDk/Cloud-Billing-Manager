@@ -8,7 +8,10 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, ArrowLeft, Search, X, UserPlus } from "lucide-react";
+import { Plus, Trash2, ArrowLeft, Search, X, UserPlus, Sparkles } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { ai, type InvoiceDraft } from "@/lib/ai";
+import { currentLang } from "@/lib/i18n";
 
 interface LineItem {
   productId: number | null;
@@ -179,6 +182,30 @@ export default function InvoiceNewPage() {
     })));
   }, [source, customers.length]);
 
+  // Invoice from a sentence: the AI fills the form, the person checks it and creates the invoice.
+  const [describe, setDescribe] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [draftQuestions, setDraftQuestions] = useState<string[]>([]);
+  const fillFromText = async () => {
+    setDrafting(true);
+    try {
+      const d = await ai<InvoiceDraft>("invoice-draft", { text: describe });
+      if (!d.items.length) { toast({ title: "No items found", description: "Say what was sold, how many and at what price.", variant: "destructive" }); return; }
+      const c = { id: d.customerId, name: d.customerName, stateCode: d.stateCode };
+      setCustomer(c);
+      setInitialCustomer(c);
+      setItems(d.items.map((it) => ({ ...emptyItem(), ...it })));
+      setForm((f) => ({ ...f, notes: d.notes || f.notes,
+        dueDate: d.dueInDays !== null ? new Date(Date.parse(f.invoiceDate) + d.dueInDays * 86400000).toISOString().slice(0, 10) : f.dueDate }));
+      setDraftQuestions([...(d.customerId ? [] : [`${d.customerName || "The customer"} is not in your customers, so this will be a walk-in invoice unless you pick one.`]), ...d.questions]);
+      toast({ title: "Invoice filled in", description: "Check the customer, items and prices before you create it." });
+    } catch (err) {
+      toast({ title: "The AI could not fill the invoice", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   const setItem = (i: number, update: Partial<LineItem>) => {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...update } : it));
   };
@@ -242,6 +269,24 @@ export default function InvoiceNewPage() {
           <p className="text-muted-foreground text-sm">Create a GST-compliant sales invoice</p>
         </div>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Sparkles className="w-4 h-4 text-primary" /> Describe the invoice</CardTitle></CardHeader>
+        <CardContent className="space-y-2">
+          <Textarea value={describe} onChange={(e) => setDescribe(e.target.value)} rows={2} maxLength={2000} aria-label="Describe the invoice"
+            // Textareas are skipped by the on-screen Hindi swap, so the placeholder picks its language here.
+            placeholder={currentLang() === "hi" ? "जैसे: शर्मा ट्रेडर्स, 10 बोरी सीमेंट 380 + GST, 5 सरिया 650, 15 दिन में भुगतान" : "e.g. Sharma Traders, 10 bags cement at 380 plus GST, 5 rods at 650, due in 15 days"} />
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" className="gap-2" onClick={fillFromText} loading={drafting}
+              disabledReason={describe.trim().length >= 3 ? undefined : "Describe the sale first."}>Fill invoice with AI</Button>
+          </div>
+          {draftQuestions.length > 0 && (
+            <ul className="text-xs text-warning-text bg-warning-bg border border-warning/30 rounded-md p-2 list-disc list-inside space-y-0.5" translate="no">
+              {draftQuestions.map((q, i) => <li key={i}>{q}</li>)}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">

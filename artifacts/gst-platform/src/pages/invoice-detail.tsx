@@ -8,6 +8,7 @@ import { ArrowLeft, Printer, CheckCircle, MessageCircle, Mail, Copy } from "luci
 import { authFetch } from "@/lib/api-fetch";
 import { ToggleRow } from "@/components/ToggleRow";
 import { reminderLink } from "@/lib/whatsapp";
+import { AiReminder } from "@/components/AiReminder";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -131,6 +132,7 @@ export default function InvoiceDetailPage() {
               <a href={reminder} target="_blank" rel="noopener noreferrer"><MessageCircle className="w-4 h-4" /> WhatsApp reminder</a>
             </Button>
           )}
+          {reminder && <AiReminder invoiceId={inv.id} phone={customer.phone} />}
           {inv.status !== "cancelled" && (
             <Button variant="outline" size="sm" className="gap-1" onClick={openEmail}>
               <Mail className="w-4 h-4" /> Email invoice

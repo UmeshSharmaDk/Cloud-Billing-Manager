@@ -8,6 +8,7 @@ import { api, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { invoiceHtml } from "@/lib/invoiceHtml";
 import { reminderLink } from "@/lib/whatsapp";
+import { AiReminder } from "@/lib/AiReminder";
 import { useSave } from "@/lib/save";
 import type { Business, Customer, Invoice } from "@/lib/types";
 import { Button, Card, colors, ErrorView, Loading, Prompt, Row, s, StatusPill, ToggleRow, pullToRefresh } from "@/lib/ui";
@@ -89,6 +90,7 @@ export default function InvoiceDetail() {
             <Button title="Send WhatsApp reminder" variant="outline"
               onPress={() => Linking.openURL(reminderLink(inv, cust.data?.phone as string, { name: biz.data?.name, upiId: biz.data?.upiId as string }, money, date)!).catch(() => Alert.alert("WhatsApp is not installed"))} />
           )}
+          {due > 0 && <AiReminder invoiceId={inv.id} phone={cust.data?.phone as string} />}
           {inv.upi && (
             <View style={{ alignItems: "center", gap: 6, paddingVertical: 6 }}>
               <Image source={{ uri: inv.upi.qr }} style={{ width: 180, height: 180 }} accessibilityLabel="UPI payment QR code" />

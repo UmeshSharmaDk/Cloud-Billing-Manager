@@ -30,6 +30,7 @@ const EwayBillsPage = lazy(() => import("@/pages/eway-bills"));
 const EwayBillNewPage = lazy(() => import("@/pages/eway-bill-new"));
 const EwayBillDetailPage = lazy(() => import("@/pages/eway-bill-detail"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
+const AssistantPage = lazy(() => import("@/pages/assistant"));
 const AdminDashboardPage = lazy(() => import("@/pages/admin-dashboard"));
 const AdminUsersPage = lazy(() => import("@/pages/admin-users"));
 const AdminUserDetailPage = lazy(() => import("@/pages/admin-user-detail"));
@@ -113,6 +114,7 @@ function Router() {
       <Route path="/eway-bills">{() => <ProtectedRoute component={EwayBillsPage} />}</Route>
       <Route path="/eway-bills/new">{() => <ProtectedRoute component={EwayBillNewPage} />}</Route>
       <Route path="/eway-bills/:id">{() => <ProtectedRoute component={EwayBillDetailPage} />}</Route>
+      <Route path="/assistant">{() => <ProtectedRoute component={AssistantPage} />}</Route>
       <Route path="/settings">{() => <ProtectedRoute component={SettingsPage} />}</Route>
       <Route path="/admin">{() => <AdminRoute component={AdminDashboardPage} />}</Route>
       <Route path="/admin/users">{() => <AdminRoute component={AdminUsersPage} />}</Route>

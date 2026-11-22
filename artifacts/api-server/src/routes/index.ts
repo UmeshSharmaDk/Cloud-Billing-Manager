@@ -17,6 +17,7 @@ import ewayBillsRouter from "./eway-bills";
 import superadminRouter from "./superadmin";
 import importRouter from "./import";
 import demoRequestsRouter from "./demo-requests";
+import aiRouter from "./ai";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use("/reports", reportsRouter);
 router.use("/eway-bills", ewayBillsRouter);
 router.use("/import", importRouter);
 router.use("/demo-requests", demoRequestsRouter);
+router.use("/ai", aiRouter);
 
 export default router;

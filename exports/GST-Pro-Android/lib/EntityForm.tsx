@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Alert } from "react-native";
 import { api } from "./api";
 import { useSave } from "./save";
@@ -64,9 +64,10 @@ const asStrings = (o: Record<string, unknown>) =>
  * Create or edit form for one record. `load` prefills it; the save goes to
  * `target` with `method`, then the screen closes.
  */
-export function EntityForm({ fields, load, pick, target, method, defaults, submitLabel = "Save", onSaved }: {
+export function EntityForm({ fields, load, pick, target, method, defaults, submitLabel = "Save", onSaved, extra }: {
   fields: FieldSpec[]; load?: string; /** Read the record from this key of what `load` returns. */ pick?: string; target: string; method: "POST" | "PATCH";
   defaults?: Values; submitLabel?: string; onSaved?: (r: any) => void;
+  /** Shown under the fields, with the form's values (the product form's HSN suggestion). */ extra?: (v: Values, set: (k: string, x: string) => void) => ReactNode;
 }) {
   const q = useQuery({ queryKey: [load], queryFn: () => api<Record<string, unknown>>(load!), enabled: !!load });
   const [v, setV] = useState<Values>(defaults ?? {});
@@ -86,6 +87,7 @@ export function EntityForm({ fields, load, pick, target, method, defaults, submi
   return (
     <Form>
       <FormFields fields={fields} value={v} set={set} />
+      {extra?.(v, set)}
       <Button title={submitLabel} busy={busy} onPress={submit} />
     </Form>
   );
