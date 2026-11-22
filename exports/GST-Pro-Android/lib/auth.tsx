@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, clearToken, loadToken, saveToken, setSession } from "./api";
+import { clearSaved } from "./offline";
 import type { User } from "./types";
 
 type Auth = {
@@ -26,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setUser(null);
     queryClient.clear();
-    await clearToken();
+    await Promise.all([clearToken(), clearSaved()]);
   }, [queryClient]);
 
   useEffect(() => {

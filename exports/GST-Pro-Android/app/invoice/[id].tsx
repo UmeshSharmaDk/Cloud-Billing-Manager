@@ -4,7 +4,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useState } from "react";
 import { Alert, Image, Linking, ScrollView, Text, View } from "react-native";
-import { api, viewAs } from "@/lib/api";
+import { api, apiDownload, viewAs } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { invoiceHtml } from "@/lib/invoiceHtml";
 import { reminderLink } from "@/lib/whatsapp";
@@ -39,6 +39,16 @@ export default function InvoiceDetail() {
     });
   const setRepeat = (repeatMonthly: boolean) =>
     run(() => api(`/invoices/${inv.id}/repeat`, { method: "PUT", body: { repeatMonthly } }));
+
+  const einvoiceable = /^\s*(tax invoice|credit note|debit note)/i.test(inv.type ?? "") && inv.status !== "cancelled" && (!!inv.customerGstin || !!inv.irn);
+  const shareEinvoice = () => run(async () => {
+    const uri = await apiDownload(`/invoices/${inv.id}/einvoice-json`, `EINV_${inv.invoiceNumber}.json`);
+    await Sharing.shareAsync(uri, { mimeType: "application/json", dialogTitle: "Upload at einvoice1.gst.gov.in" });
+  });
+  const clearIrn = () => Alert.alert("Clear the IRN?", "Do this only after cancelling the e-invoice on the IRP. The invoice can then be edited again.", [
+    { text: "Keep", style: "cancel" },
+    { text: "Clear IRN", style: "destructive", onPress: () => run(() => api(`/invoices/${inv.id}/irn`, { method: "PUT", body: { irn: null } })) },
+  ]);
 
   const share = async () => {
     setSharing(true);
@@ -78,6 +88,26 @@ export default function InvoiceDetail() {
         <Card>
           <ToggleRow label="Repeat every month" note="Each new month the dashboard offers a copy to send."
             value={!!inv.repeatMonthly} onChange={setRepeat} busy={busy} />
+        </Card>
+      )}
+
+      {!asUser && einvoiceable && (
+        <Card title="E-invoice">
+          {inv.irn ? (
+            <>
+              <Text style={[s.muted, { fontFamily: "monospace" }]} selectable>IRN {inv.irn}</Text>
+              <Row label="Ack" value={`${inv.irnAckNo ?? ""} · ${inv.irnAckDate ?? ""}`} />
+              <Button title="Clear IRN" variant="outline" busy={busy} onPress={clearIrn} />
+            </>
+          ) : (
+            <>
+              <Text style={s.muted}>Share the file, upload it at einvoice1.gst.gov.in, then add the IRN it gives you.</Text>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <View style={{ flex: 1 }}><Button title="Share e-invoice file" variant="outline" busy={busy} onPress={shareEinvoice} /></View>
+                <View style={{ flex: 1 }}><Button title="Add IRN" variant="outline" onPress={() => router.push({ pathname: "/invoice/irn", params: { id: String(inv.id), number: inv.invoiceNumber } })} /></View>
+              </View>
+            </>
+          )}
         </Card>
       )}
 

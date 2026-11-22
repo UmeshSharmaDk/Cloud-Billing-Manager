@@ -50,6 +50,8 @@ export type AuditAction =
   | "return.marked_filed"
   | "return.unmarked_filed"
   | "invoice.emailed"
+  | "invoice.irn_saved"
+  | "invoice.irn_cleared"
   | `${BookKind}.${"created" | "updated" | "deleted" | "status_changed"}`;
 
 export type BookKind = "invoice" | "purchase" | "payment" | "eway_bill";

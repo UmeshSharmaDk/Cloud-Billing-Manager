@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Stack, useLocalSearchParams } from "expo-router";
-import { Alert, ScrollView } from "react-native";
-import { api } from "@/lib/api";
+import { router, Stack, useLocalSearchParams } from "expo-router";
+import * as Sharing from "expo-sharing";
+import { Alert, ScrollView, Text } from "react-native";
+import { api, apiDownload } from "@/lib/api";
 import { date, money } from "@/lib/format";
 import { useSave } from "@/lib/save";
 import type { EwayBill } from "@/lib/types";
@@ -19,16 +20,10 @@ export default function EwayBillDetail() {
   const b = q.data!;
   const patch = (body: object) => run(() => api(`/eway-bills/${b.id}`, { method: "PATCH", body }));
 
-  // Same as the website: a local EWB number, valid one day per 200 km (at least one day).
-  const generate = () => {
-    const days = Math.max(1, Math.ceil(Number(b.transDistance ?? 0) / 200));
-    patch({
-      status: "generated",
-      ewbNo: `EWB${String(b.id).padStart(12, "0")}`,
-      ewbDate: new Date().toISOString().slice(0, 10),
-      validUpto: new Date(Date.now() + days * 86400000).toISOString().slice(0, 10),
-    });
-  };
+  const shareFile = () => run(async () => {
+    const uri = await apiDownload(`/eway-bills/${b.id}/json`, `EWB_${b.docNo}.json`);
+    await Sharing.shareAsync(uri, { mimeType: "application/json", dialogTitle: "Upload at ewaybillgst.gov.in" });
+  });
   const cancel = () => Alert.alert("Cancel this e-way bill?", "This cannot be undone.", [
     { text: "Keep", style: "cancel" },
     { text: "Cancel bill", style: "destructive", onPress: () => patch({ status: "cancelled" }) },
@@ -44,7 +39,13 @@ export default function EwayBillDetail() {
         {!!b.validUpto && <Row label="Valid until" value={date(b.validUpto)} />}
         <Row label="Invoice value" value={money(b.totalInvValue)} />
       </Card>
-      {b.status === "draft" && <Button title="Generate e-way bill" busy={busy} onPress={generate} />}
+      {b.status === "draft" && (
+        <Card>
+          <Text style={s.muted}>Share the file to yourself, upload it at ewaybillgst.gov.in (Bulk Generation), then enter the number it gives you.</Text>
+          <Button title="Share portal file" variant="outline" busy={busy} onPress={shareFile} />
+          <Button title="Enter e-way bill number" onPress={() => router.push({ pathname: "/eway-bill/number", params: { id: String(b.id) } })} />
+        </Card>
+      )}
       {b.status === "generated" && <Button title="Cancel e-way bill" variant="danger" busy={busy} onPress={cancel} />}
       <Card title="From">
         <Row label="Name" value={str(b.fromTrdName)} />
