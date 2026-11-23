@@ -20,6 +20,7 @@ export default function InvoiceDetail() {
   const biz = useQuery({ queryKey: [at("/business")], queryFn: () => api<Business>(at("/business")) });
   const custId = q.data?.customerId;
   const cust = useQuery({ queryKey: [at(`/customers/${custId}`)], queryFn: () => api<Customer>(at(`/customers/${custId}`)), enabled: !!custId });
+  const irp = useQuery({ queryKey: ["/business/irp"], queryFn: () => api<{ configured: boolean; sandbox?: boolean }>("/business/irp"), enabled: !asUser });
   const { busy, run } = useSave();
   const [partial, setPartial] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -45,6 +46,8 @@ export default function InvoiceDetail() {
     const uri = await apiDownload(`/invoices/${inv.id}/einvoice-json`, `EINV_${inv.invoiceNumber}.json`);
     await Sharing.shareAsync(uri, { mimeType: "application/json", dialogTitle: "Upload at einvoice1.gst.gov.in" });
   });
+  const generateIrn = () => run(() => api(`/invoices/${inv.id}/irn/generate`, { method: "POST", body: {} }),
+    () => Alert.alert(irp.data?.sandbox ? "Test IRN generated on the NIC sandbox" : "IRN generated"));
   const clearIrn = () => Alert.alert("Clear the IRN?", "Do this only after cancelling the e-invoice on the IRP. The invoice can then be edited again.", [
     { text: "Keep", style: "cancel" },
     { text: "Clear IRN", style: "destructive", onPress: () => run(() => api(`/invoices/${inv.id}/irn`, { method: "PUT", body: { irn: null } })) },
@@ -97,11 +100,14 @@ export default function InvoiceDetail() {
             <>
               <Text style={[s.muted, { fontFamily: "monospace" }]} selectable>IRN {inv.irn}</Text>
               <Row label="Ack" value={`${inv.irnAckNo ?? ""} · ${inv.irnAckDate ?? ""}`} />
-              <Button title="Clear IRN" variant="outline" busy={busy} onPress={clearIrn} />
+              {irp.data?.configured
+                ? <Button title="Cancel IRN" variant="outline" onPress={() => router.push({ pathname: "/invoice/cancel-irn", params: { id: String(inv.id), number: inv.invoiceNumber } })} />
+                : <Button title="Clear IRN" variant="outline" busy={busy} onPress={clearIrn} />}
             </>
           ) : (
             <>
-              <Text style={s.muted}>Share the file, upload it at einvoice1.gst.gov.in, then add the IRN it gives you.</Text>
+              {irp.data?.configured && <Button title="Generate IRN" busy={busy} onPress={generateIrn} />}
+              <Text style={s.muted}>{irp.data?.configured ? "Or by hand: share the file, upload it on the IRP, then add the IRN." : "Share the file, upload it at einvoice1.gst.gov.in, then add the IRN it gives you. To generate it from here, add the e-invoice login under More."}</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <View style={{ flex: 1 }}><Button title="Share e-invoice file" variant="outline" busy={busy} onPress={shareEinvoice} /></View>
                 <View style={{ flex: 1 }}><Button title="Add IRN" variant="outline" onPress={() => router.push({ pathname: "/invoice/irn", params: { id: String(inv.id), number: inv.invoiceNumber } })} /></View>

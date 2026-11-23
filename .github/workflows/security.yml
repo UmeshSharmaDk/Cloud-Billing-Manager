@@ -407,7 +407,7 @@ jobs:
             APP_DATABASE_URL="$APP_DATABASE_URL" SESSION_SECRET="$(openssl rand -base64 48)" \
             ALLOWED_ORIGINS="$ALLOWED_ORIGINS" MAIL_OUTBOX_PATH="$MAIL_OUTBOX_PATH" MAIL_FROM="$MAIL_FROM" HOUSEKEEPING_INTERVAL_MS=2000 \
             DISABLE_BREACH_CHECK="$DISABLE_BREACH_CHECK" AUTH_RATE_LIMIT_MAX="$AUTH_RATE_LIMIT_MAX" \
-            REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" ALLOW_PUBLIC_REGISTRATION="$ALLOW_PUBLIC_REGISTRATION" \
+            REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" ALLOW_PUBLIC_REGISTRATION="$ALLOW_PUBLIC_REGISTRATION" IRP_BASE_URL=http://127.0.0.1:8098 \
             node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
           echo $! > /tmp/api.pid
           timeout 60 bash -c 'until curl -sf http://127.0.0.1:8099/api/healthz >/dev/null; do sleep 1; done'

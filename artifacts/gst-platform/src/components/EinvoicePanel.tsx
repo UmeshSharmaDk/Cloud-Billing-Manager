@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { FileJson, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { authFetch } from "@/lib/api-fetch";
 import { downloadFromApi } from "@/lib/download";
@@ -21,6 +23,9 @@ export function EinvoicePanel({ inv, onChange }: { inv: any; onChange: () => voi
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ irn: "", ackNo: "", ackDate: "", signedQr: "" });
+  const irp = useQuery({ queryKey: ["irp-login"], queryFn: () => authFetch("/api/business/irp").then((r) => r.json()) }).data;
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancel, setCancel] = useState({ reason: "2", remark: "" });
 
   if (inv.status === "cancelled" || !ELIGIBLE.test(inv.type || "Tax Invoice")) return null;
   if (!inv.customerGstin && !inv.irn) {
@@ -57,6 +62,24 @@ export function EinvoicePanel({ inv, onChange }: { inv: any; onChange: () => voi
     }
   };
 
+  // Through the IRP API: the IRP signs the invoice and returns the IRN.
+  const viaIrp = async (path: string, body: unknown, done: string) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const res = await authFetch(`/api/invoices/${inv.id}/irn/${path}`, { method: "POST", body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "The e-invoice system did not answer.");
+      toast({ title: done });
+      setCancelOpen(false);
+      onChange();
+    } catch (err: any) {
+      toast({ title: "Not done", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const field = (k: keyof typeof form) => ({
     value: form[k],
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm((f) => ({ ...f, [k]: e.target.value })),
@@ -69,14 +92,26 @@ export function EinvoicePanel({ inv, onChange }: { inv: any; onChange: () => voi
           <p className="flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400"><ShieldCheck className="w-4 h-4" /> E-invoice registered</p>
           <p className="text-xs font-mono break-all text-muted-foreground">IRN {inv.irn}</p>
           <p className="text-xs text-muted-foreground">Ack {inv.irnAckNo} · {inv.irnAckDate}</p>
-          <Button variant="ghost" size="sm" className="w-full" loading={saving}
-            onClick={() => save({ irn: null }, "IRN cleared. The invoice can be edited again.")}>
-            Clear IRN after cancelling on the IRP
-          </Button>
+          {irp?.configured ? (
+            <Button variant="outline" size="sm" className="w-full" onClick={() => { setCancel({ reason: "2", remark: "" }); setCancelOpen(true); }}>
+              Cancel IRN
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" className="w-full" loading={saving}
+              onClick={() => save({ irn: null }, "IRN cleared. The invoice can be edited again.")}>
+              Clear IRN after cancelling on the IRP
+            </Button>
+          )}
         </>
       ) : (
         <>
-          <p className="text-xs text-muted-foreground">E-invoice: download the file, upload it on the IRP, then paste the IRN it gives you.</p>
+          {irp?.configured && (
+            <Button variant="outline" size="sm" className="w-full gap-1" loading={saving}
+              onClick={() => viaIrp("generate", {}, irp.sandbox ? "Test IRN generated on the NIC sandbox" : "IRN generated")}>
+              <ShieldCheck className="w-4 h-4" /> Generate IRN
+            </Button>
+          )}
+          <p className="text-xs text-muted-foreground">{irp?.configured ? "Or by hand: download the file, upload it on the IRP, then paste the IRN." : "E-invoice: download the file, upload it on the IRP, then paste the IRN it gives you. To generate it from here, add the e-invoice login in Settings."}</p>
           <div className="grid grid-cols-2 gap-2">
             <Button variant="outline" size="sm" className="gap-1" onClick={download} loading={downloading}>
               <FileJson className="w-4 h-4" /> E-invoice file
@@ -87,6 +122,36 @@ export function EinvoicePanel({ inv, onChange }: { inv: any; onChange: () => voi
           </div>
         </>
       )}
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent className="no-print sm:max-w-md">
+          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); viaIrp("cancel", cancel, "IRN cancelled. The invoice can be edited again."); }}>
+            <DialogHeader>
+              <DialogTitle>Cancel the IRN for {inv.invoiceNumber}?</DialogTitle>
+              <DialogDescription>The IRP allows this within 24 hours of the IRN. Its e-way bill, if any, must be cancelled first.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label>Reason</Label>
+              <Select value={cancel.reason} onValueChange={(v) => setCancel((c) => ({ ...c, reason: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">Duplicate</SelectItem>
+                  <SelectItem value="2">Data entry mistake</SelectItem>
+                  <SelectItem value="3">Order cancelled</SelectItem>
+                  <SelectItem value="4">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cnl-rem">Remark</Label>
+              <Input id="cnl-rem" maxLength={100} required value={cancel.remark} onChange={(e) => setCancel((c) => ({ ...c, remark: e.target.value }))} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setCancelOpen(false)}>Keep IRN</Button>
+              <Button type="submit" loading={saving}>Cancel IRN</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="no-print sm:max-w-lg">
           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); save(form, "IRN saved. It now prints on the invoice."); }}>

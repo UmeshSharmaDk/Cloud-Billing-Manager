@@ -7,7 +7,7 @@ import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } f
 import { resolveSupplyType } from "../lib/gst";
 import { applyStockChanges, applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
 import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
-import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, RepeatInvoiceBody, SaveIrnBody, IdParam } from "../schemas";
+import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, RepeatInvoiceBody, SaveIrnBody, CancelIrnBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
 import QRCode from "qrcode";
@@ -15,6 +15,8 @@ import { mailer, invoiceMessage, describeMailError } from "../lib/mailer";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { logger } from "../lib/logger";
 import { buildEinvoiceJson } from "../lib/einvoice";
+import { IRP_PATHS, IrpError, duplicateIrn } from "../lib/irp";
+import { callIrp } from "../lib/irp-store";
 
 import { books } from "../middleware/books";
 
@@ -298,6 +300,61 @@ router.get("/:id/einvoice-json", requireAuth, requireBusiness, validateParams(Id
   if (out.problems) return res.status(400).json({ error: `Fix these first: ${out.problems.join(" ")}`, problems: out.problems });
   res.setHeader("Content-Disposition", `attachment; filename="EINV_${invoice.invoiceNumber.replace(/[^\w-]+/g, "_")}.json"`);
   return res.json(out.json);
+});
+
+/** The invoice, its seller and buyer, as the e-invoice builder wants them. */
+async function einvoiceFor(req: Req) {
+  const [invoice] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).limit(1);
+  if (!invoice) return null;
+  const [seller] = await db.select().from(businessesTable).where(eq(businessesTable.id, req.businessId)).limit(1);
+  const [buyer] = await db.select().from(customersTable)
+    .where(and(eq(customersTable.id, invoice.customerId), eq(customersTable.businessId, req.businessId))).limit(1);
+  return { invoice, out: buildEinvoiceJson({ seller: seller ?? {}, buyer: buyer ?? { name: invoice.customerName }, invoice: mapInvoice(invoice) }) };
+}
+
+const irpError = (res: any, err: unknown) => {
+  if (err instanceof IrpError) return res.status(err.code === "NO_LOGIN" ? 409 : 502).json({ error: err.message, code: err.code });
+  throw err;
+};
+
+/** POST /invoices/:id/irn/generate — register the invoice on the IRP and save the IRN it returns. */
+router.post("/:id/irn/generate", requireAuth, requireBusiness, validateParams(IdParam), books("invoice"), async (req: Req, res) => {
+  const found = await einvoiceFor(req);
+  if (!found) return res.status(404).json({ error: "Not found" });
+  if (found.invoice.irn) return res.status(409).json({ error: "This invoice already has an IRN." });
+  if (found.out.problems) return res.status(400).json({ error: `Fix these first: ${found.out.problems.join(" ")}`, problems: found.out.problems });
+  let r: any;
+  try {
+    r = await callIrp(req.businessId, IRP_PATHS.generate, found.out.json[0]);
+  } catch (err) {
+    // Already registered (perhaps from the portal, or a reply that was lost): take its IRN.
+    const dup = duplicateIrn(err);
+    if (!dup) return irpError(res, err);
+    r = { Irn: dup.Irn, AckNo: dup.AckNo, AckDt: dup.AckDt, SignedQRCode: null };
+  }
+  const [row] = await db.update(invoicesTable)
+    .set({ irn: String(r.Irn).toLowerCase(), irnAckNo: String(r.AckNo), irnAckDate: String(r.AckDt), irnSignedQr: r.SignedQRCode ?? null })
+    .where(and(eq(invoicesTable.id, found.invoice.id), eq(invoicesTable.businessId, req.businessId))).returning();
+  await recordAudit({ ...actorFrom(req), action: "invoice.irn_generated", targetType: "invoice", targetId: row.id, details: { irn: row.irn } });
+  return res.json(mapInvoice(row));
+});
+
+/** POST /invoices/:id/irn/cancel — cancel the IRN on the IRP (within 24 hours of it) and clear it here. */
+router.post("/:id/irn/cancel", requireAuth, requireBusiness, validateParams(IdParam), validateBody(CancelIrnBody), books("invoice"), async (req: Req, res) => {
+  const [invoice] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).limit(1);
+  if (!invoice) return res.status(404).json({ error: "Not found" });
+  if (!invoice.irn) return res.status(409).json({ error: "This invoice has no IRN to cancel." });
+  try {
+    await callIrp(req.businessId, IRP_PATHS.cancel, { Irn: invoice.irn, CnlRsn: req.body.reason, CnlRem: req.body.remark });
+  } catch (err) {
+    return irpError(res, err);
+  }
+  const [row] = await db.update(invoicesTable).set({ irn: null, irnAckNo: null, irnAckDate: null, irnSignedQr: null })
+    .where(and(eq(invoicesTable.id, invoice.id), eq(invoicesTable.businessId, req.businessId))).returning();
+  await recordAudit({ ...actorFrom(req), action: "invoice.irn_cancelled", targetType: "invoice", targetId: row.id, details: { irn: invoice.irn, reason: req.body.reason, remark: req.body.remark } });
+  return res.json(mapInvoice(row));
 });
 
 /** PUT /invoices/:id/irn — save (or clear) what the IRP returned for this invoice. */

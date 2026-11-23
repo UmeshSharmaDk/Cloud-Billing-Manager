@@ -14,6 +14,7 @@ const LINKS: [string, keyof typeof Ionicons.glyphMap, Href][] = [
   ["E-way bills", "car-outline", "/eway-bills"],
   ["GST reports", "bar-chart-outline", "/reports"],
   ["Business settings", "business-outline", "/settings"],
+  ["E-invoice API login", "shield-checkmark-outline", "/irp-login"],
 ];
 
 export function MenuLink({ title, icon, href }: { title: string; icon: keyof typeof Ionicons.glyphMap; href: Href }) {

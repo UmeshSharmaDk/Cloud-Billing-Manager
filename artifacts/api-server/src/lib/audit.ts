@@ -52,6 +52,11 @@ export type AuditAction =
   | "invoice.emailed"
   | "invoice.irn_saved"
   | "invoice.irn_cleared"
+  | "invoice.irn_generated"
+  | "invoice.irn_cancelled"
+  | "eway_bill.generated"
+  | "business.irp_login_saved"
+  | "business.irp_login_removed"
   | `${BookKind}.${"created" | "updated" | "deleted" | "status_changed"}`;
 
 export type BookKind = "invoice" | "purchase" | "payment" | "eway_bill";
