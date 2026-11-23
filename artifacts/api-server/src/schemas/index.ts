@@ -503,6 +503,8 @@ export const CreateInvoiceBody = z
     tcsRate: z.coerce.number().finite().min(0).max(10).optional(),
     /** This invoice is this month's repeat of a monthly invoice. */
     repeatOf: entityId.optional(),
+    /** The app's own id for an invoice made offline. Sending it again returns the first one. */
+    clientRef: z.string().regex(/^[A-Za-z0-9-]{8,64}$/).optional(),
   })
   .refine((b) => b.customerId !== undefined || Boolean(b.customerName), {
     message: "customerId or customerName is required",
@@ -515,6 +517,17 @@ const tdsShape = {
 };
 
 export const RepeatInvoiceBody = z.object({ repeatMonthly: z.boolean() });
+
+/** What the IRP returns for an uploaded e-invoice. `irn: null` clears it after a cancellation on the IRP. */
+export const SaveIrnBody = z.union([
+  z.object({
+    irn: z.string().trim().regex(/^[0-9a-fA-F]{64}$/, "The IRN is 64 letters and digits, as the IRP shows it"),
+    ackNo: z.string().trim().regex(/^\d{1,20}$/, "The acknowledgement number is digits only"),
+    ackDate: z.string().trim().min(8).max(25),
+    signedQr: z.string().trim().max(4000).nullish(),
+  }),
+  z.object({ irn: z.null() }),
+]);
 
 export const UpdateInvoiceBody = z.object({
   tcsRate,
@@ -713,7 +726,8 @@ export const CreateEwayBillBody = z.object({
 
 export const UpdateEwayBillBody = z.object({
   status: z.enum(["draft", "generated", "cancelled"]).optional(),
-  ewbNo: optionalText(20),
+  // The portal's number: 12 digits. A made-up number on a printed bill is worse than none.
+  ewbNo: z.string().trim().regex(/^\d{12}$/, "The e-way bill number is 12 digits").nullish(),
   ewbDate: optionalText(40),
   validUpto: optionalText(40),
   transMode: optionalText(5),

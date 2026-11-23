@@ -41,7 +41,7 @@ const UQC: Record<string, string> = {
   l: "LTR", ltr: "LTR", litre: "LTR", ml: "MLT", m: "MTR", mtr: "MTR", box: "BOX", set: "SET", sets: "SET", pair: "PRS", dozen: "DOZ", doz: "DOZ",
   bag: "BAG", bags: "BAG", bottle: "BTL", btl: "BTL", unit: "UNT", units: "UNT", hour: "OTH", hrs: "OTH", service: "OTH",
 };
-const uqc = (unit?: string) => UQC[String(unit ?? "").trim().toLowerCase()] ?? "OTH";
+export const uqc = (unit?: string) => UQC[String(unit ?? "").trim().toLowerCase()] ?? "OTH";
 
 /** Item rows grouped by rate, as the portal wants them on an invoice. */
 function itemsByRate(lines: Gstr1Line[]) {

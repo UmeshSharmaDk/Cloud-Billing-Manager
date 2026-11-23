@@ -31,6 +31,13 @@ export const invoicesTable = pgTable("invoices", {
   repeatMonthly: boolean("repeat_monthly").notNull().default(false),
   lastRemindedAt: timestamp("last_reminded_at", { withTimezone: true }),
   items: jsonb("items").notNull().default([]),
+  /** From the IRP once the e-invoice is registered. A registered invoice's figures cannot change. */
+  irn: text("irn"),
+  irnAckNo: text("irn_ack_no"),
+  irnAckDate: text("irn_ack_date"),
+  irnSignedQr: text("irn_signed_qr"),
+  /** Set by the Android app on an invoice made offline; a resend returns the same invoice. */
+  clientRef: text("client_ref"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   // Two invoices in one business must never share a number. Enforced here so
@@ -38,6 +45,7 @@ export const invoicesTable = pgTable("invoices", {
   uniqueIndex("invoices_business_number_unique").on(t.businessId, t.invoiceNumber),
   // Reports and dashboards ask for one business over a date range.
   index("invoices_business_date_idx").on(t.businessId, t.invoiceDate),
+  uniqueIndex("invoices_business_client_ref_unique").on(t.businessId, t.clientRef),
 ]);
 
 export const insertInvoiceSchema = createInsertSchema(invoicesTable).omit({ id: true, createdAt: true });
