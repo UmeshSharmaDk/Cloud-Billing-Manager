@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ArrowLeft, Printer, CheckCircle, MessageCircle, Mail, Copy } from "lucide-react";
 import { authFetch } from "@/lib/api-fetch";
 import { ToggleRow } from "@/components/ToggleRow";
+import { EinvoicePanel } from "@/components/EinvoicePanel";
 import { reminderLink } from "@/lib/whatsapp";
 import { AiReminder } from "@/components/AiReminder";
 import { useToast } from "@/hooks/use-toast";
@@ -192,6 +193,7 @@ export default function InvoiceDetailPage() {
                     checked={Boolean(inv.repeatMonthly)} onChange={setRepeat} busy={repeatSaving} />
                 </div>
               )}
+              <EinvoicePanel inv={inv} onChange={refetch} />
             </CardContent>
           </Card>
         </div>
@@ -209,6 +211,15 @@ export default function InvoiceDetailPage() {
           <div className="text-sm font-bold border border-gray-800 px-3 py-0.5">{inv.type || "Tax Invoice"}</div>
           <div className="text-xs text-gray-600">Original for Recipient</div>
         </div>
+        {inv.irn && (
+          <div className="flex items-center justify-between gap-3 border-b border-gray-800 px-4 py-2 text-[11px]">
+            <div className="space-y-0.5 min-w-0">
+              <p className="break-all"><span className="text-gray-600">IRN </span><span className="font-mono">{inv.irn}</span></p>
+              <p><span className="text-gray-600">Ack No. </span>{inv.irnAckNo}<span className="text-gray-600"> · Ack Date </span>{inv.irnAckDate}</p>
+            </div>
+            {inv.irnQr && <img src={inv.irnQr} alt="E-invoice QR code" className="h-24 w-24 shrink-0" />}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 border-b border-gray-800 text-xs">
           <div className="p-3 border-r border-gray-800 space-y-1">

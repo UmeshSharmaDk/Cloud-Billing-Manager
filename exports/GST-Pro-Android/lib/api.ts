@@ -1,5 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
 import * as SecureStore from "expo-secure-store";
+import { saveGet, savedGet, setOffline } from "./offline";
 
 // Public backend hostname, baked into the APK at build time (see .env).
 const host = process.env.EXPO_PUBLIC_DOMAIN;
@@ -34,6 +35,7 @@ export function setSession(next: string | null, handler?: () => void) {
  */
 export async function api<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   if (!API_BASE) throw new ApiError(0, "This app was not set up correctly. Please install it again.");
+  const isGet = (init.method ?? "GET") === "GET";
   let res: Response;
   try {
     res = await fetch(API_BASE + path, {
@@ -47,15 +49,24 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
     });
   } catch {
+    // Offline: show what this phone last saw for the same screen, if anything.
+    const saved = isGet && token ? await savedGet<T>(path) : undefined;
+    setOffline(true);
+    if (saved !== undefined) return saved;
     throw new ApiError(0, "Could not reach the server. Check your connection and try again.");
   }
+  setOffline(false);
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     if (res.status === 401 && token) onUnauthorized();
     throw new ApiError(res.status, data?.error ?? `Request failed (${res.status}).`, data);
   }
+  if (isGet && token) void saveGet(path, data);
   return data as T;
 }
+
+/** The request never reached the server (no signal), as opposed to the server refusing it. */
+export const isNetworkError = (e: unknown) => e instanceof ApiError && e.status === 0;
 
 /** POST a file from the phone as the request body (the server reads PDFs for the importers). */
 export async function apiUpload<T>(path: string, uri: string, contentType: string): Promise<T> {

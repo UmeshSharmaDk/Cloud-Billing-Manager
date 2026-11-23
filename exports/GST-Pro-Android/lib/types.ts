@@ -88,6 +88,11 @@ export type Invoice = {
   upi?: { link: string; amount: number; qr: string } | null;
   /** The dashboard offers a copy of it each new month. */
   repeatMonthly?: boolean;
+  /** From the IRP once the e-invoice is registered; `irnQr` is the signed QR as an image. */
+  irn?: string | null;
+  irnAckNo?: string | null;
+  irnAckDate?: string | null;
+  irnQr?: string | null;
 };
 
 export type Product = {

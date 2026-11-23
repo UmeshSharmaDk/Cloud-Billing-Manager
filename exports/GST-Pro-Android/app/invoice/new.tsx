@@ -2,8 +2,10 @@ import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import { Alert, Text } from "react-native";
-import { api } from "@/lib/api";
+import { api, isNetworkError } from "@/lib/api";
 import { ai, type InvoiceDraft } from "@/lib/ai";
+import { useAuth } from "@/lib/auth";
+import { enqueue, newRef } from "@/lib/offline";
 import { emptyLine, LineItems, lineError, toItems, type Line } from "@/lib/LineItems";
 import { today, useSave } from "@/lib/save";
 import { stateOptions } from "@/lib/states";
@@ -26,6 +28,9 @@ export default function NewInvoice() {
   const [tcs, setTcs] = useState("");
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const { busy, run } = useSave();
+  const { user } = useAuth();
+  // One id per screen: pressing Create twice, or a resend after a lost reply, makes one invoice.
+  const [clientRef] = useState(newRef);
 
   // "Duplicate invoice" opens this screen with ?from=<id>, and the dashboard's
   // monthly repeat adds &repeat=1: same customer and lines, today's date, a new number.
@@ -78,17 +83,25 @@ export default function NewInvoice() {
     if (!customer && !walkIn.trim()) return Alert.alert("Customer needed", "Pick a customer or type a walk-in name.");
     const bad = lineError(lines);
     if (bad) return Alert.alert("Check the items", bad);
+    const body = {
+      type, invoiceDate, dueDate: dueDate || null, placeOfSupply: place || null, notes: notes.trim() || null, ...(Number(tcs) > 0 ? { tcsRate: Number(tcs) } : {}),
+      ...(customer ? { customerId: customer.id } : { customerName: walkIn.trim() }),
+      items: toItems(lines, true),
+      ...(repeat === "1" && from ? { repeatOf: Number(from) } : {}),
+      clientRef,
+    };
     run(
-      () => api<{ invoice: Invoice }>("/invoices", {
-        method: "POST",
-        body: {
-          type, invoiceDate, dueDate: dueDate || null, placeOfSupply: place || null, notes: notes.trim() || null, ...(Number(tcs) > 0 ? { tcsRate: Number(tcs) } : {}),
-          ...(customer ? { customerId: customer.id } : { customerName: walkIn.trim() }),
-          items: toItems(lines, true),
-          ...(repeat === "1" && from ? { repeatOf: Number(from) } : {}),
-        },
-      }),
+      () => api<{ invoice: Invoice }>("/invoices", { method: "POST", body }),
       (r) => router.replace(`/invoice/${r.invoice.id}`),
+      (e) => {
+        if (!isNetworkError(e) || !user) return false;
+        // No signal: keep it on the phone and send it when the connection is back.
+        void enqueue({ ref: clientRef, userId: user.id, path: "/invoices", body, label: `${type} for ${customer?.name ?? walkIn.trim()}, ${invoiceDate}` }).then(() => {
+          Alert.alert("Saved on this phone", "You are offline. The invoice will be sent, and get its number, when you are back online.");
+          router.back();
+        });
+        return true;
+      },
     );
   };
 

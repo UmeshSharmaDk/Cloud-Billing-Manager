@@ -6,6 +6,7 @@ import { dec, toColumn, toJson } from "../lib/money";
 import { validateBody, validateParams, validateQuery } from "../middleware/validate";
 import { CreateEwayBillBody, UpdateEwayBillBody, ListEwayBillsQuery, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
+import { buildEwayBillJson } from "../lib/einvoice";
 
 import { books } from "../middleware/books";
 
@@ -106,6 +107,23 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   return res.json(mapBill(bill));
 });
 
+/**
+ * GET /eway-bills/:id/json — the bill in the portal's bulk-generation format,
+ * for upload at ewaybillgst.gov.in. 400 lists what to fix first.
+ */
+router.get("/:id/json", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const [bill] = await db.select().from(ewayBillsTable)
+    .where(and(eq(ewayBillsTable.id, req.validatedParams.id), eq(ewayBillsTable.businessId, req.businessId))).limit(1);
+  if (!bill) return res.status(404).json({ error: "Not found" });
+  const [invoice] = bill.invoiceId
+    ? await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, bill.invoiceId), eq(invoicesTable.businessId, req.businessId))).limit(1)
+    : [];
+  const out = buildEwayBillJson(mapBill(bill), invoice);
+  if (out.problems) return res.status(400).json({ error: `Fix these first: ${out.problems.join(" ")}`, problems: out.problems });
+  res.setHeader("Content-Disposition", `attachment; filename="EWB_${bill.docNo.replace(/[^\w-]+/g, "_")}.json"`);
+  return res.json(out.json);
+});
+
 router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), validateBody(UpdateEwayBillBody), books("eway_bill"), async (req: Req, res) => {
   const businessId = req.businessId;
   const {
@@ -113,6 +131,12 @@ router.patch("/:id", requireAuth, requireBusiness, validateParams(IdParam), vali
     transMode, transDistance, transporterName, transporterId,
     transDocNo, transDocDate, vehicleNo, vehicleType,
   } = req.body;
+
+  // "Generated" means the portal issued a number. It used to be set here with a
+  // number we made up, which printed a bill no checkpost could verify.
+  if (status === "generated" && !ewbNo) {
+    return res.status(400).json({ error: "Enter the 12-digit e-way bill number the portal gave you." });
+  }
 
   const updates: any = {};
   if (status !== undefined) updates.status = status;

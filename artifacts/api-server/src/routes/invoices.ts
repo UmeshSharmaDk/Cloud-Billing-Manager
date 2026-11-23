@@ -7,13 +7,14 @@ import { Decimal, dec, paise, rupees, sum, sumBy, splitGst, toColumn, toJson } f
 import { resolveSupplyType } from "../lib/gst";
 import { applyStockChanges, applyStockMovement, resolveLineProducts, stockDirectionFor } from "../lib/stock";
 import { settleInvoice, deriveStatus } from "../lib/invoice-payments";
-import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, RepeatInvoiceBody, IdParam } from "../schemas";
+import { ListInvoicesQuery, CreateInvoiceBody, UpdateInvoiceBody, UpdateInvoiceStatusBody, EmailInvoiceBody, RepeatInvoiceBody, SaveIrnBody, IdParam } from "../schemas";
 import type { TenantRequest, IdParams } from "../lib/http";
 import { mapInvoice } from "../lib/serialise";
 import QRCode from "qrcode";
 import { mailer, invoiceMessage, describeMailError } from "../lib/mailer";
 import { recordAudit, actorFrom } from "../lib/audit";
 import { logger } from "../lib/logger";
+import { buildEinvoiceJson } from "../lib/einvoice";
 
 import { books } from "../middleware/books";
 
@@ -33,8 +34,13 @@ type Req = TenantRequest<any, any, IdParams>;
  * See the PATCH handler for the reasoning; kept here so the check made before
  * the write and the one made under the row lock are the same rule.
  */
-function invoiceEditBlock(inv: { status: string; paidAmount: unknown }, editsFigures: boolean): string | null {
+function invoiceEditBlock(inv: { status: string; paidAmount: unknown; irn?: string | null }, editsFigures: boolean): string | null {
   if (inv.status === "cancelled") return "A cancelled invoice cannot be changed.";
+  // The IRP holds a signed copy of these figures. Changing ours would leave the
+  // customer's copy and the government's disagreeing.
+  if (editsFigures && inv.irn) {
+    return "This invoice has an IRN, so its figures are fixed. Cancel the e-invoice on the IRP, clear the IRN here, then edit.";
+  }
   if (editsFigures && dec(inv.paidAmount).greaterThan(0)) {
     return "This invoice has payments recorded against it, so its figures can no longer be edited. Cancel it or issue a credit note instead.";
   }
@@ -168,7 +174,15 @@ router.get("/", requireAuth, requireBusiness, validateQuery(ListInvoicesQuery), 
 router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), books("invoice"), async (req: Req, res) => {
   const businessId = req.businessId;
 
-  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate, repeatOf } = req.body;
+  const { type, customerId, customerName: customCustomerName, customerGstin: customGstin, invoiceDate, dueDate, placeOfSupply, notes, items = [], tcsRate, repeatOf, clientRef } = req.body;
+
+  // The app queued this invoice offline and is sending it again, perhaps because
+  // the reply to the first send was lost. Hand back the one already made.
+  if (clientRef) {
+    const [already] = await db.select().from(invoicesTable)
+      .where(and(eq(invoicesTable.businessId, businessId), eq(invoicesTable.clientRef, clientRef))).limit(1);
+    if (already) return res.status(200).json({ invoice: mapInvoice(already) });
+  }
 
   if (!invoiceDate) return res.status(400).json({ error: "invoiceDate required" });
   if (!customerId && !customCustomerName) return res.status(400).json({ error: "customerId or customerName required" });
@@ -224,6 +238,7 @@ router.post("/", requireAuth, requireBusiness, validateBody(CreateInvoiceBody), 
       totalGst: toColumn(gstCalc.totalGst), grandTotal: toColumn(gstCalc.grandTotal),
       roundOff: toColumn(gstCalc.roundOff), paidAmount: "0.00",
       tcsRate: String(gstCalc.tcsRate), tcsAmount: toColumn(gstCalc.tcsAmount),
+      clientRef: clientRef ?? null,
     }).returning();
 
     // Goods leave on a sale, come back on a credit note, and do not move at all
@@ -261,7 +276,41 @@ router.get("/:id", requireAuth, requireBusiness, validateParams(IdParam), async 
   const businessId = req.businessId;
   const [invoice] = await db.select().from(invoicesTable).where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, businessId))).limit(1);
   if (!invoice) return res.status(404).json({ error: "Not found" });
-  return res.json({ ...mapInvoice(invoice), upi: await upiPayment(invoice) });
+  return res.json({
+    ...mapInvoice(invoice),
+    upi: await upiPayment(invoice),
+    irnQr: invoice.irnSignedQr ? await QRCode.toDataURL(invoice.irnSignedQr, { margin: 1, width: 240, errorCorrectionLevel: "L" }) : null,
+  });
+});
+
+/**
+ * GET /invoices/:id/einvoice-json — the invoice as an e-invoice file for the
+ * IRP's bulk upload (einvoice1.gst.gov.in). 400 lists what to fix first.
+ */
+router.get("/:id/einvoice-json", requireAuth, requireBusiness, validateParams(IdParam), async (req: Req, res) => {
+  const [invoice] = await db.select().from(invoicesTable)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).limit(1);
+  if (!invoice) return res.status(404).json({ error: "Not found" });
+  const [seller] = await db.select().from(businessesTable).where(eq(businessesTable.id, req.businessId)).limit(1);
+  const [buyer] = await db.select().from(customersTable)
+    .where(and(eq(customersTable.id, invoice.customerId), eq(customersTable.businessId, req.businessId))).limit(1);
+  const out = buildEinvoiceJson({ seller: seller ?? {}, buyer: buyer ?? { name: invoice.customerName }, invoice: mapInvoice(invoice) });
+  if (out.problems) return res.status(400).json({ error: `Fix these first: ${out.problems.join(" ")}`, problems: out.problems });
+  res.setHeader("Content-Disposition", `attachment; filename="EINV_${invoice.invoiceNumber.replace(/[^\w-]+/g, "_")}.json"`);
+  return res.json(out.json);
+});
+
+/** PUT /invoices/:id/irn — save (or clear) what the IRP returned for this invoice. */
+router.put("/:id/irn", requireAuth, requireBusiness, validateParams(IdParam), validateBody(SaveIrnBody), books("invoice"), async (req: Req, res) => {
+  const body = req.body;
+  const set = body.irn === null
+    ? { irn: null, irnAckNo: null, irnAckDate: null, irnSignedQr: null }
+    : { irn: body.irn.toLowerCase(), irnAckNo: body.ackNo, irnAckDate: body.ackDate, irnSignedQr: body.signedQr || null };
+  const [row] = await db.update(invoicesTable).set(set)
+    .where(and(eq(invoicesTable.id, req.validatedParams.id), eq(invoicesTable.businessId, req.businessId))).returning();
+  if (!row) return res.status(404).json({ error: "Not found" });
+  await recordAudit({ ...actorFrom(req), action: body.irn === null ? "invoice.irn_cleared" : "invoice.irn_saved", targetType: "invoice", targetId: row.id, details: { irn: set.irn } });
+  return res.json(mapInvoice(row));
 });
 
 /**

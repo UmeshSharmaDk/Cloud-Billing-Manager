@@ -146,6 +146,9 @@ export default function EwayBillNewPage() {
       fromGstin: biz.gstin ?? f.fromGstin,
       fromTrdName: biz.name ?? f.fromTrdName,
       fromAddr1: biz.address ?? f.fromAddr1,
+      fromCity: biz.city ?? f.fromCity,
+      fromPincode: biz.pincode ?? f.fromPincode,
+      fromState: biz.stateCode ?? f.fromState,
     }));
   }, [businessData]);
 
@@ -156,9 +159,13 @@ export default function EwayBillNewPage() {
     setForm(f => ({
       ...f,
       docNo: inv.invoiceNumber ?? f.docNo,
-      docDate: inv.date ?? f.docDate,
+      docDate: inv.invoiceDate ?? f.docDate,
       toGstin: customer?.gstin ?? f.toGstin,
       toTrdName: customer?.name ?? f.toTrdName,
+      toAddr1: customer?.address ?? f.toAddr1,
+      toCity: customer?.city ?? f.toCity,
+      toPincode: customer?.pincode ?? f.toPincode,
+      toState: customer?.stateCode ?? f.toState,
     }));
   }, [invoiceDetail, customersData]);
 
@@ -171,7 +178,7 @@ export default function EwayBillNewPage() {
   const invoices: any[] = invoicesData?.invoices ?? [];
   const selectedInvoice = form.invoiceId ? invoiceDetail : null;
 
-  const totalValue = selectedInvoice ? parseFloat(selectedInvoice.taxableAmount ?? "0") : 0;
+  const totalValue = selectedInvoice ? parseFloat(selectedInvoice.subtotal ?? "0") : 0;
   const cgstValue = selectedInvoice ? parseFloat(selectedInvoice.cgst ?? "0") : 0;
   const sgstValue = selectedInvoice ? parseFloat(selectedInvoice.sgst ?? "0") : 0;
   const igstValue = selectedInvoice ? parseFloat(selectedInvoice.igst ?? "0") : 0;

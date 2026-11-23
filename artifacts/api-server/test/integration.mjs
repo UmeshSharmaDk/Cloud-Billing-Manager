@@ -3099,6 +3099,52 @@ const adminEmail = `admin${uniq}@example.test`;
   check("upi", "a paid invoice has none", (await call("GET", `/invoices/${inv.id}`, { token: o.token })).data?.upi === null);
 }
 
+// === E-invoice, e-way bill files and offline invoices =========================
+{
+  const o = await register("einvowner");
+  const T = { token: o.token };
+  const stranger = await register("einvother");
+  await call("PATCH", "/business", { ...T, body: { gstin: "27AAAAA0000A1Z5", address: "12 MG Road", city: "Pune", pincode: "411001", state: "Maharashtra", stateCode: "27", invoicePrefix: "EI" } });
+  const cust = (await call("POST", "/customers", { ...T, body: { name: "Ravi Stores", gstin: "29BBBBB1111B1Z5", address: "4 Brigade Road", city: "Bengaluru", pincode: "560001", state: "Karnataka", stateCode: "29" } })).data;
+  const inv = (await call("POST", "/invoices", { ...T, body: { invoiceDate: "2026-11-05", customerId: cust?.id, placeOfSupply: "29",
+    items: [{ description: "Laptop bag", hsnCode: "4202", quantity: 2, unit: "Nos", unitPrice: 500, gstRate: 18 }] } })).data?.invoice;
+  const file = await call("GET", `/invoices/${inv?.id}/einvoice-json`, T);
+  check("einvoice", "a B2B invoice downloads as an IRP file", file.status === 200 && file.data?.[0]?.BuyerDtls?.Gstin === "29BBBBB1111B1Z5" && file.data[0].ValDtls.TotInvVal === 1180, JSON.stringify(file.data).slice(0, 300));
+  const walk = (await call("POST", "/invoices", { ...T, body: { invoiceDate: "2026-11-05", customerName: "Walk in", items: [{ description: "Bag", hsnCode: "4202", quantity: 1, unitPrice: 100, gstRate: 18 }] } })).data?.invoice;
+  const refused = await call("GET", `/invoices/${walk?.id}/einvoice-json`, T);
+  check("einvoice", "a sale to a customer with no GSTIN is refused with the reason", refused.status === 400 && /GSTIN/.test(refused.data?.error ?? ""), JSON.stringify(refused.data));
+  check("einvoice", "a malformed IRN is refused", (await call("PUT", `/invoices/${inv?.id}/irn`, { ...T, body: { irn: "abc", ackNo: "1", ackDate: "2026-11-05" } })).status === 400);
+  const irn = "a".repeat(64);
+  const saved = await call("PUT", `/invoices/${inv?.id}/irn`, { ...T, body: { irn, ackNo: "112610000000001", ackDate: "2026-11-05 10:00", signedQr: "eyJhbGciOi.signed.qr" } });
+  check("einvoice", "the IRN is saved", saved.status === 200 && saved.data?.irn === irn);
+  const got = (await call("GET", `/invoices/${inv?.id}`, T)).data;
+  check("einvoice", "the invoice carries the signed QR as an image", got?.irnQr?.startsWith("data:image/png"));
+  const edit = await call("PATCH", `/invoices/${inv?.id}`, { ...T, body: { items: [{ description: "Laptop bag", hsnCode: "4202", quantity: 3, unitPrice: 500, gstRate: 18 }] } });
+  check("einvoice", "a registered invoice's figures cannot be edited", edit.status === 409 && /IRN/.test(edit.data?.error ?? ""), JSON.stringify(edit.data));
+  check("einvoice", "but its notes can", (await call("PATCH", `/invoices/${inv?.id}`, { ...T, body: { notes: "Thanks" } })).status === 200);
+  check("einvoice", "another business cannot save an IRN on it", (await call("PUT", `/invoices/${inv?.id}/irn`, { token: stranger.token, body: { irn: null } })).status === 404);
+  check("einvoice", "clearing the IRN unlocks it", (await call("PUT", `/invoices/${inv?.id}/irn`, { ...T, body: { irn: null } })).data?.irn === null
+    && (await call("PATCH", `/invoices/${inv?.id}`, { ...T, body: { items: [{ description: "Laptop bag", hsnCode: "4202", quantity: 3, unitPrice: 500, gstRate: 18 }] } })).status === 200);
+
+  const bill = (await call("POST", "/eway-bills", { ...T, body: { docNo: inv?.invoiceNumber, docDate: "2026-11-05", invoiceId: inv?.id,
+    fromGstin: "27AAAAA0000A1Z5", fromTrdName: "Me", fromAddr1: "12 MG Road", fromCity: "Pune", fromPincode: "411001", fromState: "27",
+    toGstin: "29BBBBB1111B1Z5", toTrdName: "Ravi Stores", toAddr1: "4 Brigade Road", toCity: "Bengaluru", toPincode: "560001", toState: "29",
+    transDistance: 840, vehicleNo: "MH12AB1234", totalValue: 1500, igstValue: 270, totalInvValue: 1770, items: [] } })).data?.bill;
+  const ewb = await call("GET", `/eway-bills/${bill?.id}/json`, T);
+  check("ewaybill", "the bill downloads in the portal's bulk format, items from the invoice", ewb.status === 200 && ewb.data?.billLists?.[0]?.itemList?.[0]?.hsnCode === 4202 && ewb.data.billLists[0].toStateCode === 29, JSON.stringify(ewb.data).slice(0, 300));
+  check("ewaybill", "it cannot be marked generated without the portal's number", (await call("PATCH", `/eway-bills/${bill?.id}`, { ...T, body: { status: "generated" } })).status === 400);
+  check("ewaybill", "a made-up number is refused", (await call("PATCH", `/eway-bills/${bill?.id}`, { ...T, body: { status: "generated", ewbNo: "EWB000000000001" } })).status === 400);
+  const gen = await call("PATCH", `/eway-bills/${bill?.id}`, { ...T, body: { status: "generated", ewbNo: "331000123456", ewbDate: "2026-11-05", validUpto: "2026-11-10" } });
+  check("ewaybill", "the portal's 12-digit number is saved", gen.status === 200 && gen.data?.ewbNo === "331000123456");
+
+  const body = { invoiceDate: "2026-11-06", customerName: "Offline buyer", clientRef: `app-test-${uniq}`, items: [{ description: "Bag", quantity: 1, unitPrice: 100, gstRate: 18 }] };
+  const first = await call("POST", "/invoices", { ...T, body });
+  const again = await call("POST", "/invoices", { ...T, body });
+  check("offline", "sending an offline invoice twice makes it once", first.status === 201 && again.status === 200 && again.data?.invoice?.id === first.data?.invoice?.id && again.data.invoice.invoiceNumber === first.data.invoice.invoiceNumber);
+  const other = await call("POST", "/invoices", { token: stranger.token, body });
+  check("offline", "another business with the same ref gets its own invoice", other.status === 201 && other.data?.invoice?.id !== first.data?.invoice?.id, JSON.stringify({ s: other.status, e: other.data?.error }));
+}
+
 // === App updates ===========================================================
 {
   const bad = await call("GET", "/updates/manifest", { headers: { "expo-platform": "web", "expo-runtime-version": "1" } });

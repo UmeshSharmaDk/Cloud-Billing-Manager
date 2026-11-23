@@ -1,9 +1,14 @@
+import { useState } from "react";
 import { useRoute, Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Printer, XCircle, Truck, CheckCircle2, Clock } from "lucide-react";
+import { ArrowLeft, Printer, XCircle, Truck, CheckCircle2, Clock, FileJson } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { downloadFromApi } from "@/lib/download";
 import { formatCurrency } from "@/lib/utils";
 import { authFetch } from "@/lib/api-fetch";
 
@@ -76,22 +81,39 @@ export default function EwayBillDetailPage() {
     },
   });
 
+  // The number comes from the portal (ewaybillgst.gov.in) after the user uploads
+  // our file there. We never make one up: a checkpost verifies it online.
+  const [numberOpen, setNumberOpen] = useState(false);
+  const [ewb, setEwb] = useState({ ewbNo: "", ewbDate: "", validUpto: "" });
   const generateMutation = useMutation({
-    mutationFn: () => authFetch(`/api/eway-bills/${idPath}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        status: "generated",
-        ewbNo: `EWB${String(id).padStart(12, "0")}`,
-        ewbDate: new Date().toISOString().split("T")[0],
-        validUpto: new Date(Date.now() + bill?.transDistance && parseInt(bill.transDistance) > 200 ? 2 : 1 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
-      }),
-    }).then(r => r.json()),
+    mutationFn: async () => {
+      const res = await authFetch(`/api/eway-bills/${idPath}`, { method: "PATCH", body: JSON.stringify({ status: "generated", ...ewb }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not save.");
+      return data;
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["eway-bill", id] });
       queryClient.invalidateQueries({ queryKey: ["eway-bills"] });
-      toast({ title: "E-Way Bill generated", description: `EWB No: ${data.ewbNo}` });
+      setNumberOpen(false);
+      toast({ title: "E-way bill number saved", description: `EWB No: ${data.ewbNo}` });
     },
+    onError: (err: any) => toast({ title: "Not saved", description: err.message, variant: "destructive" }),
   });
+
+  const [downloading, setDownloading] = useState(false);
+  const downloadJson = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadFromApi(`/api/eway-bills/${idPath}/json`, `EWB_${bill?.docNo ?? id}.json`);
+      toast({ title: "E-way bill file saved", description: "Upload it at ewaybillgst.gov.in under Bulk Generation, then enter the number here." });
+    } catch (err: any) {
+      toast({ title: "File not made", description: err.message, variant: "destructive" });
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (isLoading) return (
     <div className="space-y-4 animate-pulse max-w-4xl">
@@ -129,9 +151,14 @@ export default function EwayBillDetailPage() {
         </div>
         <div className="flex items-center gap-2 print:hidden">
           {bill.status === "draft" && (
-            <Button variant="default" className="gap-2" onClick={() => generateMutation.mutate()} loading={generateMutation.isPending}>
-              <Truck className="w-4 h-4" />Generate e-way bill
-            </Button>
+            <>
+              <Button variant="outline" className="gap-2" onClick={downloadJson} loading={downloading}>
+                <FileJson className="w-4 h-4" />Download portal file
+              </Button>
+              <Button variant="default" className="gap-2" onClick={() => { setEwb({ ewbNo: "", ewbDate: new Date().toISOString().slice(0, 10), validUpto: "" }); setNumberOpen(true); }}>
+                <Truck className="w-4 h-4" />Enter e-way bill number
+              </Button>
+            </>
           )}
           {bill.status === "generated" && (
             <Button variant="outline" className="gap-2 text-danger border-danger/30 hover:bg-danger-bg" onClick={() => cancelMutation.mutate()} loading={cancelMutation.isPending}>
@@ -260,6 +287,36 @@ export default function EwayBillDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={numberOpen} onOpenChange={setNumberOpen}>
+        <DialogContent className="print:hidden sm:max-w-md">
+          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!generateMutation.isPending) generateMutation.mutate(); }}>
+            <DialogHeader>
+              <DialogTitle>Enter the e-way bill number</DialogTitle>
+              <DialogDescription>Copy it from ewaybillgst.gov.in after uploading the file or filling the form there.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <Label htmlFor="ewb-no">E-way bill number (12 digits)</Label>
+              <Input id="ewb-no" inputMode="numeric" pattern="\d{12}" maxLength={12} required autoFocus className="font-mono"
+                value={ewb.ewbNo} onChange={(e) => setEwb((v) => ({ ...v, ewbNo: e.target.value.replace(/\D/g, "") }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="ewb-date">Generated on</Label>
+                <Input id="ewb-date" type="date" required value={ewb.ewbDate} onChange={(e) => setEwb((v) => ({ ...v, ewbDate: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ewb-valid">Valid up to</Label>
+                <Input id="ewb-valid" type="date" required value={ewb.validUpto} onChange={(e) => setEwb((v) => ({ ...v, validUpto: e.target.value }))} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setNumberOpen(false)}>Cancel</Button>
+              <Button type="submit" loading={generateMutation.isPending}>Save number</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {/* Print Footer */}
       <div className="text-xs text-muted-foreground text-center pb-4 print:block hidden">

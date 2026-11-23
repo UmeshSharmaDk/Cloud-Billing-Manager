@@ -5,6 +5,7 @@ import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppUpdates } from "@/lib/AppUpdates";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { OfflineSync } from "@/lib/OfflineQueue";
 import { PlanExpiryNotifications } from "@/lib/PlanExpiry";
 import { SwipeNav } from "@/lib/SwipeNav";
 import { colors, isDark } from "@/lib/ui";
@@ -51,6 +52,7 @@ export default function RootLayout() {
         <SessionGuard />
         <AppUpdates />
         <PlanExpiryNotifications />
+        <OfflineSync />
       </AuthProvider>
     </QueryClientProvider>
   );

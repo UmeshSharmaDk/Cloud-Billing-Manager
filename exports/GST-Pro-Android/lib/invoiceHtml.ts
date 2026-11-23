@@ -27,6 +27,9 @@ export function invoiceHtml(inv: Invoice, biz: Business | undefined, cust: Custo
     <div>${addr(b.address, b.city, b.state, b.pincode)}</div>
     <div>GSTIN: ${esc(b.gstin)} ${b.stateCode ? `· State code ${esc(b.stateCode)}` : ""} ${b.phone ? `· ${esc(b.phone)}` : ""}</div>
     <h2>${esc(inv.type)}</h2>
+    ${inv.irn ? `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid #444;padding:6px;margin-bottom:8px">
+      <div style="word-break:break-all">IRN: <b>${esc(inv.irn)}</b><br>Ack No: ${esc(inv.irnAckNo)} · Ack Date: ${esc(inv.irnAckDate)}</div>
+      ${inv.irnQr ? `<img src="${esc(inv.irnQr)}" width="110" height="110" alt="E-invoice QR">` : ""}</div>` : ""}
     <div class="grid">
       <div><b>Bill to</b><br>${esc(inv.customerName)}<br>${addr(cust?.address, cust?.city, cust?.state, cust?.pincode)}
         ${inv.customerGstin ? `<br>GSTIN: ${esc(inv.customerGstin)}` : ""}${cust?.phone ? `<br>${esc(cust.phone)}` : ""}</div>

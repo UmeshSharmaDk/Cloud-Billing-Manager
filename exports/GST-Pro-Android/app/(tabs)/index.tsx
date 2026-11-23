@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import { Alert, Linking, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { api } from "@/lib/api";
 import { date, money } from "@/lib/format";
+import { OfflineCard } from "@/lib/OfflineQueue";
 import { PlanExpiryBanner } from "@/lib/PlanExpiry";
 import type { Business, DashboardStats, Invoice, Product } from "@/lib/types";
 import { reminderLink } from "@/lib/whatsapp";
@@ -70,7 +71,14 @@ export default function Dashboard() {
   const business = useQuery(get<Business>("/business")).data;
 
   if (summary.isLoading) return <Loading layout="dashboard" />;
-  if (summary.error) return <ErrorView error={summary.error} onRetry={summary.refetch} />;
+  // Offline with nothing saved yet: still offer the one thing that works offline.
+  if (summary.error) return (
+    <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}>
+      <OfflineCard />
+      <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
+      <ErrorView error={summary.error} onRetry={summary.refetch} />
+    </ScrollView>
+  );
   const { stats: d, repeatDue, overdue } = summary.data!;
   const recent = { data: summary.data!.recentInvoices };
   const months = { data: summary.data!.monthlyRevenue };
@@ -89,6 +97,7 @@ export default function Dashboard() {
     <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 16 }}
       refreshControl={<RefreshControl refreshing={summary.isRefetching} onRefresh={refresh} />}>
       <PlanExpiryBanner />
+      <OfflineCard />
       <Text style={s.title}>Revenue · 1 {monthName(0)} to {now.getUTCDate()} {monthName(0)} {now.getUTCFullYear()}</Text>
       <Button title="New invoice" onPress={() => router.push("/invoice/new")} />
       <FirstSteps steps={[
