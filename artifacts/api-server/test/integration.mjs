@@ -3145,6 +3145,72 @@ const adminEmail = `admin${uniq}@example.test`;
   check("offline", "another business with the same ref gets its own invoice", other.status === 201 && other.data?.invoice?.id !== first.data?.invoice?.id, JSON.stringify({ s: other.status, e: other.data?.error }));
 }
 
+// === Generating IRNs and e-way bills through the IRP (fake IRP on :8098) ======
+{
+  const { createServer } = await import("node:http");
+  const { constants, generateKeyPairSync, privateDecrypt, randomBytes } = await import("node:crypto");
+  const { aesEncrypt, aesDecrypt } = await import("../src/lib/irp.ts");
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const sek = randomBytes(32);
+  const calls = [];
+  const fake = createServer(async (req, res) => {
+    let raw = ""; for await (const c of req) raw += c;
+    const body = JSON.parse(raw || "{}");
+    const send = (o) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(o)); };
+    if (req.url === "/eivital/v1.04/auth") {
+      const inner = JSON.parse(Buffer.from(privateDecrypt({ key: privateKey, padding: constants.RSA_PKCS1_PADDING }, Buffer.from(body.Data, "base64")).toString(), "base64").toString());
+      if (inner.Password !== "irp-pass") return send({ Status: 0, ErrorDetails: [{ ErrorCode: "1001", ErrorMessage: "Invalid username or password" }] });
+      return send({ Status: 1, Data: { AuthToken: "tok", Sek: aesEncrypt(Buffer.from(inner.AppKey, "base64"), sek), TokenExpiry: "2099-01-01 10:00:00" } });
+    }
+    const p = JSON.parse(aesDecrypt(sek, body.Data).toString());
+    calls.push({ path: req.url, p });
+    const ok = (d) => send({ Status: 1, Data: aesEncrypt(sek, Buffer.from(JSON.stringify(d))) });
+    if (req.url === "/eicore/v1.03/Invoice") return ok({ AckNo: 112610000000777, AckDt: "2026-11-23 10:00:00", Irn: "c".repeat(64), SignedQRCode: "eyJ.signed.qr" });
+    if (req.url === "/eicore/v1.03/Invoice/Cancel") return ok({ Irn: p.Irn, CancelDate: "2026-11-23 11:00:00" });
+    if (req.url === "/eiewb/v1.03/ewaybill") return ok({ EwbNo: 341000999999, EwbDt: "2026-11-23 12:00:00", EwbValidTill: "2026-11-28 23:59:00" });
+    send({ Status: 0, ErrorDetails: [{ ErrorCode: "404", ErrorMessage: "no such API" }] });
+  });
+  await new Promise((r) => fake.listen(8098, "127.0.0.1", r));
+  const o = await register("irpowner");
+  const T = { token: o.token };
+  await call("PATCH", "/business", { ...T, body: { gstin: "29AAFCD5862R000", address: "1 MG Road", city: "Bengaluru", pincode: "560001", state: "Karnataka", stateCode: "29", invoicePrefix: "IR" } });
+  const cust = (await call("POST", "/customers", { ...T, body: { name: "Buyer Co", gstin: "27AAFCD5862R013", address: "2 FC Road", city: "Pune", pincode: "411001", state: "Maharashtra", stateCode: "27" } })).data;
+  const inv = (await call("POST", "/invoices", { ...T, body: { invoiceDate: "2026-11-23", customerId: cust?.id, placeOfSupply: "27",
+    items: [{ description: "Laptop bag", hsnCode: "4202", quantity: 1, unit: "Nos", unitPrice: 1000, gstRate: 18 }] } })).data?.invoice;
+
+  const noLogin = await call("POST", `/invoices/${inv?.id}/irn/generate`, T);
+  check("irp", "without a login, generating asks for one", noLogin.status === 409 && /Settings/.test(noLogin.data?.error ?? ""), JSON.stringify(noLogin.data));
+  const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const login = { clientId: "AAFCD-client", clientSecret: "client-secret", username: "api_irpowner", publicKey: pem };
+  const wrong = await call("PUT", "/business/irp", { ...T, body: { ...login, password: "nope" } });
+  check("irp", "a login the IRP refuses is not saved", wrong.status === 400 && /Invalid username/.test(wrong.data?.error ?? "") && (await call("GET", "/business/irp", T)).data?.configured === false, JSON.stringify(wrong.data));
+  const saved = await call("PUT", "/business/irp", { ...T, body: { ...login, password: "irp-pass" } });
+  check("irp", "a working login is saved, on the sandbox by default", saved.status === 200 && saved.data?.sandbox === true && saved.data?.gstin === "29AAFCD5862R000", JSON.stringify(saved.data));
+  const shown = (await call("GET", "/business/irp", T)).data;
+  check("irp", "the saved login never comes back with its secrets", shown?.configured === true && !JSON.stringify(shown).includes("irp-pass") && !JSON.stringify(shown).includes("client-secret"));
+  check("irp", "nor does GET /business carry it", !JSON.stringify((await call("GET", "/business", T)).data).includes("irp-pass"));
+  const stored = sqlValue(`SELECT password FROM irp_credentials WHERE username = 'api_irpowner'`);
+  check("irp", "the password is sealed in the database", stored.startsWith("v1.") && !stored.includes("irp-pass"));
+
+  const gen = await call("POST", `/invoices/${inv?.id}/irn/generate`, T);
+  check("irp", "generate sends the e-invoice and saves the IRN, ack and QR", gen.status === 200 && gen.data?.irn === "c".repeat(64) && gen.data.irnAckNo === "112610000000777" && calls.at(-1)?.p?.DocDtls?.No === inv?.invoiceNumber, JSON.stringify(gen.data?.error ?? gen.data?.irn));
+  check("irp", "a second generate is refused", (await call("POST", `/invoices/${inv?.id}/irn/generate`, T)).status === 409);
+
+  const bill = (await call("POST", "/eway-bills", { ...T, body: { docNo: inv?.invoiceNumber, docDate: "2026-11-23", invoiceId: inv?.id, transDistance: 840, vehicleNo: "KA 01 AB 1234", items: [] } })).data?.bill;
+  const ewb = await call("POST", `/eway-bills/${bill?.id}/generate`, T);
+  check("irp", "the e-way bill comes from the IRN, with its real number and dates", ewb.status === 200 && ewb.data?.ewbNo === "341000999999" && ewb.data.status === "generated" && ewb.data.validUpto === "2026-11-28" && calls.at(-1)?.p?.VehNo === "KA01AB1234", JSON.stringify(ewb.data));
+  const lone = (await call("POST", "/eway-bills", { ...T, body: { docNo: "X-1", docDate: "2026-11-23", transDistance: 10, items: [] } })).data?.bill;
+  check("irp", "a bill with no IRN behind it is pointed to the portal file", (await call("POST", `/eway-bills/${lone?.id}/generate`, T)).status === 409);
+
+  check("irp", "cancelling needs a reason", (await call("POST", `/invoices/${inv?.id}/irn/cancel`, { ...T, body: { reason: "9", remark: "" } })).status === 400);
+  const cnl = await call("POST", `/invoices/${inv?.id}/irn/cancel`, { ...T, body: { reason: "2", remark: "Wrong rate" } });
+  check("irp", "cancel calls the IRP and clears the IRN", cnl.status === 200 && cnl.data?.irn === null && calls.at(-1)?.p?.CnlRsn === "2");
+  const other = await register("irpother");
+  check("irp", "another business cannot generate on this invoice", (await call("POST", `/invoices/${inv?.id}/irn/generate`, { token: other.token })).status === 404);
+  check("irp", "removing the login works", (await call("DELETE", "/business/irp", T)).data?.configured === false);
+  fake.close();
+}
+
 // === App updates ===========================================================
 {
   const bad = await call("GET", "/updates/manifest", { headers: { "expo-platform": "web", "expo-runtime-version": "1" } });

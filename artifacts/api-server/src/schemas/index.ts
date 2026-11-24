@@ -518,6 +518,22 @@ const tdsShape = {
 
 export const RepeatInvoiceBody = z.object({ repeatMonthly: z.boolean() });
 
+/** A business's e-invoice system (IRP) API login, from NIC's sandbox or production registration. */
+export const SaveIrpLoginBody = z.object({
+  baseUrl: z.string().trim().url().regex(/^https:\/\//, "Use the https address NIC gave you").max(200).optional(),
+  clientId: z.string().trim().min(4).max(200),
+  clientSecret: z.string().trim().min(4).max(200),
+  username: z.string().trim().min(2).max(100),
+  password: z.string().min(4).max(200),
+  publicKey: z.string().trim().min(100, "Paste the whole public key").max(5000),
+});
+
+/** NIC's cancel reasons: 1 duplicate, 2 data entry mistake, 3 order cancelled, 4 other. */
+export const CancelIrnBody = z.object({
+  reason: z.enum(["1", "2", "3", "4"]),
+  remark: z.string().trim().min(1, "Say why it is being cancelled").max(100),
+});
+
 /** What the IRP returns for an uploaded e-invoice. `irn: null` clears it after a cancellation on the IRP. */
 export const SaveIrnBody = z.union([
   z.object({

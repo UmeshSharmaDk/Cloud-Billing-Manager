@@ -101,6 +101,22 @@ export default function EwayBillDetailPage() {
     onError: (err: any) => toast({ title: "Not saved", description: err.message, variant: "destructive" }),
   });
 
+  const irp = useQuery({ queryKey: ["irp-login"], queryFn: () => authFetch("/api/business/irp").then((r) => r.json()) }).data;
+  const directMutation = useMutation({
+    mutationFn: async () => {
+      const res = await authFetch(`/api/eway-bills/${idPath}/generate`, { method: "POST", body: "{}" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "The e-invoice system did not answer.");
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["eway-bill", id] });
+      queryClient.invalidateQueries({ queryKey: ["eway-bills"] });
+      toast({ title: "E-way bill generated", description: `EWB No: ${data.ewbNo}` });
+    },
+    onError: (err: any) => toast({ title: "Not generated", description: err.message, variant: "destructive" }),
+  });
+
   const [downloading, setDownloading] = useState(false);
   const downloadJson = async () => {
     if (downloading) return;
@@ -155,7 +171,12 @@ export default function EwayBillDetailPage() {
               <Button variant="outline" className="gap-2" onClick={downloadJson} loading={downloading}>
                 <FileJson className="w-4 h-4" />Download portal file
               </Button>
-              <Button variant="default" className="gap-2" onClick={() => { setEwb({ ewbNo: "", ewbDate: new Date().toISOString().slice(0, 10), validUpto: "" }); setNumberOpen(true); }}>
+              {irp?.configured && bill.invoiceId && (
+                <Button variant="default" className="gap-2" onClick={() => directMutation.mutate()} loading={directMutation.isPending}>
+                  <Truck className="w-4 h-4" />Generate e-way bill
+                </Button>
+              )}
+              <Button variant={irp?.configured && bill.invoiceId ? "outline" : "default"} className="gap-2" onClick={() => { setEwb({ ewbNo: "", ewbDate: new Date().toISOString().slice(0, 10), validUpto: "" }); setNumberOpen(true); }}>
                 <Truck className="w-4 h-4" />Enter e-way bill number
               </Button>
             </>

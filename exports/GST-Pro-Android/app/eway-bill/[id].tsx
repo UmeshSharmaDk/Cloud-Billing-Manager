@@ -14,6 +14,7 @@ const str = (v: unknown) => (v == null || v === "" ? "—" : String(v));
 export default function EwayBillDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const q = useQuery({ queryKey: [`/eway-bills/${id}`], queryFn: () => api<EwayBill>(`/eway-bills/${encodeURIComponent(id)}`) });
+  const irp = useQuery({ queryKey: ["/business/irp"], queryFn: () => api<{ configured: boolean }>("/business/irp") });
   const { busy, run } = useSave();
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorView error={q.error} onRetry={q.refetch} />;
@@ -24,6 +25,8 @@ export default function EwayBillDetail() {
     const uri = await apiDownload(`/eway-bills/${b.id}/json`, `EWB_${b.docNo}.json`);
     await Sharing.shareAsync(uri, { mimeType: "application/json", dialogTitle: "Upload at ewaybillgst.gov.in" });
   });
+  const direct = !!irp.data?.configured && !!b.invoiceId;
+  const generate = () => run(() => api(`/eway-bills/${b.id}/generate`, { method: "POST", body: {} }), () => Alert.alert("E-way bill generated"));
   const cancel = () => Alert.alert("Cancel this e-way bill?", "This cannot be undone.", [
     { text: "Keep", style: "cancel" },
     { text: "Cancel bill", style: "destructive", onPress: () => patch({ status: "cancelled" }) },
@@ -41,9 +44,10 @@ export default function EwayBillDetail() {
       </Card>
       {b.status === "draft" && (
         <Card>
-          <Text style={s.muted}>Share the file to yourself, upload it at ewaybillgst.gov.in (Bulk Generation), then enter the number it gives you.</Text>
+          {direct && <Button title="Generate e-way bill" busy={busy} onPress={generate} />}
+          <Text style={s.muted}>{direct ? "Or by hand: share the file, upload it at ewaybillgst.gov.in (Bulk Generation), then enter the number." : "Share the file to yourself, upload it at ewaybillgst.gov.in (Bulk Generation), then enter the number it gives you."}</Text>
           <Button title="Share portal file" variant="outline" busy={busy} onPress={shareFile} />
-          <Button title="Enter e-way bill number" onPress={() => router.push({ pathname: "/eway-bill/number", params: { id: String(b.id) } })} />
+          <Button title="Enter e-way bill number" variant={direct ? "outline" : "primary"} onPress={() => router.push({ pathname: "/eway-bill/number", params: { id: String(b.id) } })} />
         </Card>
       )}
       {b.status === "generated" && <Button title="Cancel e-way bill" variant="danger" busy={busy} onPress={cancel} />}

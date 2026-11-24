@@ -11,6 +11,7 @@ import { Building2, CreditCard, FileText, Save, KeyRound } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { INDIAN_STATES } from "@/lib/states";
+import { IrpLoginCard } from "@/components/IrpLoginCard";
 
 export default function SettingsPage() {
   const { data: biz, isLoading } = useGetBusiness();
@@ -110,6 +111,7 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+          <IrpLoginCard />
         </TabsContent>
 
         <TabsContent value="security" className="mt-4 space-y-4">
