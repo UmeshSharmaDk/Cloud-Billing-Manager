@@ -222,6 +222,36 @@ const aInv = (await call("POST", "/invoices", { token: alice.token,
 check("setup", "alice created customer, vendor, product and invoice",
   Boolean(aCust?.id && aVend?.id && aProd?.id && aInv?.id));
 
+// === AI: answers come only from the asking business's books =================
+// The server is started with AI_API_BASE pointing here. This fake asks for the
+// customer_balances tool, then answers with whatever the tool returned, so the
+// answer shows exactly which rows the server handed the model.
+if (process.env.AI_FAKE_PORT) {
+  const http = await import("node:http");
+  const fake = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      const body = JSON.parse(raw);
+      const last = body.contents.at(-1).parts[0];
+      const part = last.functionResponse
+        ? { text: JSON.stringify(last.functionResponse.response) }
+        : { functionCall: { name: "customer_balances", args: {} } };
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ candidates: [{ content: { role: "model", parts: [part] } }] }));
+    });
+  }).listen(Number(process.env.AI_FAKE_PORT));
+  const ask = (token) => call("POST", "/ai/ask", { token, body: { question: "Who owes me the most?" } });
+  const mine = await ask(alice.token);
+  check("ai", "Ask your books answers from the business's own invoices", mine.status === 200 && mine.data?.answer?.includes("Alice Secret Customer"), JSON.stringify(mine.data));
+  const theirs = await ask(bob.token);
+  check("ai", "and never from another business's", theirs.status === 200 && !theirs.data?.answer?.includes("Alice"), JSON.stringify(theirs.data));
+  const other = await call("POST", "/ai/reminder", { token: bob.token, body: { invoiceId: aInv.id } });
+  check("ai", "a reminder cannot be written for another business's invoice", other.status === 404, String(other.status));
+  fake.close();
+}
+
+
 // === F-05: cross-tenant reads ==============================================
 // The headline exploit: reference Alice's customer id while creating your own
 // invoice and read back her name and GSTIN from the 201 response.

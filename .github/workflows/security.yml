@@ -246,6 +246,8 @@ jobs:
       # NODE_ENV=production rather than a development variant of it.
       MAIL_OUTBOX_PATH: /tmp/outbox.jsonl
       MAIL_FROM: GST Platform <no-reply@example.test>
+      # The suite runs a fake AI on this port, so no AI call leaves CI.
+      AI_FAKE_PORT: "8098"
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -408,6 +410,7 @@ jobs:
             ALLOWED_ORIGINS="$ALLOWED_ORIGINS" MAIL_OUTBOX_PATH="$MAIL_OUTBOX_PATH" MAIL_FROM="$MAIL_FROM" HOUSEKEEPING_INTERVAL_MS=2000 \
             DISABLE_BREACH_CHECK="$DISABLE_BREACH_CHECK" AUTH_RATE_LIMIT_MAX="$AUTH_RATE_LIMIT_MAX" \
             REGISTER_RATE_LIMIT_MAX="$REGISTER_RATE_LIMIT_MAX" ALLOW_PUBLIC_REGISTRATION="$ALLOW_PUBLIC_REGISTRATION" IRP_BASE_URL=http://127.0.0.1:8098 \
+            GOOGLE_API_KEY=ci-fake AI_API_BASE="http://127.0.0.1:$AI_FAKE_PORT" \
             node artifacts/api-server/dist/index.mjs > /tmp/api.log 2>&1 &
           echo $! > /tmp/api.pid
           timeout 60 bash -c 'until curl -sf http://127.0.0.1:8099/api/healthz >/dev/null; do sleep 1; done'

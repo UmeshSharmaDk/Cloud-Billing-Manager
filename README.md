@@ -48,6 +48,9 @@ its database only from the migrations and fails if they disagree with the schema
   for the client address, default 1), `AUTH_RATE_LIMIT_MAX` (default 30), `REGISTER_RATE_LIMIT_MAX`,
   `TENANT_WRITE_RATE_LIMIT_MAX`, `TENANT_READ_RATE_LIMIT_MAX`, `TENANT_MAX_IN_FLIGHT` (default 16, keep below
   `DB_POOL_MAX`), `DISABLE_BREACH_CHECK` (skips the Have I Been Pwned lookup on new passwords), `NODE_ENV`
+- AI (optional): `GOOGLE_API_KEY` turns on the AI features (Google Gemini, the same key the CRM uses). Without it they
+  answer "AI isn't set up yet". `AI_DAILY_LIMIT` (AI actions per business per day, default 50), `AI_MODEL`
+  (default `gemini-2.5-flash`). The AI only reads; drafts are saved through the normal screens.
 - RLS policies: `pnpm --filter @workspace/db run rls:apply` with the owner connection (safe to repeat).
 
 ## Stack
@@ -102,6 +105,9 @@ its database only from the migrations and fails if they disagree with the schema
   invoices (email, duplicate, repeat monthly, UPI QR), purchases, inventory, customers, vendors, payments,
   e-way bills, GST reports (GSTR-1 with the portal JSON file, GSTR-3B, HSN, TDS, TCS, GSTR-2B match),
   Excel and Tally exports, weekly emailed payment reminders (opt in), two-factor sign-in, business settings.
+- **AI** (website and app, English and Hindi): Ask your books (read-only questions about the business's own
+  figures, plus general GST help), read a purchase bill from a photo or PDF, fill an invoice from a sentence,
+  suggest HSN and GST for a product, and write a payment reminder.
 - **Admin**: every client's month on one screen with GSTR-1 and 3B filing status, users, read-only view of a
   user's books (audited), books freeze, can require two-factor sign-in for their users and reset it.
   Admins have a plan end date; when it passes, the admin and their users cannot sign in.

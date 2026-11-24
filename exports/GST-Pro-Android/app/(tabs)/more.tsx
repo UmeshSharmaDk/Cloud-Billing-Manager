@@ -8,6 +8,7 @@ import { date } from "@/lib/format";
 import { Button, colors, LanguageToggle, Row, s, ThemeToggle } from "@/lib/ui";
 
 const LINKS: [string, keyof typeof Ionicons.glyphMap, Href][] = [
+  ["Ask your books", "sparkles-outline", "/assistant"],
   ["Customers", "people-outline", "/customers"],
   ["Vendors", "storefront-outline", "/vendors"],
   ["Payments", "cash-outline", "/payments"],

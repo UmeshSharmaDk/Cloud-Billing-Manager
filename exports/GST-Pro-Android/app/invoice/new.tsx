@@ -1,15 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert } from "react-native";
+import { Alert, Text } from "react-native";
 import { api, isNetworkError } from "@/lib/api";
+import { ai, type InvoiceDraft } from "@/lib/ai";
 import { useAuth } from "@/lib/auth";
 import { enqueue, newRef } from "@/lib/offline";
 import { emptyLine, LineItems, lineError, toItems, type Line } from "@/lib/LineItems";
 import { today, useSave } from "@/lib/save";
 import { stateOptions } from "@/lib/states";
 import type { Customer, Invoice } from "@/lib/types";
-import { Button, Card, Field, Form, Select } from "@/lib/ui";
+import { Button, Card, colors, Field, Form, Select } from "@/lib/ui";
 
 const TYPES = ["Tax Invoice", "Bill of Supply", "Proforma Invoice", "Credit Note", "Debit Note"].map((t) => ({ value: t, label: t }));
 const WALK_IN = "walk-in";
@@ -49,6 +50,32 @@ export default function NewInvoice() {
     })));
   }, [source]);
 
+  // Invoice from a sentence: the AI fills the form, the person checks it and creates the invoice.
+  const [describe, setDescribe] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [draftNote, setDraftNote] = useState("");
+  const fillFromText = async () => {
+    setDrafting(true);
+    try {
+      const d = await ai<InvoiceDraft>("invoice-draft", { text: describe });
+      if (!d.items.length) return Alert.alert("No items found", "Say what was sold, how many and at what price.");
+      setCustomerId(d.customerId && customers.some((c) => c.id === d.customerId) ? String(d.customerId) : WALK_IN);
+      setWalkIn(d.customerName);
+      if (d.stateCode) setPlace(d.stateCode);
+      if (d.notes) setNotes(d.notes);
+      if (d.dueInDays !== null) setDueDate(new Date(Date.parse(invoiceDate) + d.dueInDays * 86400000).toISOString().slice(0, 10));
+      setLines(d.items.map((it) => ({ productId: it.productId, description: it.description, hsnCode: it.hsnCode, quantity: String(it.quantity),
+        unit: it.unit, unitPrice: String(it.unitPrice || ""), gstRate: String(it.gstRate), discount: String(it.discount) })));
+      setDraftNote(["Check the customer, items and prices before you create it.",
+        ...(d.customerId ? [] : [`${d.customerName || "The customer"} is not in your customers, so this will be a walk-in invoice unless you pick one.`]),
+        ...d.questions].join("\n"));
+    } catch (e) {
+      Alert.alert("The AI could not fill the invoice", e instanceof Error ? e.message : String(e));
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   const customer = customers.find((c) => String(c.id) === customerId);
   const place = placeOfSupply || customer?.stateCode || "";
 
@@ -81,6 +108,13 @@ export default function NewInvoice() {
   return (
     <Form>
       <Stack.Screen options={{ title: "New invoice" }} />
+      <Card title="Describe the invoice">
+        <Field label="What did you sell?" value={describe} onChangeText={setDescribe} multiline maxLength={2000}
+          placeholder="e.g. Sharma Traders, 10 bags cement at 380 plus GST, due in 15 days" />
+        <Button title="Fill invoice with AI" variant="outline" busy={drafting} onPress={fillFromText}
+          disabledReason={describe.trim().length >= 3 ? undefined : "Describe the sale first."} />
+        {!!draftNote && <Text style={{ color: colors.text, fontSize: 13 }}>{draftNote}</Text>}
+      </Card>
       <Card title="Bill to">
         <Select label="Customer" value={customerId} onChange={setCustomerId}
           options={[{ value: WALK_IN, label: "Walk-in customer" }, ...customers.map((c) => ({ value: String(c.id), label: c.gstin ? `${c.name} · ${c.gstin}` : c.name }))]} />

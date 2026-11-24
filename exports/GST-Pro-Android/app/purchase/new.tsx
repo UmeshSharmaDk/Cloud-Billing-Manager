@@ -5,6 +5,7 @@ import { Alert, Text, View } from "react-native";
 import { annotateResult } from "@/lib/bill-text";
 import { chooseFile, choosePdf, fileText, takePhoto } from "@/lib/importFile";
 import { api } from "@/lib/api";
+import { readBill } from "@/lib/ai";
 import { emptyLine, LineItems, lineError, toItems, useAllProducts, type Line } from "@/lib/LineItems";
 import { today, useSave } from "@/lib/save";
 import type { Purchase, Vendor } from "@/lib/types";
@@ -54,6 +55,36 @@ export default function NewPurchase() {
     }
   };
 
+  /** The AI reads a photo or PDF of the bill; every line is checked before saving. */
+  const aiBill = async (pick: () => ReturnType<typeof takePhoto>) => {
+    try {
+      const file = await pick();
+      if (!file) return;
+      setReading(true);
+      const bill = await readBill(file);
+      if (!bill.items.length) return Alert.alert("No items found on the bill", bill.warnings[0] ?? "Try a sharper, straight-on photo.");
+      setLines(bill.items.map((it) => {
+        const match = products.find((p) => p.name.toLowerCase().trim() === it.description.toLowerCase().trim());
+        return { productId: match?.id ?? null, description: it.description, hsnCode: it.hsnCode || match?.hsnCode || "", quantity: String(it.quantity),
+          unit: it.unit || match?.unit || "Nos", unitPrice: String(it.unitPrice), gstRate: String(it.gstRate), discount: "0" };
+      }));
+      if (bill.billNumber) setBillNumber(bill.billNumber);
+      if (bill.billDate) setBillDate(bill.billDate);
+      const vendor = vendors.find((v) => bill.vendorGstin && v.gstin?.toUpperCase() === bill.vendorGstin)
+        ?? vendors.find((v) => bill.vendorName && v.name.toLowerCase().trim() === bill.vendorName.toLowerCase().trim());
+      if (vendor) setVendorId(String(vendor.id));
+      setImported([
+        `The AI read ${bill.items.length} item(s). Check every line against the bill before saving.`,
+        !vendor && bill.vendorName ? `The vendor on the bill, ${bill.vendorName}${bill.vendorGstin ? ` (${bill.vendorGstin})` : ""}, is not in your vendors yet. Add them under Vendors, then pick them below.` : "",
+        ...bill.warnings,
+      ].filter(Boolean).join("\n"));
+    } catch (e) {
+      Alert.alert("The AI could not read the bill", e instanceof Error ? e.message : String(e));
+    } finally {
+      setReading(false);
+    }
+  };
+
   const submit = () => {
     if (!vendorId) return Alert.alert("Vendor needed", "Pick the vendor who sent this bill.");
     const bad = lineError(lines);
@@ -77,6 +108,11 @@ export default function NewPurchase() {
           <View style={{ flex: 1 }}><Button title="Choose PDF" variant="outline" busy={reading} onPress={() => importBill(choosePdf)} /></View>
         </View>
         <Button title="Choose image, Excel or CSV" variant="outline" busy={reading} onPress={() => importBill(chooseFile)} />
+        <Text style={{ color: colors.muted, fontSize: 13 }}>Or let the AI read it. It handles handwritten and unclear bills better.</Text>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flex: 1 }}><Button title="Photo for AI" variant="outline" busy={reading} onPress={() => aiBill(takePhoto)} /></View>
+          <View style={{ flex: 1 }}><Button title="File for AI" variant="outline" busy={reading} onPress={() => aiBill(() => chooseFile(["image/*", "application/pdf"]))} /></View>
+        </View>
         {imported && <Text style={{ color: colors.text, fontSize: 13 }}>{imported}</Text>}
       </Card>
       <Card title="Bill">
