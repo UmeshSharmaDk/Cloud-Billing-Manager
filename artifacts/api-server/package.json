@@ -9,7 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:integration": "node test/integration.mjs",
-    "test:unit": "node test/password-policy.test.ts && node test/money.test.ts && node test/gst.test.ts && node test/spec-contract.test.mjs && node test/logger-scrub.test.ts && node test/mail-error.test.ts && node test/mail-config.test.ts && node test/db-connection.test.ts && node test/security-log.test.mjs && node test/totp.test.ts && node test/bank-match.test.ts && node test/gstr1-json.test.ts && node test/tally-xml.test.ts && node test/error-alerts.test.ts && node test/payu.test.ts && node --import tsx test/einvoice.test.ts",
+    "test:unit": "node test/password-policy.test.ts && node test/money.test.ts && node test/gst.test.ts && node test/spec-contract.test.mjs && node test/logger-scrub.test.ts && node test/mail-error.test.ts && node test/mail-config.test.ts && node test/db-connection.test.ts && node test/security-log.test.mjs && node test/totp.test.ts && node test/bank-match.test.ts && node test/gstr1-json.test.ts && node test/tally-xml.test.ts && node test/error-alerts.test.ts && node test/payu.test.ts && node --import tsx test/einvoice.test.ts && node test/ai.test.ts",
     "backfill:legacy-admin-ownership": "tsx scripts/backfill-legacy-admin-ownership.mjs",
     "bootstrap:superadmin": "tsx scripts/bootstrap-superadmin.mjs",
     "test": "pnpm run test:unit"

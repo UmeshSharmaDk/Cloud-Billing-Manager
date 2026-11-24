@@ -361,7 +361,8 @@ export async function requireBusiness(req: any, res: any, next: any) {
   // Staff, intern and client logins: "view" only reads; "entry" cannot delete
   // or change the business's own settings.
   const level = req.query?.asUser === undefined ? req.user?.accessLevel : null;
-  if (level === "view" && req.method !== "GET") {
+  // The AI routes are POSTs that only read, so a view-only login may use them.
+  if (level === "view" && req.method !== "GET" && !String(req.baseUrl).endsWith("/ai")) {
     return res.status(403).json({ error: "Your login can view records but not change them.", code: "read_only" });
   }
   if (level === "entry" && (req.method === "DELETE" || (req.method !== "GET" && String(req.baseUrl).endsWith("/business")))) {

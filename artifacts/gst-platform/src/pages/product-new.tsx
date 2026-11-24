@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Sparkles } from "lucide-react";
+import { ai } from "@/lib/ai";
 
 const GST_RATES = [0, 5, 12, 18, 28];
 const UNITS = ["Nos", "Kg", "Box", "Set", "Pair", "Ltr", "Mtr", "Pcs", "Roll"];
@@ -18,6 +19,21 @@ export default function ProductNewPage() {
   const { toast } = useToast();
   const [form, setForm] = useState({ name: "", sku: "", hsnCode: "", unit: "Nos", category: "", purchasePrice: "", sellingPrice: "", gstRate: "18", stockQuantity: "0", lowStockThreshold: "10" });
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestion, setSuggestion] = useState("");
+  const suggestHsn = async () => {
+    setSuggesting(true);
+    try {
+      const s = await ai<{ hsnCode: string; gstRate: number; aiRate: number; reason: string }>("hsn", { name: form.name, description: form.category || undefined });
+      setForm((f) => ({ ...f, hsnCode: s.hsnCode || f.hsnCode, gstRate: String(s.gstRate) }));
+      setSuggestion(`${s.reason}${s.aiRate !== s.gstRate ? ` (The AI said ${s.aiRate}%, which this form doesn't offer, so ${s.gstRate}% is set. Change it if needed.)` : ""} Check with your CA if unsure.`);
+    } catch (err) {
+      toast({ title: "The AI could not suggest a code", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +58,13 @@ export default function ProductNewPage() {
             <div className="sm:col-span-2 space-y-2"><Label>Product Name *</Label><Input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Industrial Grade Bolts (M10x50)" required /></div>
             <div className="space-y-2"><Label>SKU Code</Label><Input value={form.sku} onChange={(e) => set("sku", e.target.value.toUpperCase())} placeholder="SKU-BOLT-M10" className="font-mono" /></div>
             <div className="space-y-2"><Label>HSN Code</Label><Input value={form.hsnCode} onChange={(e) => set("hsnCode", e.target.value)} placeholder="73181590" className="font-mono" /></div>
+            <div className="sm:col-span-2 space-y-1">
+              <Button type="button" variant="outline" size="sm" className="gap-2" onClick={suggestHsn} loading={suggesting}
+                disabledReason={form.name.trim().length >= 2 ? undefined : "Type the product name first."}>
+                <Sparkles className="w-4 h-4" /> Suggest HSN and GST
+              </Button>
+              {suggestion && <p className="text-xs text-muted-foreground" translate="no">{suggestion}</p>}
+            </div>
             <div className="space-y-2"><Label>Unit</Label><Select value={form.unit} onValueChange={(v) => set("unit", v)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent></Select></div>
             <div className="space-y-2"><Label>Category</Label><Input value={form.category} onChange={(e) => set("category", e.target.value)} placeholder="Hardware" /></div>
           </CardContent>
